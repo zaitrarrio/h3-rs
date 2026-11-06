@@ -1,0 +1,8 @@
+[package]
+name = "h3-cpu"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+h3-core = { version = "0.1.0", path = "../h3-core" }
+rayon = "1.12.0"

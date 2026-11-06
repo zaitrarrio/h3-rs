@@ -1,0 +1,15 @@
+[package]
+name = "h3-wgpu"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+bytemuck = "1.25.2"
+h3-core = { version = "0.1.0", path = "../h3-core" }
+half = "2.7.1"
+pollster = "1.0.1"
+wgpu = "30.0.1"
+
+[dev-dependencies]
+h3-cpu = { path = "../h3-cpu" }
+h3-model = { path = "../h3-model" }

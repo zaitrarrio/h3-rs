@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>h3-rs</title>
+<meta name="description" content="MiniMax H3 video + audio generation in Rust, for desktop NVIDIA, AMD, Intel and Apple GPUs.">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600&family=IBM+Plex+Sans:wght@400;500&display=swap">
+<style>
+:root {
+  --bg: #f2f3f0; --panel: #ffffff; --ink: #1c221f; --muted: #5b6560; --rule: #d5dad5; --accent: #9a5b00; --accent-soft: #f3e6cf;
+  --f-display: "IBM Plex Sans Condensed", "Arial Narrow", sans-serif; --f-body: "IBM Plex Sans", system-ui, sans-serif; --f-mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bg: #111513; --panel: #191e1b; --ink: #e3e8e4; --muted: #98a39d; --rule: #2c342f; --accent: #f0a640; --accent-soft: #3a2c15; color-scheme: dark } }
+:root[data-theme="dark"] { --bg: #111513; --panel: #191e1b; --ink: #e3e8e4; --muted: #98a39d; --rule: #2c342f; --accent: #f0a640; --accent-soft: #3a2c15; color-scheme: dark }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 16px/1.6 var(--f-body); }
+main { max-width: 760px; margin: 0 auto; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 48px 64px; display: grid; gap: 28px; }
+.eyebrow { font: 500 0.72rem/1 var(--f-mono); text-transform: uppercase; letter-spacing: 0.1em; color: var(--muted); }
+h1 { font: 600 2.6rem/1.05 var(--f-display); margin: 8px 0 12px; letter-spacing: -0.015em; text-wrap: balance; }
+h2 { font: 600 1.15rem/1.2 var(--f-display); margin: 0; }
+p { margin: 0; max-width: 64ch; }
+.lede { color: var(--muted); font-size: 1.05rem; }
+.pages { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; }
+a.card { display: grid; gap: 8px; padding: 18px; background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; color: inherit; text-decoration: none; min-width: 0; }
+a.card:hover, a.card:focus-visible { border-color: var(--accent); outline: none; }
+a.card .go { color: var(--accent); font: 500 0.9rem var(--f-body); }
+.tag { justify-self: start; font: 500 0.7rem/1 var(--f-mono); padding: 4px 8px; border-radius: 99px; background: var(--accent-soft); color: var(--accent); letter-spacing: 0.04em; }
+section { display: grid; gap: 10px; }
+pre { font: 0.82rem/1.55 var(--f-mono); background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; padding: 12px 14px; margin: 0; overflow-x: auto; }
+ul { margin: 0; padding-left: 1.2em; display: grid; gap: 4px; max-width: 64ch; }
+code { font: 0.88em var(--f-mono); }
+table { border-collapse: collapse; font-size: 0.9rem; }
+td, th { text-align: left; padding: 4px 10px 4px 0; border-bottom: 1px solid var(--rule); vertical-align: top; }
+footer { color: var(--muted); font-size: 0.85rem; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <span class="eyebrow">MiniMax H3 · 33B · video + audio · seven released variants</span>
+    <h1>h3-rs</h1>
+    <p class="lede">MiniMax H3 text/keyframe/reference-to-video-with-audio on your own desktop GPU, in Rust. One set of fused kernels runs through WebGPU (Vulkan, DX12, Metal) or CUDA; the CPU reference is the ground truth every kernel is checked against. Every recipe of the FastVideo MiniMax H3 cookbook is a <code>--variant</code>.</p>
+  </header>
+
+  <div class="pages">
+    <a class="card" href="/demo/">
+      <span class="tag">needs the local engine</span>
+      <h2>Prompt Studio</h2>
+      <p>Type a prompt, pick size, length and seed, and watch the denoising steps and the decode land, with the generated soundtrack. The model runs on your GPU; this page only talks to it.</p>
+      <span class="go">Open the studio →</span>
+    </a>
+  </div>
+
+  <section>
+    <h2>Variants</h2>
+    <table>
+      <tr><th><code>--variant</code></th><th>What it is</th><th>Forwards</th></tr>
+      <tr><td>h3</td><td>MiniMaxAI/MiniMax-H3 base: T2VA, FL2VA, Ref2VA (dense attention)</td><td>49</td></tr>
+      <tr><td>fasth3-v1</td><td>FastH3 4-step preview (VSA 0.9, tile 64)</td><td>4</td></tr>
+      <tr><td>fasth3-v2</td><td>FastH3 8-step V2 (VSA 0.8, video shift 10)</td><td>8</td></tr>
+      <tr><td>fasth3-trim</td><td>FastH3 Trim: 42 blocks, rank-16 AdaLN, NVFP4 linears, 26-block decoder</td><td>8</td></tr>
+      <tr><td>fasth3-omni</td><td>FastH3 Omni Ref2VA with Parallel Decoding Distillation (32 heads)</td><td>8</td></tr>
+      <tr><td>pika-flex</td><td>Pika H3 Flex: FL2VA / Ref2VA LoRA, renoise sampler, 480p / 768p buckets</td><td>6</td></tr>
+      <tr><td>regen-2k</td><td>Open-H3-Regenerate-2K: 768p draft → 2560×1440 (<code>h3 regen2k</code>)</td><td>3</td></tr>
+    </table>
+  </section>
+
+  <section>
+    <h2>Run the engine</h2>
+    <p>Download the base model once (VAEs, text encoder, tokenizer) and the variant's DiT, then start the engine and allow this site to reach it:</p>
+<pre>huggingface-cli download MiniMaxAI/MiniMax-H3 --include "vae/*" "audio_vae/*" "text_encoder/*" "tokenizer/*" --local-dir h3
+huggingface-cli download FastVideo/FastVideo-FastH3-8-Step-V2 --local-dir fasth3-v2
+h3 adaln-tables --variant fasth3-v2 --model-dir h3 --variant-dir fasth3-v2 --out v2-tables.safetensors
+h3 serve --variant fasth3-v2 --model-dir h3 --variant-dir fasth3-v2 --tables v2-tables.safetensors \
+    --weights int4-hqq-g64 --allow-origin <span id="origin">https://h3-rs.pages.dev</span></pre>
+    <p>The engine listens only on 127.0.0.1 and answers this one site. Without <code>--allow-origin</code> it serves the studio itself at <code>http://127.0.0.1:7860/</code>.</p>
+  </section>
+
+  <section>
+    <h2>Where it stands</h2>
+    <ul>
+      <li>Every op and every model has a CPU reference; <code>h3 check --backend wgpu|cuda</code> compares the GPU kernels against it.</li>
+      <li>No speed claim is made without a measurement on named hardware: see <code>docs/runs/</code> in the repository.</li>
+      <li>Parity with the PyTorch reference is checked by fixtures generated from FastVideo / Diffusers / transformers (<code>scripts/reference/make_fixtures.py</code>).</li>
+    </ul>
+  </section>
+
+  <footer>h3-rs · the model weights are MiniMax's, FastVideo's, Pika's and NVLabs' under their own licences · this site holds no weights.</footer>
+</main>
+<script>document.getElementById("origin").textContent = location.origin;</script>
+</body>
+</html>

@@ -1,0 +1,467 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>H3 Prompt Studio</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600&family=IBM+Plex+Sans:wght@400;500&display=swap">
+<style>
+/* Layout: two columns on desktop — the prompt desk on the left, the screening room (player, stages, history) on the right; stacked on phones. */
+:root {
+  --bg: #f2f3f0; --panel: #ffffff; --ink: #1c221f; --muted: #5b6560; --rule: #d5dad5;
+  --accent: #9a5b00; --accent-ink: #ffffff; --accent-soft: #f3e6cf; --screen: #0e1110;
+  --ok: #1f7a46; --ok-soft: #dcefe3; --bad: #b42318; --bad-soft: #f8dedb;
+  --f-display: "IBM Plex Sans Condensed", "Arial Narrow", sans-serif;
+  --f-body: "IBM Plex Sans", system-ui, sans-serif;
+  --f-mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #111513; --panel: #191e1b; --ink: #e3e8e4; --muted: #98a39d; --rule: #2c342f;
+  --accent: #f0a640; --accent-ink: #1a1306; --accent-soft: #3a2c15; --screen: #050706;
+  --ok: #5cc98a; --ok-soft: #173325; --bad: #ff7b6e; --bad-soft: #3d1c19; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #111513; --panel: #191e1b; --ink: #e3e8e4; --muted: #98a39d; --rule: #2c342f;
+  --accent: #f0a640; --accent-ink: #1a1306; --accent-soft: #3a2c15; --screen: #050706;
+  --ok: #5cc98a; --ok-soft: #173325; --bad: #ff7b6e; --bad-soft: #3d1c19; color-scheme: dark }
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { margin: 0; }
+body { background: var(--bg); color: var(--ink); font: 15px/1.55 var(--f-body); }
+.wrap { max-width: 1240px; margin: 0 auto; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 24px 48px; display: grid; gap: 20px; }
+header { display: flex; flex-wrap: wrap; gap: 8px 20px; align-items: baseline; justify-content: space-between; }
+h1 { font: 600 1.9rem/1.1 var(--f-display); margin: 0; letter-spacing: -0.01em; }
+h2 { font: 600 1.05rem/1.2 var(--f-display); margin: 0; letter-spacing: 0.01em; }
+.engine { display: flex; gap: 10px; align-items: center; font: 0.85rem var(--f-mono); color: var(--muted); min-width: 0; }
+.engine span:last-child { overflow-wrap: anywhere; }
+.dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); flex: none; }
+.dot.ok { background: var(--ok); } .dot.bad { background: var(--bad); } .dot.wait { background: var(--accent); }
+.grid { display: grid; grid-template-columns: minmax(0, 400px) minmax(0, 1fr); gap: 20px; align-items: start; }
+@media (max-width: 900px) { .grid { grid-template-columns: minmax(0, 1fr); } }
+.panel { background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; padding: 18px; display: grid; gap: 14px; min-width: 0; }
+.label { font: 500 0.7rem/1 var(--f-mono); text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
+label.field { display: grid; gap: 6px; }
+textarea, select, input { font: 0.95rem/1.45 var(--f-body); color: var(--ink); background: var(--bg); border: 1px solid var(--rule); border-radius: 4px; padding: 9px 10px; width: 100%; }
+textarea { min-height: 120px; resize: vertical; }
+textarea:focus, select:focus, input:focus { outline: 2px solid var(--accent); outline-offset: 0; border-color: transparent; }
+.row { display: flex; flex-wrap: wrap; gap: 10px; align-items: end; }
+.row > * { flex: 1 1 110px; min-width: 0; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { font: 0.8rem var(--f-body); border: 1px solid var(--rule); background: transparent; color: var(--ink); border-radius: 99px; padding: 4px 10px; cursor: pointer; }
+.chip:hover { border-color: var(--accent); color: var(--accent); }
+.chip[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+textarea[readonly] { color: var(--muted, var(--ink)); background: transparent; }
+button { font: 500 0.92rem var(--f-body); border-radius: 4px; cursor: pointer; padding: 9px 14px; border: 1px solid var(--accent); }
+button.primary { background: var(--accent); color: var(--accent-ink); }
+button.ghost { background: transparent; color: var(--accent); }
+button:disabled { opacity: 0.45; cursor: not-allowed; }
+button:focus-visible, .chip:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+.hint { color: var(--muted); font-size: 0.82rem; margin: 0; }
+.connect { display: grid; gap: 10px; padding-bottom: 14px; border-bottom: 1px solid var(--rule); }
+.cmd { font: 0.8rem/1.5 var(--f-mono); background: var(--bg); border: 1px solid var(--rule); border-radius: 4px; padding: 8px 10px; margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.msg { font: 0.88rem/1.45 var(--f-mono); padding: 10px 12px; border-radius: 4px; white-space: pre-wrap; margin: 0; }
+.msg.bad { background: var(--bad-soft); color: var(--bad); }
+.msg.note { background: var(--accent-soft); color: var(--ink); font-family: var(--f-body); }
+code { font: 0.85em var(--f-mono); background: var(--accent-soft); padding: 1px 5px; border-radius: 3px; }
+.screen { background: var(--screen); border-radius: 4px; display: grid; place-items: center; aspect-ratio: 1344 / 768; max-width: 100%; overflow: hidden; position: relative; }
+.screen canvas { width: 100%; height: 100%; object-fit: contain; display: block; image-rendering: auto; }
+.screen .empty { position: absolute; inset: 0; display: grid; place-items: center; color: #8d9792; font: 0.9rem var(--f-mono); text-align: center; padding: 16px; }
+.controls { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.controls input[type=range] { flex: 1 1 200px; padding: 0; accent-color: var(--accent); background: transparent; border: 0; }
+.counter { font: 0.85rem var(--f-mono); font-variant-numeric: tabular-nums; color: var(--muted); min-width: 9ch; text-align: right; }
+.stages { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 6px; }
+@media (max-width: 520px) { .stages { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+.stage { border: 1px solid var(--rule); border-radius: 4px; padding: 8px; display: grid; gap: 4px; min-width: 0; }
+.stage b { font: 500 0.82rem var(--f-body); }
+.stage span { font: 0.8rem var(--f-mono); color: var(--muted); font-variant-numeric: tabular-nums; }
+.stage.active { border-color: var(--accent); background: var(--accent-soft); }
+.stage.done { border-color: var(--ok); }
+.stage.done span { color: var(--ok); }
+.summary { font: 0.85rem var(--f-mono); color: var(--muted); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.history { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+.clip { border: 1px solid var(--rule); border-radius: 4px; padding: 6px; background: transparent; color: var(--ink); text-align: left; display: grid; gap: 6px; cursor: pointer; font: inherit; }
+.clip:hover, .clip.current { border-color: var(--accent); }
+.clip canvas { width: 100%; aspect-ratio: 1344 / 768; background: var(--screen); border-radius: 2px; object-fit: cover; }
+.clip span { font-size: 0.78rem; line-height: 1.35; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+@media (prefers-reduced-motion: no-preference) { .stage.active { animation: pulse 1.4s ease-in-out infinite; } }
+@keyframes pulse { 50% { background: transparent; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>H3 Prompt Studio</h1>
+    <div class="engine" aria-live="polite"><span class="dot wait" id="eng-dot"></span><span id="eng-text">Connecting to the local engine…</span></div>
+  </header>
+
+  <div class="grid">
+    <form class="panel" id="form" autocomplete="off">
+      <div class="connect" id="connect" hidden>
+        <h2>Connect your engine</h2>
+        <p class="hint">This page runs the model on your own GPU through the <code>h3</code> engine. Start it on this computer, allowing this site:</p>
+        <pre class="cmd" id="start-cmd"></pre>
+        <div class="row">
+          <label class="field"><span class="label">Engine address</span><input id="engine-url" type="url"></label>
+          <button type="button" class="ghost" id="engine-go" style="flex:0 0 auto">Connect</button>
+        </div>
+        <p class="hint">Chrome and Edge may ask to let this site reach devices on your local network: allow it. Safari blocks pages on https from reaching 127.0.0.1, so use Chrome, Edge or Firefox.</p>
+      </div>
+      <h2>Prompt</h2>
+      <label class="field"><span class="label" id="prompt-label">Describe the clip</span>
+        <textarea id="prompt" maxlength="2000">A red fox trots through fresh snow in a birch forest at dawn, its breath steaming, low golden sunlight, shallow depth of field.</textarea></label>
+      <div class="chips" id="examples" aria-label="Example prompts"></div>
+      <p class="msg note" id="gallery-note" hidden>This engine runs without the text encoder, so it can only make its precomputed prompts: pick one above. Add more with <code>h3 encode</code>.</p>
+      <div class="row">
+        <label class="field"><span class="label">Size</span><select id="size"></select></label>
+        <label class="field"><span class="label">Length</span><select id="length"></select></label>
+      </div>
+      <div class="row">
+        <label class="field"><span class="label">Seed</span><input id="seed" type="number" min="0" step="1" placeholder="random"></label>
+        <button type="button" class="ghost" id="dice" style="flex:0 0 auto">New seed</button>
+      </div>
+      <button type="submit" class="primary" id="go" disabled>Generate clip</button>
+      <p class="hint" id="steps-hint">8 denoising steps, 24 fps with 32 kHz stereo audio. Ctrl/⌘ + Enter generates. Clips stay on your machine: the engine runs on your GPU, and this page only talks to it.</p>
+      <p class="msg bad" id="err" hidden></p>
+      <p class="msg note" id="synthetic" hidden>The engine is running the tiny synthetic model (<code>--synthetic</code>), so clips are coloured noise. Start it with <code>--model-dir</code> for real video.</p>
+    </form>
+
+    <div style="display:grid;gap:20px;min-width:0">
+      <section class="panel" aria-labelledby="out-h">
+        <div class="controls"><h2 id="out-h" style="flex:1">Clip</h2><span class="summary" id="summary"></span></div>
+        <div class="screen" id="screen"><canvas id="canvas" width="1344" height="768"></canvas><div class="empty" id="empty">Your clip plays here as soon as the first frames are decoded.</div></div>
+        <div class="controls">
+          <button type="button" class="ghost" id="play" disabled>Pause</button>
+          <input type="range" id="scrub" min="0" max="0" value="0" disabled aria-label="Frame">
+          <span class="counter" id="counter">0 / 0</span>
+        </div>
+        <div class="controls">
+          <button type="button" class="ghost" id="save-webm" disabled>Save WebM</button>
+          <button type="button" class="ghost" id="save-png" disabled>Save frame PNG</button>
+          <button type="button" class="ghost" id="save-wav" disabled>Save audio WAV</button>
+          <audio id="audio" preload="auto"></audio>
+          <span class="hint" id="save-hint"></span>
+        </div>
+        <div class="stages" id="stages" aria-live="polite"></div>
+      </section>
+
+      <section class="panel" aria-labelledby="hist-h">
+        <h2 id="hist-h">This session</h2>
+        <div class="history" id="history"><p class="hint">Finished clips appear here. The engine keeps the last eight, so you can reopen them.</p></div>
+      </section>
+    </div>
+  </div>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let FPS = 24;
+// Served by the engine itself → same origin. Hosted (Cloudflare Pages) → the
+// engine on this machine, which must be started with --allow-origin <this site>.
+const SAME = location.protocol === "http:" && ["127.0.0.1", "localhost"].includes(location.hostname);
+let ENGINE = SAME ? "" : (store("h3.engine") || "http://127.0.0.1:7860");
+const api = (path) => ENGINE + path;
+function store(k, v) { try { if (v === undefined) return localStorage.getItem(k); localStorage.setItem(k, v); } catch { return null; } }
+const START = `h3 serve --model-dir h3 --variant fasth3-v2 --allow-origin ${location.origin}`;
+const EXAMPLES = [
+  ["Fox in snow", "A red fox trots through fresh snow in a birch forest at dawn, its breath steaming, low golden sunlight, shallow depth of field; snow crunches softly under its paws and a distant woodpecker taps."],
+  ["Night market", "A crowded night market in the rain, neon signs reflected in puddles, steam rising from food stalls, handheld camera moving through the crowd."],
+  ["Ocean cliff", "Aerial drone shot sweeping along green sea cliffs as waves crash into white foam, overcast sky, cinematic."],
+  ["Pour-over", "Close-up of hot water pouring in a slow spiral over coffee grounds in a glass pour-over, morning window light, macro detail."],
+  ["Koi pond", "Top-down view of orange and white koi gliding beneath lily pads in a clear pond, ripples spreading, soft daylight."],
+];
+const SIZES = [[1344, 768, "1344×768 · 16:9 (release)"], [768, 1344, "768×1344 · 9:16"], [768, 768, "768×768 · 1:1"], [832, 480, "832×480 · 480p"], [480, 832, "480×832 · 480p portrait"]];
+const LENGTHS = [[124, "5.2 s · 124 frames"], [158, "6.6 s · 158 frames"], [192, "8 s · 192 frames"], [243, "10.1 s · 243 frames"], [294, "12.3 s · 294 frames"], [362, "15.1 s · 362 frames"]];
+
+let info = null, job = null, poll = null;
+let clip = { frames: [], width: 0, height: 0, total: 0, id: null };
+let frame = 0, playing = true, lastTick = 0, recording = false;
+const ctx = $("canvas").getContext("2d");
+
+// ---- engine status ------------------------------------------------------------
+let infoTimer = 0;
+function schedule(ms) { clearTimeout(infoTimer); infoTimer = setTimeout(refreshInfo, ms); }
+async function refreshInfo() {
+  clearTimeout(infoTimer);
+  try {
+    const r = await fetch(api("/api/info"), { cache: "no-store" });
+    info = await r.json();
+  } catch {
+    setEngine("bad", SAME ? "Can't reach the engine. Restart h3 serve." : `No engine at ${ENGINE}. Start one on this machine (see below).`);
+    if (!SAME) $("connect").hidden = false;
+    $("go").disabled = true; schedule(3000); return;
+  }
+  if (info.error) { setEngine("bad", "Engine failed to start: " + info.error); $("go").disabled = true; return; }
+  if (!info.ready) {
+    const secs = info.loading_s != null ? ` · ${Math.round(info.loading_s)} s` : "";
+    setEngine("wait", `Loading the model: ${info.loading || "starting"}${secs}`);
+    $("go").disabled = true; schedule(1500); return;
+  }
+  setEngine("ok", `${info.model} · ${info.backend}`);
+  if (info.fps) FPS = info.fps;
+  if (info.steps) { setSteps(info.steps); $("steps-hint").textContent = `${info.steps} denoising step${info.steps === 1 ? "" : "s"}, ${FPS} fps with 32 kHz stereo audio. Ctrl/⌘ + Enter generates. Clips stay on your machine: the engine runs on your GPU, and this page only talks to it.`; }
+  if (!SAME) $("connect").hidden = true;
+  $("synthetic").hidden = !info.synthetic;
+  applyGallery(info.gallery);
+  fillOptions();
+  $("go").disabled = !!job;
+}
+// Gallery mode (`h3 serve --gallery`): no text encoder, so the prompt is
+// picked from the engine's precomputed list instead of typed.
+let gallery = null;
+const norm = (p) => p.trim().split(/\s+/).join(" ");
+const escHtml = (t) => t.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+function renderChips() {
+  const list = gallery || EXAMPLES.map(([, p]) => p);
+  const labels = gallery ? gallery.map((p) => (p.length > 42 ? p.slice(0, 40).trimEnd() + "…" : p)) : EXAMPLES.map(([l]) => l);
+  $("examples").innerHTML = list.map((p, i) => `<button type="button" class="chip" data-i="${i}" title="${escHtml(p)}"${gallery ? ' aria-pressed="false"' : ""}>${escHtml(labels[i])}</button>`).join("");
+  markChip();
+}
+function markChip() {
+  if (!gallery) return;
+  const cur = norm($("prompt").value);
+  document.querySelectorAll("#examples .chip").forEach((b) => b.setAttribute("aria-pressed", String(norm(gallery[b.dataset.i]) === cur)));
+}
+function applyGallery(list) {
+  const next = Array.isArray(list) && list.length ? list : null;
+  if (JSON.stringify(next) === JSON.stringify(gallery)) return;
+  gallery = next;
+  $("prompt").readOnly = !!gallery;
+  $("prompt-label").textContent = gallery ? "Prompt (from the engine's gallery)" : "Describe the clip";
+  $("examples").setAttribute("aria-label", gallery ? "Gallery prompts" : "Example prompts");
+  $("gallery-note").hidden = !gallery;
+  if (gallery && !gallery.some((p) => norm(p) === norm($("prompt").value))) $("prompt").value = gallery[0];
+  renderChips();
+}
+function setEngine(kind, text) { $("eng-dot").className = "dot " + kind; $("eng-text").textContent = text; }
+function fillOptions() {
+  const keep = [$("size").value, $("length").value];
+  $("size").innerHTML = SIZES.filter(([w, h]) => w * h <= info.max_pixels).map(([w, h, l]) => `<option value="${w}x${h}">${l}</option>`).join("");
+  $("length").innerHTML = LENGTHS.filter(([f]) => f <= info.max_frames).map(([f, l]) => `<option value="${f}">${l}</option>`).join("");
+  if (keep[0]) $("size").value = keep[0];
+  if (keep[1]) $("length").value = keep[1];
+  if (!$("size").value) $("size").selectedIndex = 0;
+  if (!$("length").value) $("length").selectedIndex = 0;
+}
+
+// ---- stages -----------------------------------------------------------------
+let STAGES = [["encoding", "Prompt"], ["step0", "Step 1"], ["decoding", "Decode"]];
+function setSteps(n) { STAGES = [["encoding", "Prompt"]]; for (let i = 0; i < n; i++) STAGES.push([`step${i}`, `Step ${i + 1}`]); STAGES.push(["decoding", "Decode"]); $("stages").style.gridTemplateColumns = `repeat(${Math.min(n + 2, 6)}, minmax(0, 1fr))`; }
+function renderStages(s) {
+  const st = s ? s.stage : null, steps = s ? s.steps : [];
+  const fmt = (x) => x.toFixed(x < 10 ? 2 : 1) + " s";
+  $("stages").innerHTML = STAGES.map(([key, label], i) => {
+    let cls = "", detail = "–";
+    if (s) {
+      if (key === "encoding") {
+        if (st === "encoding") { cls = "active"; detail = "Qwen3-VL…"; }
+        else if (st !== "queued") { cls = "done"; detail = `${fmt(s.encode_s)} · ${s.tokens} tok`; }
+        else detail = "queued";
+      } else if (key.startsWith("step")) {
+        const k = +key.slice(4);
+        if (steps[k] != null) { cls = "done"; detail = fmt(steps[k]); }
+        else if ((st === "denoising" || st === "preparing") && steps.length === k) { cls = "active"; detail = "running"; }
+      } else {
+        if (st === "decoding") { cls = "active"; detail = `${s.frames} / ${s.total_frames}`; }
+        if (st === "done") { cls = "done"; detail = fmt(s.decode_s); }
+        if (st === "failed") { detail = "failed"; }
+      }
+    }
+    return `<div class="stage ${cls}"><b>${label}</b><span>${detail}</span></div>`;
+  }).join("");
+}
+
+// ---- generation -----------------------------------------------------------------
+async function generate(e) {
+  e?.preventDefault();
+  if (!info?.ready || job) return;
+  $("err").hidden = true;
+  const [width, height] = $("size").value.split("x").map(Number);
+  const body = { prompt: $("prompt").value, width, height, frames: +$("length").value };
+  if ($("seed").value !== "") body.seed = Math.max(0, Math.floor(+$("seed").value));
+  $("go").disabled = true; $("go").textContent = "Generating…";
+  try {
+    const r = await fetch(api("/api/generate"), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const v = await r.json();
+    if (!r.ok) throw new Error(v.error || `The engine answered ${r.status}.`);
+    job = { id: v.id, prompt: body.prompt, seed: v.seed };
+    startClip(v.id, width, height, body.frames);
+    pollJob();
+  } catch (err) {
+    showError(err.message); resetButton();
+  }
+}
+function resetButton() { job = null; $("go").textContent = "Generate clip"; $("go").disabled = !info?.ready; }
+function showError(m) { $("err").textContent = m; $("err").hidden = false; }
+
+function startClip(id, w, h, total) {
+  clip = { frames: [], width: w, height: h, total, id };
+  { const a = $("audio"); a.pause(); a.removeAttribute("src"); audioJob = null; audioBlob = null; $("save-wav").disabled = true; }
+  frame = 0; playing = true;
+  $("canvas").width = w; $("canvas").height = h;
+  $("screen").style.aspectRatio = `${w} / ${h}`;
+  ctx.fillStyle = "#000"; ctx.fillRect(0, 0, w, h);
+  $("empty").hidden = false; $("empty").textContent = "Waiting for the first frames…";
+  $("summary").textContent = "";
+  updateControls();
+  document.querySelectorAll(".clip").forEach((c) => c.classList.toggle("current", +c.dataset.id === id));
+}
+
+async function fetchFrames(id) {
+  const r = await fetch(api(`/api/jobs/${id}/frames?from=${clip.frames.length}`), { cache: "no-store" });
+  if (!r.ok) return;
+  const buf = await r.arrayBuffer();
+  const head = new Uint32Array(buf, 0, 4);
+  const [w, h, , count] = head, px = w * h;
+  if (!count || clip.id !== id) return;
+  if (w !== clip.width || h !== clip.height) { clip.width = w; clip.height = h; $("canvas").width = w; $("canvas").height = h; }
+  const rgb = new Uint8Array(buf, 16);
+  for (let f = 0; f < count; f++) {
+    const img = new ImageData(w, h), d = img.data, off = f * px * 3;
+    for (let i = 0, j = 0; i < px; i++, j += 4) { d[j] = rgb[off + 3 * i]; d[j + 1] = rgb[off + 3 * i + 1]; d[j + 2] = rgb[off + 3 * i + 2]; d[j + 3] = 255; }
+    clip.frames.push(img);
+  }
+  $("empty").hidden = true;
+  updateControls();
+}
+
+async function pollJob() {
+  if (!job) return;
+  let s;
+  try { s = await (await fetch(api(`/api/jobs/${job.id}`), { cache: "no-store" })).json(); }
+  catch { poll = setTimeout(pollJob, 1000); return; }
+  if (s.error && s.stage !== "failed") { showError(s.error); resetButton(); return; }
+  renderStages(s);
+  if (s.frames > clip.frames.length) await fetchFrames(job.id);
+  if (s.stage === "failed") { showError("Generation failed: " + s.error); resetButton(); return; }
+  if (s.stage === "done") {
+    finishClip(s);
+    resetButton(); return;
+  }
+  poll = setTimeout(pollJob, 250);
+}
+
+let audioBlob = null, audioJob = null;
+async function fetchAudio(id) {
+  const a = $("audio");
+  if (audioJob === id) return;
+  audioJob = id; audioBlob = null; a.removeAttribute("src"); $("save-wav").disabled = true;
+  try {
+    const r = await fetch(api(`/api/jobs/${id}/audio`), { cache: "no-store" });
+    if (!r.ok) return;
+    audioBlob = await r.blob();
+    a.src = URL.createObjectURL(audioBlob);
+    $("save-wav").disabled = false;
+    if (playing) { a.currentTime = frame / FPS; a.play().catch(() => {}); }
+  } catch {}
+}
+function syncAudio() {
+  const a = $("audio");
+  if (!a.src) return;
+  if (playing && clip.frames.length === clip.total) {
+    if (a.paused) { a.currentTime = frame / FPS; a.play().catch(() => {}); }
+    else if (Math.abs(a.currentTime - frame / FPS) > 0.15) a.currentTime = frame / FPS;
+  } else if (!a.paused) a.pause();
+}
+$("save-wav").onclick = () => audioBlob && download(audioBlob, `${slug()}.wav`);
+function finishClip(s) {
+  if (s.audio) fetchAudio(s.id);
+  const steps = s.steps.reduce((a, b) => a + b, 0);
+  $("summary").textContent = `${s.frames} frames · ${s.width}×${s.height} · seed ${s.seed} · prompt ${s.encode_s.toFixed(1)} s · denoise ${steps.toFixed(1)} s · decode ${s.decode_s.toFixed(1)} s · total ${s.total_s.toFixed(1)} s`;
+  addHistory(s);
+}
+
+// ---- playback -----------------------------------------------------------------
+function draw() {
+  if (clip.frames.length) ctx.putImageData(clip.frames[Math.min(frame, clip.frames.length - 1)], 0, 0);
+  $("counter").textContent = `${clip.frames.length ? frame + 1 : 0} / ${clip.total || clip.frames.length}`;
+  $("scrub").value = frame;
+}
+function tick(t) {
+  if (playing && clip.frames.length && t - lastTick >= 1000 / FPS) {
+    lastTick = t;
+    frame = frame + 1 < clip.frames.length ? frame + 1 : (recording ? frame : 0);
+    if (frame === 0) { const a = $("audio"); if (a.src && !a.paused) a.currentTime = 0; }
+    draw();
+  }
+  syncAudio();
+  requestAnimationFrame(tick);
+}
+function updateControls() {
+  const n = clip.frames.length;
+  $("scrub").max = Math.max(0, n - 1); $("scrub").disabled = !n;
+  $("play").disabled = !n; $("play").textContent = playing ? "Pause" : "Play";
+  const done = n && n === clip.total;
+  $("save-webm").disabled = !done || recording || typeof MediaRecorder === "undefined";
+  $("save-png").disabled = !n;
+  draw();
+}
+$("play").onclick = () => { playing = !playing; updateControls(); syncAudio(); };
+$("scrub").oninput = (e) => { frame = +e.target.value; playing = false; updateControls(); syncAudio(); };
+
+// ---- saving ---------------------------------------------------------------------
+function download(blob, name) {
+  const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = name;
+  document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+}
+function slug() { return (job?.prompt || $("prompt").value).toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 40).replace(/-+$/, "") || "h3"; }
+$("save-png").onclick = () => $("canvas").toBlob((b) => b && download(b, `${slug()}-f${frame + 1}.png`), "image/png");
+$("save-webm").onclick = () => {
+  const stream = $("canvas").captureStream(FPS);
+  const type = ["video/webm;codecs=vp9", "video/webm;codecs=vp8", "video/webm"].find((t) => MediaRecorder.isTypeSupported(t));
+  const rec = new MediaRecorder(stream, { mimeType: type, videoBitsPerSecond: 8e6 });
+  const parts = [];
+  rec.ondataavailable = (e) => e.data.size && parts.push(e.data);
+  rec.onstop = () => { recording = false; $("save-hint").textContent = ""; download(new Blob(parts, { type: "video/webm" }), `${slug()}.webm`); updateControls(); };
+  recording = true; frame = 0; playing = true; draw(); updateControls();
+  $("save-hint").textContent = "Recording one pass in real time…";
+  rec.start();
+  setTimeout(() => rec.stop(), (clip.frames.length / FPS) * 1000 + 150);
+};
+
+// ---- history --------------------------------------------------------------------
+function addHistory(s) {
+  const h = $("history");
+  if (!h.querySelector(".clip")) h.innerHTML = "";
+  const b = document.createElement("button");
+  b.type = "button"; b.className = "clip current"; b.dataset.id = s.id;
+  b.title = s.prompt;
+  const c = document.createElement("canvas"); c.width = 208; c.height = Math.round(208 * s.height / s.width);
+  const mid = clip.frames[Math.floor(clip.frames.length / 2)];
+  if (mid) { const t = document.createElement("canvas"); t.width = mid.width; t.height = mid.height; t.getContext("2d").putImageData(mid, 0, 0); c.getContext("2d").drawImage(t, 0, 0, c.width, c.height); }
+  const span = document.createElement("span"); span.textContent = s.prompt;
+  b.append(c, span);
+  b.onclick = () => reopen(s);
+  document.querySelectorAll(".clip").forEach((x) => x.classList.remove("current"));
+  h.prepend(b);
+  while (h.children.length > 8) h.lastChild.remove();
+}
+async function reopen(s) {
+  if (job) return;
+  const r = await fetch(api(`/api/jobs/${s.id}`), { cache: "no-store" });
+  if (!r.ok) { showError("The engine no longer holds that clip (it keeps the last eight)."); return; }
+  const cur = await r.json();
+  startClip(s.id, cur.width, cur.height, cur.frames);
+  $("prompt").value = cur.prompt; $("seed").value = cur.seed; markChip();
+  await fetchFrames(s.id);
+  renderStages(cur); finishClip(cur); document.querySelector(`.clip[data-id="${s.id}"]`)?.remove(); addHistory(cur);
+}
+
+// ---- boot -----------------------------------------------------------------------
+renderChips();
+$("examples").onclick = (e) => {
+  const i = e.target.dataset?.i; if (i == null) return;
+  $("prompt").value = gallery ? gallery[i] : EXAMPLES[i][1];
+  markChip(); if (!gallery) $("prompt").focus();
+};
+$("dice").onclick = () => { $("seed").value = Math.floor(Math.random() * 1e9); };
+$("form").addEventListener("submit", generate);
+$("prompt").addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) generate(e); });
+$("start-cmd").textContent = START;
+$("engine-url").value = ENGINE || location.origin;
+$("engine-go").onclick = () => { ENGINE = $("engine-url").value.replace(/\/+$/, ""); store("h3.engine", ENGINE); setEngine("wait", "Connecting…"); refreshInfo(); };
+renderStages(null);
+refreshInfo();
+requestAnimationFrame(tick);
+</script>
+</body>
+</html>
