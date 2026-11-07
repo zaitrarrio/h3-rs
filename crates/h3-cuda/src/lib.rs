@@ -1610,6 +1610,19 @@ mod tests {
     /// Needs libnvrtc only (no GPU): `pip install nvidia-cuda-nvrtc-cu12` and
     /// point `LD_LIBRARY_PATH` at its `lib/`. Skipped when NVRTC cannot be loaded.
     #[test]
+    /// `H3_PTX_OUT=<file> cargo test -p h3-cuda dump_ptx` writes the sm_89
+    /// PTX for `ptxas -v` (registers, spills, shared memory per kernel).
+    #[test]
+    fn dump_ptx() {
+        let Ok(path) = std::env::var("H3_PTX_OUT") else { return };
+        match std::panic::catch_unwind(|| super::compile_kernels("compute_89")) {
+            Ok(Ok(ptx)) => std::fs::write(&path, ptx.to_src()).unwrap(),
+            Ok(Err(e)) => panic!("{e}"),
+            Err(_) => eprintln!("skipping: libnvrtc not loadable"),
+        }
+    }
+
+    #[test]
     fn kernels_compile_for_ampere_ada_and_blackwell() {
         for arch in ["compute_80", "compute_89", "compute_100", "compute_120"] {
             match std::panic::catch_unwind(|| super::compile_kernels(arch)) {

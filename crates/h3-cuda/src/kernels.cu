@@ -10,11 +10,12 @@ typedef unsigned long long u64;
 __device__ __forceinline__ float ld(const bf16_t* p, long i) {
     return __uint_as_float(((unsigned)p[i]) << 16);
 }
+// Hardware round-to-nearest-even (sm_80+); the integer sequence it replaces
+// was ~11 instructions per value, a third of the attention loop's ALU work.
 __device__ __forceinline__ bf16_t bf(float f) {
-    unsigned u = __float_as_uint(f);
-    if ((u & 0x7fffffffu) > 0x7f800000u) return (bf16_t)0x7fc0;  // NaN
-    u += 0x7fffu + ((u >> 16) & 1u);                               // round to nearest even
-    return (bf16_t)(u >> 16);
+    unsigned short r;
+    asm("cvt.rn.bf16.f32 %0, %1;" : "=h"(r) : "f"(f));
+    return r;
 }
 __device__ __forceinline__ float gelu_tanh(float x) {
     return 0.5f * x * (1.0f + tanhf(0.7978845608f * (x + 0.044715f * x * x * x)));
@@ -146,15 +147,29 @@ extern "C" __global__ void fw_rms(u64 h_, u64 a_, u64 out_, int rows, int dim, i
     const bool reg = dim <= 256 * RMS_REG;
     // f32 accumulation: the inputs are bf16 and double runs at 1/32 rate on
     // GeForce / RTX workstation parts (this kernel was 5 ms/call on an A6000).
+    // The loops are unrolled over RMS_REG so `cache` lives in registers, not
+    // in a local-memory stack frame (it did: 96 bytes per thread).
     float ss = 0.0f;
-    for (int j = threadIdx.x, i = 0; j < dim; j += 256, ++i) {
+    #pragma unroll
+    for (int i = 0; i < RMS_REG; ++i) {
+        const int j = threadIdx.x + 256 * i;
+        if (j >= dim) break;
         float v = ld(h, base + j);
         if (mode == 1) {
             const float g = gate_at(gkind, (const bf16_t*)gvec_, (const float*)gtab_, (const unsigned*)gidx_, gslots, gslot, row, dim, j);
             v += ld(a, base + j) * g;
             h[base + j] = bf(v);
         }
-        if (reg) cache[i] = v;
+        cache[i] = v;
+        ss += v * v;
+    }
+    for (int j = threadIdx.x + 256 * RMS_REG; j < dim; j += 256) {   // dims beyond the cache
+        float v = ld(h, base + j);
+        if (mode == 1) {
+            const float g = gate_at(gkind, (const bf16_t*)gvec_, (const float*)gtab_, (const unsigned*)gidx_, gslots, gslot, row, dim, j);
+            v += ld(a, base + j) * g;
+            h[base + j] = bf(v);
+        }
         ss += v * v;
     }
     const float ms = block_fsum256(ss, red) / dim;
@@ -163,13 +178,22 @@ extern "C" __global__ void fw_rms(u64 h_, u64 a_, u64 out_, int rows, int dim, i
     const unsigned* mi = (const unsigned*)midx_;
     long mbase = 0;
     if (has_mod) mbase = (long)mi[row] * mslots * dim;
-    for (int j = threadIdx.x, i = 0; j < dim; j += 256, ++i) {
-        float v = reg ? cache[i] : ld(h, base + j);
-        float y = v * inv;
+    #pragma unroll
+    for (int i = 0; i < RMS_REG; ++i) {
+        const int j = threadIdx.x + 256 * i;
+        if (j >= dim) break;
+        float y = cache[i] * inv;
         if (has_w) y *= ld(w, j);
         if (has_mod) y = y * (1.0f + mt[mbase + (long)mscale * dim + j]) + mt[mbase + (long)mshift * dim + j];
         out[base + j] = bf(y);
     }
+    for (int j = threadIdx.x + 256 * RMS_REG; j < dim; j += 256) {
+        float y = ld(h, base + j) * inv;
+        if (has_w) y *= ld(w, j);
+        if (has_mod) y = y * (1.0f + mt[mbase + (long)mscale * dim + j]) + mt[mbase + (long)mshift * dim + j];
+        out[base + j] = bf(y);
+    }
+    (void)reg;
 }
 
 extern "C" __global__ void fw_layer_norm(u64 x_, u64 out_, int rows, int dim, int has_w, u64 w_, int has_b, u64 b_, float eps) {
@@ -589,7 +613,9 @@ __device__ __forceinline__ void mma_bf16(float* c, unsigned a0, unsigned a1, uns
                  : "r"(a0), "r"(a1), "r"(a2), "r"(a3), "r"(b0), "r"(b1));
 }
 __device__ __forceinline__ unsigned pack_bf16(float lo, float hi) {
-    return (unsigned)bf(lo) | ((unsigned)bf(hi) << 16);
+    unsigned r;
+    asm("cvt.rn.bf16x2.f32 %0, %1, %2;" : "=r"(r) : "f"(hi), "f"(lo));   // hi lands in the upper half
+    return r;
 }
 __device__ __forceinline__ void cp_async16(void* smem, const void* gmem, bool valid) {
     const unsigned d = (unsigned)__cvta_generic_to_shared(smem);
@@ -678,15 +704,17 @@ __device__ __forceinline__ void attn_mma_body(int mode, const bf16_t* q, const b
     }
     const bool all_tiles = mode == 1 && (qt < np || dense_all);
     const unsigned* urow = mode == 2 ? usel + ((long)h * npairs + blockIdx.x) * ustride : 0;
+    const unsigned* srow = mode == 1 && !all_tiles ? sel + ((long)h * nb + qt) * maxsel : 0;
     const bf16_t* kbase = k + (long)kh * sk * D;
     const bf16_t* vbase = v + (long)kh * sk * D;
     const int ch = tid % CH, krow = tid / CH;
+    // 32-bit index math: nb·te and seq·D stay far below 2^32.
     auto key_tok = [&](int c, int key) -> int {
         if (mode == 0 || (dbg & 1)) return c * MMA_BK + key < sk ? c * MMA_BK + key : -1;
         unsigned tile;
         if (mode == 2) tile = urow[c / sub] & 0x3fffffffu;
-        else tile = all_tiles ? (unsigned)(c / sub) : sel[((long)h * nb + qt) * maxsel + c / sub];
-        const unsigned s2 = slot[(long)tile * te + (c % sub) * 64 + key];
+        else tile = all_tiles ? (unsigned)(c / sub) : srow[c / sub];
+        const unsigned s2 = slot[tile * (unsigned)te + (unsigned)((c % sub) * 64 + key)];
         return s2 == 0xffffffffu ? -1 : (int)s2;
     };
     // Token indices of the keys this thread loads, resolved one chunk ahead
@@ -702,7 +730,7 @@ __device__ __forceinline__ void attn_mma_body(int mode, const bf16_t* q, const b
         #pragma unroll
         for (int j = 0; j < NJ; ++j) {
             const int key = krow + RP * j, tk = ntk[j];
-            if (!(dbg & 16)) cp_async16(dst + key * KS_STRIDE + ch * 8, src + (long)(tk < 0 ? 0 : tk) * D + ch * 8, tk >= 0);
+            if (!(dbg & 16)) cp_async16(dst + key * KS_STRIDE + ch * 8, src + (unsigned)(tk < 0 ? 0 : tk) * (unsigned)D + ch * 8, tk >= 0);
             if (valid && ch == 0) valid[key] = tk >= 0;
         }
     };
@@ -737,6 +765,17 @@ __device__ __forceinline__ void attn_mma_body(int mode, const bf16_t* q, const b
             }
             }
         }
+        // Scores stay unscaled (the scale rides in the exp's FMA). A chunk
+        // whose 64 keys are all valid (every chunk but a tile's padded tail)
+        // skips the per-key mask: one 16-bit smem read and a warp vote.
+        const bool full = !(mode == 0 && causal) && __all_sync(0xffffffffu, *(const unsigned short*)(kv + 2 * lane) == 0x0101u);
+        if (full) {
+            #pragma unroll
+            for (int nt = 0; nt < 8; ++nt) {
+                mx0 = fmaxf(mx0, fmaxf(s[nt][0], s[nt][1]));
+                mx1 = fmaxf(mx1, fmaxf(s[nt][2], s[nt][3]));
+            }
+        } else {
         #pragma unroll
         for (int nt = 0; nt < 8; ++nt) {
             #pragma unroll
@@ -748,11 +787,12 @@ __device__ __forceinline__ void attn_mma_body(int mode, const bf16_t* q, const b
                     ok0 = ok0 && tok0 >= 0 && j <= tok0 + sk - sq;
                     ok1 = ok1 && tok1 >= 0 && j <= tok1 + sk - sq;
                 }
-                s[nt][cc] = ok0 ? s[nt][cc] * sl2 : -1e30f;
-                s[nt][2 + cc] = ok1 ? s[nt][2 + cc] * sl2 : -1e30f;
+                s[nt][cc] = ok0 ? s[nt][cc] : -1e30f;
+                s[nt][2 + cc] = ok1 ? s[nt][2 + cc] : -1e30f;
                 mx0 = fmaxf(mx0, s[nt][cc]);
                 mx1 = fmaxf(mx1, s[nt][2 + cc]);
             }
+        }
         }
         }
         __syncthreads();           // every warp is done with ks
@@ -767,12 +807,13 @@ __device__ __forceinline__ void attn_mma_body(int mode, const bf16_t* q, const b
             mx0 = fmaxf(mx0, __shfl_xor_sync(0xffffffffu, mx0, off));
             mx1 = fmaxf(mx1, __shfl_xor_sync(0xffffffffu, mx1, off));
         }
-        const float c0 = exp2f(m0 - mx0), c1 = exp2f(m1 - mx1);
+        const float c0 = exp2f((m0 - mx0) * sl2), c1 = exp2f((m1 - mx1) * sl2);
         m0 = mx0; m1 = mx1;
         l0 *= c0; l1 *= c1;
         #pragma unroll
         for (int i = 0; i < DT; ++i) { o[i][0] *= c0; o[i][1] *= c0; o[i][2] *= c1; o[i][3] *= c1; }
         }
+        const float ms0 = -m0 * sl2, ms1 = -m1 * sl2;   // p = exp2(s·sl2 − m·sl2)
         cp_async_wait1();          // V_c landed (K_{c+1} may still be in flight)
         __syncthreads();
         if (mine) {
@@ -783,8 +824,8 @@ __device__ __forceinline__ void attn_mma_body(int mode, const bf16_t* q, const b
             for (int cc = 0; cc < 4; ++cc) {
                 if (dbg & 8) { p[cc] = s[2 * kk][cc]; p[4 + cc] = s[2 * kk + 1][cc]; }
                 else {
-                    p[cc] = exp2f(s[2 * kk][cc] - (cc < 2 ? m0 : m1));
-                    p[4 + cc] = exp2f(s[2 * kk + 1][cc] - (cc < 2 ? m0 : m1));
+                    p[cc] = exp2f(fmaf(s[2 * kk][cc], sl2, cc < 2 ? ms0 : ms1));
+                    p[4 + cc] = exp2f(fmaf(s[2 * kk + 1][cc], sl2, cc < 2 ? ms0 : ms1));
                 }
             }
             l0 += p[0] + p[1] + p[4] + p[5];
@@ -912,9 +953,10 @@ __device__ __forceinline__ void vsa_fine3_body(const bf16_t* q, const bf16_t* k,
     const bf16_t* kbase = k + (long)h * seq * D;
     const bf16_t* vbase = v + (long)h * seq * D;
     const int ch = tid % CH, krow = tid / CH;
+    const unsigned* srow = all_tiles ? 0 : sel + ((long)h * nb + qt) * maxsel;
     auto key_tok = [&](int c, int key) -> int {
-        const unsigned tile = all_tiles ? (unsigned)(c / csub) : sel[((long)h * nb + qt) * maxsel + c / csub];
-        const unsigned s2 = slot[(long)tile * te + (c % csub) * F3BK + key];
+        const unsigned tile = all_tiles ? (unsigned)(c / csub) : srow[c / csub];
+        const unsigned s2 = slot[tile * (unsigned)te + (unsigned)((c % csub) * F3BK + key)];
         return s2 == 0xffffffffu ? -1 : (int)s2;
     };
     int ntk[NJ];
@@ -926,7 +968,7 @@ __device__ __forceinline__ void vsa_fine3_body(const bf16_t* q, const bf16_t* k,
         #pragma unroll
         for (int j = 0; j < NJ; ++j) {
             const int key = krow + RP * j, tk = ntk[j];
-            cp_async16(dst + key * KS_STRIDE + ch * 8, src + (long)(tk < 0 ? 0 : tk) * D + ch * 8, tk >= 0);
+            cp_async16(dst + key * KS_STRIDE + ch * 8, src + (unsigned)(tk < 0 ? 0 : tk) * (unsigned)D + ch * 8, tk >= 0);
             if (valid && ch == 0) valid[key] = tk >= 0;
         }
     };
@@ -981,17 +1023,26 @@ __device__ __forceinline__ void vsa_fine3_body(const bf16_t* q, const bf16_t* k,
             }
         }
         float mx0 = m0, mx1 = m1;
+        const bool full = __all_sync(0xffffffffu, *(const unsigned char*)(kv + lane) == 1u);
+        if (full) {
+            #pragma unroll
+            for (int nt = 0; nt < NT; ++nt) {
+                mx0 = fmaxf(mx0, fmaxf(s[nt][0], s[nt][1]));
+                mx1 = fmaxf(mx1, fmaxf(s[nt][2], s[nt][3]));
+            }
+        } else {
         #pragma unroll
         for (int nt = 0; nt < NT; ++nt) {
             #pragma unroll
             for (int cc = 0; cc < 2; ++cc) {
                 const int key = nt * 8 + t * 2 + cc;
                 const bool ok = kv[key];
-                s[nt][cc] = ok ? s[nt][cc] * sl2 : -1e30f;
-                s[nt][2 + cc] = ok ? s[nt][2 + cc] * sl2 : -1e30f;
+                s[nt][cc] = ok ? s[nt][cc] : -1e30f;
+                s[nt][2 + cc] = ok ? s[nt][2 + cc] : -1e30f;
                 mx0 = fmaxf(mx0, s[nt][cc]);
                 mx1 = fmaxf(mx1, s[nt][2 + cc]);
             }
+        }
         }
         if (!DB) {
             __syncthreads();           // every warp is done with ks
@@ -1003,11 +1054,12 @@ __device__ __forceinline__ void vsa_fine3_body(const bf16_t* q, const bf16_t* k,
             mx0 = fmaxf(mx0, __shfl_xor_sync(0xffffffffu, mx0, off));
             mx1 = fmaxf(mx1, __shfl_xor_sync(0xffffffffu, mx1, off));
         }
-        const float c0 = exp2f(m0 - mx0), c1 = exp2f(m1 - mx1);
+        const float c0 = exp2f((m0 - mx0) * sl2), c1 = exp2f((m1 - mx1) * sl2);
         m0 = mx0; m1 = mx1;
         l0 *= c0; l1 *= c1;
         #pragma unroll
         for (int i = 0; i < DT; ++i) { o[i][0] *= c0; o[i][1] *= c0; o[i][2] *= c1; o[i][3] *= c1; }
+        const float ms0 = -m0 * sl2, ms1 = -m1 * sl2;
         if (DB) {
             // V_c landed (K_{c+1}, V_{c+1} may be in flight).
             if (c + 1 < nchunks) asm volatile("cp.async.wait_group 2;\n" ::);
@@ -1022,8 +1074,8 @@ __device__ __forceinline__ void vsa_fine3_body(const bf16_t* q, const bf16_t* k,
             float p[8];
             #pragma unroll
             for (int cc = 0; cc < 4; ++cc) {
-                p[cc] = exp2f(s[2 * kk][cc] - (cc < 2 ? m0 : m1));
-                p[4 + cc] = exp2f(s[2 * kk + 1][cc] - (cc < 2 ? m0 : m1));
+                p[cc] = exp2f(fmaf(s[2 * kk][cc], sl2, cc < 2 ? ms0 : ms1));
+                p[4 + cc] = exp2f(fmaf(s[2 * kk + 1][cc], sl2, cc < 2 ? ms0 : ms1));
             }
             l0 += p[0] + p[1] + p[4] + p[5];
             l1 += p[2] + p[3] + p[6] + p[7];
