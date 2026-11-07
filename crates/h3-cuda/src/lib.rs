@@ -108,11 +108,15 @@ pub struct Cuda {
     /// on 64-token tiles (2 warps per block), equal on 128-token tiles, so v1
     /// stays the VSA default.
     vsa_v2: bool,
-    /// `H3_CUDA_VSA_NOPAIR=1`: one 64-token query tile per block for the VSA
-    /// fine stage instead of two tiles sharing the union of their selections.
-    vsa_nopair: bool,
+    /// `H3_CUDA_VSA_PAIR=1`: two 64-token query tiles per block over the union
+    /// of their selections (measured equal to one tile per block on an L40S,
+    /// so off by default).
+    vsa_pair: bool,
     /// `H3_CUDA_VSA_COARSE1=1`: the one-query-tile coarse kernel.
     vsa_coarse1: bool,
+    /// `H3_CUDA_VSA_DBG=<bits>`: timing experiments in the fine kernel (see
+    /// `attn_mma_body`); the output is wrong, only `bench` should use it.
+    vsa_dbg: i32,
     prof: Option<std::sync::Mutex<std::collections::HashMap<String, (f64, usize)>>>,
 }
 
@@ -367,8 +371,9 @@ impl Cuda {
             scalar_attn: env1("H3_CUDA_SCALAR_ATTN"),
             attn_v1: env1("H3_CUDA_ATTN_V1"),
             vsa_v2: env1("H3_CUDA_VSA_V2"),
-            vsa_nopair: env1("H3_CUDA_VSA_NOPAIR"),
+            vsa_pair: env1("H3_CUDA_VSA_PAIR"),
             vsa_coarse1: env1("H3_CUDA_VSA_COARSE1"),
+            vsa_dbg: std::env::var("H3_CUDA_VSA_DBG").ok().and_then(|v| v.parse().ok()).unwrap_or(0),
             prof: env1("H3_PROFILE").then(Default::default),
         })
     }
@@ -1159,7 +1164,7 @@ impl Backend for Cuda {
             64 => Some(&self.f.vsa_fine_pair_mma64),
             _ => None,
         };
-        if let (Some(f), true, false, false, true) = (pair, self.ampere, self.scalar_attn, self.vsa_nopair, s.te == 64) {
+        if let (Some(f), true, false, true, true) = (pair, self.ampere, self.scalar_attn, self.vsa_pair, s.te == 64) {
             self.launch(
                 &self.f.vsa_pair,
                 (s.npairs as u32, s.heads as u32, 1),
@@ -1179,7 +1184,7 @@ impl Backend for Cuda {
             );
             args.push(Arg::F(s.scale));
             tail(&mut args);
-            args.extend([Arg::P(self.ptr(&s.usel)), Arg::P(self.ptr(&s.nusel)), Arg::I(s.npairs as i32), Arg::I(s.ustride as i32)]);
+            args.extend([Arg::P(self.ptr(&s.usel)), Arg::P(self.ptr(&s.nusel)), Arg::I(s.npairs as i32), Arg::I(s.ustride as i32), Arg::I(self.vsa_dbg)]);
             self.launch(f, (s.npairs as u32, s.heads as u32, 1), (256, 1, 1), &args);
             return;
         }
@@ -1198,6 +1203,9 @@ impl Backend for Cuda {
         if let (Some((f, sub, threads)), true, false) = (mma, self.ampere, self.scalar_attn) {
             args.push(Arg::F(s.scale));
             tail(&mut args);
+            if !self.vsa_v2 {
+                args.push(Arg::I(self.vsa_dbg));
+            }
             self.launch(f, (s.nb as u32 * sub, s.heads as u32, 1), (threads, 1, 1), &args);
         } else {
             args.push(Arg::I(s.d as i32));

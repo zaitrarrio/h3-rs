@@ -614,8 +614,11 @@ __device__ __forceinline__ void attn_mma_body(int mode, const bf16_t* q, const b
         int heads, int kv_heads, int sq, int sk, int causal, float scale,
         const unsigned* slot, const unsigned* sel, const unsigned* nsel, const float* pooled, const bf16_t* gate,
         int has_gate, int nb, int np, int dense_all, int te, int maxsel,
-        const unsigned* usel, const unsigned* nusel, int npairs, int ustride,
+        const unsigned* usel, const unsigned* nusel, int npairs, int ustride, int dbg,
         bf16_t* ks, bf16_t* vs, unsigned char* kvalid) {
+    // dbg (timing experiments only, output is garbage): 1 sequential keys
+    // instead of the slot gather, 2 skip Q·Kᵀ, 4 skip P·V, 8 skip exp2,
+    // 16 skip the K/V loads, 32 no token-index prefetch.
     constexpr int KS_STRIDE = D + 8;
     constexpr int KK = D / 16;   // k-steps of Q·Kᵀ
     constexpr int DT = D / 8;    // 8-wide dim tiles of the output
@@ -679,22 +682,32 @@ __device__ __forceinline__ void attn_mma_body(int mode, const bf16_t* q, const b
     const bf16_t* vbase = v + (long)kh * sk * D;
     const int ch = tid % CH, krow = tid / CH;
     auto key_tok = [&](int c, int key) -> int {
-        if (mode == 0) return c * MMA_BK + key < sk ? c * MMA_BK + key : -1;
+        if (mode == 0 || (dbg & 1)) return c * MMA_BK + key < sk ? c * MMA_BK + key : -1;
         unsigned tile;
         if (mode == 2) tile = urow[c / sub] & 0x3fffffffu;
         else tile = all_tiles ? (unsigned)(c / sub) : sel[((long)h * nb + qt) * maxsel + c / sub];
         const unsigned s2 = slot[(long)tile * te + (c % sub) * 64 + key];
         return s2 == 0xffffffffu ? -1 : (int)s2;
     };
+    // Token indices of the keys this thread loads, resolved one chunk ahead
+    // of the cp.async that needs them (two dependent L2 reads otherwise sit
+    // on the critical path of every chunk).
+    constexpr int NJ = MMA_BK / RP;
+    int ntk[NJ];
+    auto resolve = [&](int c) {
+        #pragma unroll
+        for (int j = 0; j < NJ; ++j) ntk[j] = key_tok(c, krow + RP * j);
+    };
     auto load = [&](bf16_t* dst, const bf16_t* src, int c, unsigned char* valid) {
         #pragma unroll
-        for (int j = 0; j < MMA_BK / RP; ++j) {
-            const int key = krow + RP * j, tk = key_tok(c, key);
-            cp_async16(dst + key * KS_STRIDE + ch * 8, src + (long)(tk < 0 ? 0 : tk) * D + ch * 8, tk >= 0);
+        for (int j = 0; j < NJ; ++j) {
+            const int key = krow + RP * j, tk = ntk[j];
+            if (!(dbg & 16)) cp_async16(dst + key * KS_STRIDE + ch * 8, src + (long)(tk < 0 ? 0 : tk) * D + ch * 8, tk >= 0);
             if (valid && ch == 0) valid[key] = tk >= 0;
         }
     };
     if (nchunks > 0) {
+        resolve(0);
         load(ks, kbase, 0, kvalid);
         cp_async_commit();
         load(vs, vbase, 0, 0);
@@ -705,6 +718,7 @@ __device__ __forceinline__ void attn_mma_body(int mode, const bf16_t* q, const b
         const unsigned char* kv = kvalid + (c & 1) * MMA_BK;
         // Paired mode: does this warp's tile select the key tile of chunk c?
         const bool mine = mode != 2 || (((urow[c / sub] >> 30) >> half) & 1u);
+        if (c + 1 < nchunks && !(dbg & 32)) resolve(c + 1);   // overlaps the K_c wait and Q·Kᵀ
         cp_async_wait1();          // K_c landed (V_c may still be in flight)
         __syncthreads();
         float s[8][4];
@@ -714,11 +728,13 @@ __device__ __forceinline__ void attn_mma_body(int mode, const bf16_t* q, const b
         for (int nt = 0; nt < 8; ++nt) {
             s[nt][0] = s[nt][1] = s[nt][2] = s[nt][3] = 0.0f;
             const bf16_t* kr = ks + (nt * 8 + g) * KS_STRIDE;
+            if (!(dbg & 2)) {
             #pragma unroll
             for (int kk = 0; kk < KK; ++kk) {
                 const unsigned b0 = *(const unsigned*)(kr + kk * 16 + t * 2);
                 const unsigned b1 = *(const unsigned*)(kr + kk * 16 + 8 + t * 2);
                 mma_bf16(s[nt], qa[kk][0], qa[kk][1], qa[kk][2], qa[kk][3], b0, b1);
+            }
             }
         }
         #pragma unroll
@@ -740,7 +756,10 @@ __device__ __forceinline__ void attn_mma_body(int mode, const bf16_t* q, const b
         }
         }
         __syncthreads();           // every warp is done with ks
-        if (c + 1 < nchunks) load(ks, kbase, c + 1, kvalid + ((c + 1) & 1) * MMA_BK);
+        if (c + 1 < nchunks) {
+            if (dbg & 32) resolve(c + 1);
+            load(ks, kbase, c + 1, kvalid + ((c + 1) & 1) * MMA_BK);
+        }
         cp_async_commit();
         if (mine) {
         #pragma unroll
@@ -762,14 +781,18 @@ __device__ __forceinline__ void attn_mma_body(int mode, const bf16_t* q, const b
             float p[8];
             #pragma unroll
             for (int cc = 0; cc < 4; ++cc) {
-                p[cc] = exp2f(s[2 * kk][cc] - (cc < 2 ? m0 : m1));
-                p[4 + cc] = exp2f(s[2 * kk + 1][cc] - (cc < 2 ? m0 : m1));
+                if (dbg & 8) { p[cc] = s[2 * kk][cc]; p[4 + cc] = s[2 * kk + 1][cc]; }
+                else {
+                    p[cc] = exp2f(s[2 * kk][cc] - (cc < 2 ? m0 : m1));
+                    p[4 + cc] = exp2f(s[2 * kk + 1][cc] - (cc < 2 ? m0 : m1));
+                }
             }
             l0 += p[0] + p[1] + p[4] + p[5];
             l1 += p[2] + p[3] + p[6] + p[7];
             const unsigned a0 = pack_bf16(p[0], p[1]), a1 = pack_bf16(p[2], p[3]);
             const unsigned a2 = pack_bf16(p[4], p[5]), a3 = pack_bf16(p[6], p[7]);
             const int vkey = kk * 16 + (lane & 7) + ((lane >> 3) & 1) * 8;
+            if (!(dbg & 4)) {
             #pragma unroll
             for (int dt = 0; dt < DT; dt += 2) {
                 const unsigned addr = (unsigned)__cvta_generic_to_shared(vs + vkey * KS_STRIDE + dt * 8 + (lane >> 4) * 8);
@@ -778,6 +801,7 @@ __device__ __forceinline__ void attn_mma_body(int mode, const bf16_t* q, const b
                              : "=r"(b0), "=r"(b1), "=r"(b2), "=r"(b3) : "r"(addr));
                 mma_bf16(o[dt], a0, a1, a2, a3, b0, b1);
                 mma_bf16(o[dt + 1], a0, a1, a2, a3, b2, b3);
+            }
             }
         }
         }
@@ -812,29 +836,29 @@ extern "C" __global__ void __launch_bounds__(128) fw_attention_mma##D(u64 q_, u6
     __shared__ __align__(16) bf16_t vs[MMA_BK * (D + 8)];                                                            \
     __shared__ unsigned char kvalid[2 * MMA_BK];                                                                     \
     attn_mma_body<D, 4>(0, (const bf16_t*)q_, (const bf16_t*)k_, (const bf16_t*)v_, (bf16_t*)out_, heads, kv_heads, \
-                     sq, sk, causal, scale, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, ks, vs, kvalid);            \
+                     sq, sk, causal, scale, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, ks, vs, kvalid);         \
 }                                                                                                                    \
 extern "C" __global__ void __launch_bounds__(128) fw_vsa_fine_mma##D(u64 q_, u64 k_, u64 v_, u64 out_, int heads,   \
         int seq, float scale, u64 slot_, u64 sel_, u64 nsel_, u64 pooled_, u64 gate_, int has_gate, int nb, int np,  \
-        int dense_all, int te, int maxsel) {                                                                         \
+        int dense_all, int te, int maxsel, int dbg) {                                                                \
     __shared__ __align__(16) bf16_t ks[MMA_BK * (D + 8)];                                                            \
     __shared__ __align__(16) bf16_t vs[MMA_BK * (D + 8)];                                                            \
     __shared__ unsigned char kvalid[2 * MMA_BK];                                                                     \
     attn_mma_body<D, 4>(1, (const bf16_t*)q_, (const bf16_t*)k_, (const bf16_t*)v_, (bf16_t*)out_, heads, heads,    \
                      seq, seq, 0, scale, (const unsigned*)slot_, (const unsigned*)sel_, (const unsigned*)nsel_,      \
                      (const float*)pooled_, (const bf16_t*)gate_, has_gate, nb, np, dense_all, te, maxsel,           \
-                     0, 0, 0, 0, ks, vs, kvalid);                                                                    \
+                     0, 0, 0, 0, dbg, ks, vs, kvalid);                                                               \
 }                                                                                                                    \
 extern "C" __global__ void __launch_bounds__(256) fw_vsa_fine_pair_mma##D(u64 q_, u64 k_, u64 v_, u64 out_,         \
         int heads, int seq, float scale, u64 slot_, u64 sel_, u64 nsel_, u64 pooled_, u64 gate_, int has_gate,       \
-        int nb, int np, int dense_all, int te, int maxsel, u64 usel_, u64 nusel_, int npairs, int ustride) {         \
+        int nb, int np, int dense_all, int te, int maxsel, u64 usel_, u64 nusel_, int npairs, int ustride, int dbg) {\
     __shared__ __align__(16) bf16_t ks[MMA_BK * (D + 8)];                                                            \
     __shared__ __align__(16) bf16_t vs[MMA_BK * (D + 8)];                                                            \
     __shared__ unsigned char kvalid[2 * MMA_BK];                                                                     \
     attn_mma_body<D, 8>(2, (const bf16_t*)q_, (const bf16_t*)k_, (const bf16_t*)v_, (bf16_t*)out_, heads, heads,    \
                      seq, seq, 0, scale, (const unsigned*)slot_, (const unsigned*)sel_, (const unsigned*)nsel_,      \
                      (const float*)pooled_, (const bf16_t*)gate_, has_gate, nb, np, dense_all, te, maxsel,           \
-                     (const unsigned*)usel_, (const unsigned*)nusel_, npairs, ustride, ks, vs, kvalid);              \
+                     (const unsigned*)usel_, (const unsigned*)nusel_, npairs, ustride, dbg, ks, vs, kvalid);         \
 }
 ATTN_MMA_KERNELS(64)
 ATTN_MMA_KERNELS(128)
