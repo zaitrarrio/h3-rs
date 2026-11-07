@@ -69,10 +69,12 @@ pub struct CuWeight {
     quant: Option<(Quant, CuBuf, usize)>,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq)]
 enum Quant {
     Q8,
     Q4,
+    /// E2M1 codes (2 per byte) with E4M3 per-16 scales in the table buffer.
+    Nvfp4 { alpha: f32, first_high: bool },
 }
 
 pub struct Cuda {
@@ -691,10 +693,12 @@ impl Backend for Cuda {
         }
     }
 
-    /// NVFP4 codes and E4M3 scales are expanded to bf16 on the device once at
-    /// load (a Blackwell FP4 tensor-core GEMM is future work).
+    /// NVFP4 stays 4-bit on the device (codes + E4M3 scales, 0.53 B per
+    /// weight) and is expanded into the shared bf16 scratch before each GEMM
+    /// like int8 / int4 (a Blackwell FP4 tensor-core GEMM is future work).
+    /// Expanding at load instead costs 2 B per weight: 36 GB for the 42-block
+    /// Trim, which is what ran the L40S out of memory.
     fn weight_nvfp4(&self, q: &Nvfp4) -> CuWeight {
-        let n = q.rows * q.cols;
         let mut codes: Vec<u16> = q.packed.chunks(2).map(|c| c[0] as u16 | (c.get(1).map_or(0, |&v| v as u16) << 8)).collect();
         if codes.is_empty() {
             codes.push(0);
@@ -705,18 +709,11 @@ impl Backend for Cuda {
         }
         let gc = CuBuf { s: Arc::new(self.stream.clone_htod(&codes).expect("upload")), len: codes.len(), f32: false };
         let gs = CuBuf { s: Arc::new(self.stream.clone_htod(&scales).expect("upload")), len: scales.len(), f32: false };
-        let out = self.alloc(n);
-        self.launch(
-            &self.f.dequant_nvfp4,
-            Self::elems(n),
-            (256, 1, 1),
-            &[Arg::P(self.ptr(&out)), Arg::P(self.ptr(&gc)), Arg::P(self.ptr(&gs)), Arg::L(n as i64), Arg::I(q.cols as i32), Arg::F(q.alpha), Arg::I(q.first_high as i32)],
-        );
-        CuWeight { buf: out, rows: q.rows, cols: q.cols, quant: None }
+        CuWeight { buf: gc, rows: q.rows, cols: q.cols, quant: Some((Quant::Nvfp4 { alpha: q.alpha, first_high: q.first_high }, gs, 16)) }
     }
 
     fn weight_bytes(&self, w: &CuWeight) -> usize {
-        w.buf.len * 2 + w.quant.as_ref().map_or(0, |(_, s, _)| s.len * 4)
+        w.buf.len * 2 + w.quant.as_ref().map_or(0, |(_, s, _)| s.len * if s.f32 { 4 } else { 2 })
     }
 
     fn sync(&self) {
@@ -748,15 +745,20 @@ impl Backend for Cuda {
                     *scratch = Some(self.alloc(n * k));
                 }
                 let dst = scratch.as_ref().unwrap();
-                self.launch(
-                    match kind {
-                        Quant::Q8 => &self.f.dequant_q8,
-                        Quant::Q4 => &self.f.dequant_q4,
-                    },
-                    Self::elems(n * k),
-                    (256, 1, 1),
-                    &[Arg::P(self.ptr(dst)), Arg::P(self.ptr(&w.buf)), Arg::P(self.ptr(scales)), Arg::L((n * k) as i64), Arg::I(*group as i32)],
-                );
+                match kind {
+                    Quant::Q8 | Quant::Q4 => self.launch(
+                        if *kind == Quant::Q8 { &self.f.dequant_q8 } else { &self.f.dequant_q4 },
+                        Self::elems(n * k),
+                        (256, 1, 1),
+                        &[Arg::P(self.ptr(dst)), Arg::P(self.ptr(&w.buf)), Arg::P(self.ptr(scales)), Arg::L((n * k) as i64), Arg::I(*group as i32)],
+                    ),
+                    Quant::Nvfp4 { alpha, first_high } => self.launch(
+                        &self.f.dequant_nvfp4,
+                        Self::elems(n * k),
+                        (256, 1, 1),
+                        &[Arg::P(self.ptr(dst)), Arg::P(self.ptr(&w.buf)), Arg::P(self.ptr(scales)), Arg::L((n * k) as i64), Arg::I(k as i32), Arg::F(*alpha), Arg::I(*first_high as i32)],
+                    ),
+                }
                 self.ptr(dst)
             }
         };
