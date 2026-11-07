@@ -83,11 +83,11 @@ time); when the tables do not fit, they are uploaded per step.
 
 ## Next
 
-1. The VSA fine stage (34 % of a CUDA block). Measured on an L40S: 32 rows
-   per warp (v2) gains nothing on VSA tiles and 11 % on dense attention, so
-   the stage is bound by the gathered K/V loads, not by shared memory. Next:
-   a deeper `cp.async` pipeline (two chunks in flight) and two adjacent
-   query tiles per block where their selections overlap.
+1. The VSA fine stage (29 % of a CUDA block after
+   `docs/runs/2026-11-07-vast-l40s-vsa-phases`): instruction-issue and
+   occupancy bound at 12 warps per SM. Next: 32 rows per warp with Q
+   fragments in shared memory (not re-read from L1), a four-block
+   configuration, `pool` fused into `head_split`.
 2. `h3 quantize` the trees once (load was 280 s with int8 quantization at
    load) and the prompt gallery for demos (290 s cold prompt encode).
 3. Decode: 44 s for 124 frames on the ViT decoder is host-bound per chunk

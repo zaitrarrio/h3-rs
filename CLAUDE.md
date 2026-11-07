@@ -15,16 +15,25 @@ State and invariants only; the reasoning is in `docs/design.md`.
 - No speed claim without a measurement on named hardware (card, driver,
   power limit) recorded under `docs/runs/`. 1344×768×124, VSA 0.8: RTX A6000
   470 ms/block CUDA (25.1 s per real forward at int8; FastH3-V2 clip: denoise
-  201 s, decode 44 s), 7.6 s/block WebGPU; L40S 254 ms/block (Trim NVFP4
-  clip: 11.9 s per forward, denoise 95 s, decode 22 s). `H3_PROFILE=1`.
-- CUDA attention kernels: two bodies, both 95/95 on an L40S. v2
-  (`attn_mma2_body`, 32 query rows per warp, 128-row blocks) is the default
-  for dense attention (11 % faster on the L40S); v1 (16 rows per warp) stays
-  the VSA fine default because v2 was 29 % slower on 64-token tiles and
-  equal on 128-token ones: the fine stage is bound by the gathered K/V
-  loads, not shared memory (`docs/runs/2026-11-07-vast-l40s-nvfp4-vsa2`).
-  `H3_CUDA_ATTN_V1=1` / `H3_CUDA_VSA_V2=1` flip them. The next VSA
-  experiments are a deeper cp.async pipeline and two query tiles per block.
+  201 s, decode 44 s), 7.6 s/block WebGPU; L40S 230 ms/block (Trim NVFP4
+  clip at 254 ms/block kernels: 11.9 s per forward, denoise 95 s, decode
+  22 s). `H3_PROFILE=1`.
+- CUDA attention kernels (all 97/97 on an L40S): dense attention runs v2
+  (`attn_mma2_body`, 32 rows per warp, 128-row blocks; `H3_CUDA_ATTN_V1=1`
+  for v1). The VSA fine stage runs `vsa_fine3_body` variant d (16 rows per
+  warp, 32-key chunks, K/V double-buffered a chunk ahead, Q fragments
+  resident, swizzled 32 KB staging, 168 registers, three blocks per SM);
+  `H3_CUDA_VSA_FINE=v1|a|b|c` select the others, `H3_CUDA_VSA_PAIR=1` the
+  two-tiles-per-block body, `H3_CUDA_VSA_COARSE1=1` the one-query-tile
+  coarse kernel. The fine stage is instruction-issue and occupancy bound,
+  not memory bound: sharing gathers across tiles and halving shared-memory
+  reads gained nothing, the instruction diet (hardware bf16 cvt, scale in
+  the exp FMA, mask skipped on full chunks, ldmatrix K, conditional
+  rescale) and the third block per SM took it from 87 to 66.5 ms per call
+  (`docs/runs/2026-11-07-vast-l40s-vsa-phases`). Read the SASS before
+  guessing: `H3_PTX_OUT=f cargo test -p h3-cuda dump_ptx`, then `ptxas -v`
+  (pip `nvidia-cuda-nvcc-cu12`) and `nvdisasm` (NVIDIA's apt `.deb`).
+  Q fragments must never be re-read from L1 per mma (2.5× slower).
 - NVFP4 on CUDA stays 4-bit on the device (codes + E4M3 scales, expanded
   into the bf16 scratch per GEMM like int8 / int4): the 42-block Trim runs in
   24.3 GB peak on an L40S; expanding at load needs 36 GB and OOMs a 48 GB

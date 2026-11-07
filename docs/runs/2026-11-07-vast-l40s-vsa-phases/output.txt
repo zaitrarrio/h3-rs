@@ -133,3 +133,206 @@ forward 0: 1.214s (303.6 ms/block; ×50/4 blocks ≈ 15.18s)
 exit 0
 
 
+
+### run vast-20261107-1230, cmd 1
+watchdog armed
+name, driver_version, power.limit [W]
+NVIDIA L40S, 595.91.07, 350.00 W
+old binary ok
+== check new default
+cuda NVIDIA L40S (sm_89)
+all 97 checks pass (tolerance 3e-2)
+== check new 3b
+cuda NVIDIA L40S (sm_89)
+all 97 checks pass (tolerance 3e-2)
+== check new pair
+cuda NVIDIA L40S (sm_89)
+all 97 checks pass (tolerance 3e-2)
+== check new dense v1
+cuda NVIDIA L40S (sm_89)
+all 97 checks pass (tolerance 3e-2)
+== geometry []
+-- old v1
+forward 0: 0.994s (248.4 ms/block; ×50/4 blocks ≈ 12.42s)
+  vsa fine (mma, d128)                         349.3 ms  35.2%       4 calls    87.320 ms/call
+  head_split (qk-norm + rope)                   25.5 ms   2.6%      16 calls     1.594 ms/call
+  rms_norm (+residual, modulation)              17.3 ms   1.7%       9 calls     1.921 ms/call
+  vsa coarse + top-k (4 query tiles)            14.3 ms   1.4%       4 calls     3.567 ms/call
+-- old 3b
+forward 0: 0.977s (244.2 ms/block; ×50/4 blocks ≈ 12.21s)
+  vsa fine (3b, d128)                          322.8 ms  33.1%       4 calls    80.701 ms/call
+-- new v1
+forward 0: 0.968s (242.0 ms/block; ×50/4 blocks ≈ 12.10s)
+  vsa fine (mma, d128)                         323.6 ms  33.5%       4 calls    80.906 ms/call
+  head_split (qk-norm + rope)                   26.2 ms   2.7%      16 calls     1.637 ms/call
+  rms_norm (+residual, modulation)              16.2 ms   1.7%       9 calls     1.801 ms/call
+  vsa coarse + top-k (4 query tiles)            14.1 ms   1.5%       4 calls     3.517 ms/call
+-- new 3b
+forward 0: 0.954s (238.5 ms/block; ×50/4 blocks ≈ 11.92s)
+  vsa fine (3b, d128)                          303.3 ms  31.8%       4 calls    75.819 ms/call
+-- new pair
+forward 0: 0.999s (249.6 ms/block; ×50/4 blocks ≈ 12.48s)
+  vsa fine (paired tiles, d128)                359.4 ms  36.0%       4 calls    89.857 ms/call
+-- new dense v2
+forward 0: 1.397s (349.2 ms/block; ×50/4 blocks ≈ 17.46s)
+  attention (mma2, d128)                       822.4 ms  58.9%       4 calls   205.592 ms/call
+-- old dense v2
+forward 0: 1.481s (370.2 ms/block; ×50/4 blocks ≈ 18.51s)
+  attention (mma2, d128)                       907.7 ms  61.3%       4 calls   226.932 ms/call
+== geometry [--width 832 --height 480]
+-- old v1
+forward 0: 0.330s (82.5 ms/block; ×50/4 blocks ≈ 4.12s)
+  vsa fine (mma, d128)                          85.4 ms  25.9%       4 calls    21.345 ms/call
+  head_split (qk-norm + rope)                   10.1 ms   3.1%      16 calls     0.630 ms/call
+  rms_norm (+residual, modulation)               6.9 ms   2.1%       9 calls     0.767 ms/call
+  vsa coarse + top-k (4 query tiles)             3.2 ms   1.0%       4 calls     0.792 ms/call
+-- old 3b
+forward 0: 0.323s (80.9 ms/block; ×50/4 blocks ≈ 4.04s)
+  vsa fine (3b, d128)                           75.9 ms  23.5%       4 calls    18.966 ms/call
+-- new v1
+forward 0: 0.322s (80.4 ms/block; ×50/4 blocks ≈ 4.02s)
+  vsa fine (mma, d128)                          78.2 ms  24.4%       4 calls    19.553 ms/call
+  head_split (qk-norm + rope)                   10.4 ms   3.2%      16 calls     0.648 ms/call
+  rms_norm (+residual, modulation)               6.4 ms   2.0%       9 calls     0.706 ms/call
+  vsa coarse + top-k (4 query tiles)             3.0 ms   0.9%       4 calls     0.757 ms/call
+-- new 3b
+forward 0: 0.317s (79.2 ms/block; ×50/4 blocks ≈ 3.96s)
+  vsa fine (3b, d128)                           73.4 ms  23.2%       4 calls    18.354 ms/call
+-- new pair
+forward 0: 0.329s (82.2 ms/block; ×50/4 blocks ≈ 4.11s)
+  vsa fine (paired tiles, d128)                 90.8 ms  27.6%       4 calls    22.689 ms/call
+-- new dense v2
+forward 0: 0.361s (90.3 ms/block; ×50/4 blocks ≈ 4.51s)
+  attention (mma2, d128)                       147.8 ms  41.0%       4 calls    36.949 ms/call
+-- old dense v2
+forward 0: 0.376s (94.0 ms/block; ×50/4 blocks ≈ 4.70s)
+  attention (mma2, d128)                       162.2 ms  43.2%       4 calls    40.557 ms/call
+== omni tile 128: old v1, new v1, new 3b
+forward 0: 0.888s (222.0 ms/block; ×50/4 blocks ≈ 11.10s)
+  vsa fine (mma, d128)                         248.2 ms  28.0%       4 calls    62.061 ms/call
+forward 0: 0.863s (215.8 ms/block; ×50/4 blocks ≈ 10.79s)
+  vsa fine (mma, d128)                         232.6 ms  27.0%       4 calls    58.157 ms/call
+forward 0: 0.856s (213.9 ms/block; ×50/4 blocks ≈ 10.69s)
+  vsa fine (3b, d128)                          217.9 ms  25.5%       4 calls    54.470 ms/call
+== unprofiled 2 steps: old, new, new 3b
+forward 0: 0.994s (248.5 ms/block; ×50/4 blocks ≈ 12.42s)
+forward 1: 1.020s (255.0 ms/block; ×50/4 blocks ≈ 12.75s)
+forward 0: 0.970s (242.4 ms/block; ×50/4 blocks ≈ 12.12s)
+forward 1: 0.991s (247.7 ms/block; ×50/4 blocks ≈ 12.39s)
+forward 0: 0.956s (239.0 ms/block; ×50/4 blocks ≈ 11.95s)
+forward 1: 0.990s (247.5 ms/block; ×50/4 blocks ≈ 12.38s)
+exit 0
+
+
+### run vast-20261107-1300, cmd 1
+watchdog armed
+name, driver_version, power.limit [W]
+NVIDIA L40S, 595.91.07, 350.00 W
+old binary ok
+== check new default (3b)
+cuda NVIDIA L40S (sm_89)
+all 97 checks pass (tolerance 3e-2)
+== check new v1
+cuda NVIDIA L40S (sm_89)
+all 97 checks pass (tolerance 3e-2)
+== check new pair
+cuda NVIDIA L40S (sm_89)
+all 97 checks pass (tolerance 3e-2)
+== check new dense v1 + scalar
+cuda NVIDIA L40S (sm_89)
+all 97 checks pass (tolerance 3e-2)
+cuda NVIDIA L40S (sm_89)
+all 97 checks pass (tolerance 3e-2)
+== geometry []
+-- old 3b (previous binary)
+forward 0: 0.953s (238.4 ms/block; ×50/4 blocks ≈ 11.92s)
+  vsa fine (3b, d128)                          305.8 ms  32.1%       4 calls    76.447 ms/call
+-- new 3b
+forward 0: 0.942s (235.6 ms/block; ×50/4 blocks ≈ 11.78s)
+profile (CUDA, synced per op): 941.6 ms in ops; GEMMs 559.9 ms at 230.1 TFLOP/s
+  vsa fine (3b, d128)                          287.5 ms  30.5%       4 calls    71.880 ms/call
+  head_split (qk-norm + rope)                   26.2 ms   2.8%      16 calls     1.636 ms/call
+  rms_norm (+residual, modulation)              16.2 ms   1.7%       9 calls     1.795 ms/call
+  vsa coarse + top-k (4 query tiles)            14.4 ms   1.5%       4 calls     3.595 ms/call
+  vsa pool                                      11.2 ms   1.2%       4 calls     2.788 ms/call
+-- new v1
+forward 0: 0.964s (241.1 ms/block; ×50/4 blocks ≈ 12.05s)
+  vsa fine (mma, d128)                         320.5 ms  33.3%       4 calls    80.136 ms/call
+-- new dense v2
+forward 0: 1.416s (354.1 ms/block; ×50/4 blocks ≈ 17.70s)
+  attention (mma2, d128)                       838.4 ms  59.2%       4 calls   209.607 ms/call
+== geometry [--width 832 --height 480]
+-- old 3b (previous binary)
+forward 0: 0.321s (80.3 ms/block; ×50/4 blocks ≈ 4.02s)
+  vsa fine (3b, d128)                           74.2 ms  23.1%       4 calls    18.551 ms/call
+-- new 3b
+forward 0: 0.321s (80.1 ms/block; ×50/4 blocks ≈ 4.01s)
+profile (CUDA, synced per op): 320.0 ms in ops; GEMMs 215.7 ms at 237.6 TFLOP/s
+  vsa fine (3b, d128)                           69.5 ms  21.7%       4 calls    17.375 ms/call
+  head_split (qk-norm + rope)                   10.3 ms   3.2%      16 calls     0.645 ms/call
+  rms_norm (+residual, modulation)               6.4 ms   2.0%       9 calls     0.707 ms/call
+  vsa pool                                       4.6 ms   1.5%       4 calls     1.161 ms/call
+  vsa coarse + top-k (4 query tiles)             3.2 ms   1.0%       4 calls     0.789 ms/call
+-- new v1
+forward 0: 0.324s (80.9 ms/block; ×50/4 blocks ≈ 4.04s)
+  vsa fine (mma, d128)                          80.6 ms  24.9%       4 calls    20.138 ms/call
+-- new dense v2
+forward 0: 0.358s (89.5 ms/block; ×50/4 blocks ≈ 4.48s)
+  attention (mma2, d128)                       145.7 ms  40.8%       4 calls    36.422 ms/call
+== omni tile 128: old 3b, new 3b
+forward 0: 0.852s (213.0 ms/block; ×50/4 blocks ≈ 10.65s)
+  vsa fine (3b, d128)                          218.3 ms  25.6%       4 calls    54.587 ms/call
+forward 0: 0.840s (209.9 ms/block; ×50/4 blocks ≈ 10.50s)
+  vsa fine (3b, d128)                          203.6 ms  24.3%       4 calls    50.910 ms/call
+== unprofiled 2 steps: old 3b, new 3b
+forward 0: 0.947s (236.9 ms/block; ×50/4 blocks ≈ 11.84s)
+forward 1: 0.978s (244.5 ms/block; ×50/4 blocks ≈ 12.23s)
+forward 0: 0.924s (230.9 ms/block; ×50/4 blocks ≈ 11.55s)
+forward 1: 0.981s (245.2 ms/block; ×50/4 blocks ≈ 12.26s)
+exit 0
+
+
+### run vast-20261107-1330, cmd 1
+watchdog armed
+name, driver_version, power.limit [W]
+NVIDIA L40S, 595.91.07, 350.00 W
+== check 3d
+cuda NVIDIA L40S (sm_89)
+all 97 checks pass (tolerance 3e-2)
+== check 3b (default)
+cuda NVIDIA L40S (sm_89)
+all 97 checks pass (tolerance 3e-2)
+== geometry []
+-- 3b
+forward 0: 0.947s (236.9 ms/block; ×50/4 blocks ≈ 11.84s)
+  vsa fine (3b, d128)                          288.8 ms  30.5%       4 calls    72.188 ms/call
+-- 3d
+forward 0: 0.924s (230.9 ms/block; ×50/4 blocks ≈ 11.55s)
+  vsa fine (3d, d128)                          266.9 ms  28.9%       4 calls    66.716 ms/call
+-- 3b again
+  vsa fine (3b, d128)                          300.1 ms  31.4%       4 calls    75.021 ms/call
+-- 3d again
+  vsa fine (3d, d128)                          265.1 ms  28.8%       4 calls    66.270 ms/call
+== geometry [--width 832 --height 480]
+-- 3b
+forward 0: 0.319s (79.8 ms/block; ×50/4 blocks ≈ 3.99s)
+  vsa fine (3b, d128)                           72.5 ms  22.8%       4 calls    18.128 ms/call
+-- 3d
+forward 0: 0.308s (77.1 ms/block; ×50/4 blocks ≈ 3.86s)
+  vsa fine (3d, d128)                           62.5 ms  20.3%       4 calls    15.617 ms/call
+-- 3b again
+  vsa fine (3b, d128)                           69.9 ms  21.8%       4 calls    17.472 ms/call
+-- 3d again
+  vsa fine (3d, d128)                           63.0 ms  20.2%       4 calls    15.743 ms/call
+== omni tile 128: 3b, 3d
+forward 0: 0.839s (209.8 ms/block; ×50/4 blocks ≈ 10.49s)
+  vsa fine (3b, d128)                          210.1 ms  25.1%       4 calls    52.525 ms/call
+forward 0: 0.828s (206.9 ms/block; ×50/4 blocks ≈ 10.35s)
+  vsa fine (3d, d128)                          191.5 ms  23.2%       4 calls    47.885 ms/call
+== unprofiled 2 steps: 3b, 3d
+forward 0: 0.941s (235.3 ms/block; ×50/4 blocks ≈ 11.77s)
+forward 1: 0.975s (243.9 ms/block; ×50/4 blocks ≈ 12.19s)
+forward 0: 0.916s (229.0 ms/block; ×50/4 blocks ≈ 11.45s)
+forward 1: 0.956s (239.0 ms/block; ×50/4 blocks ≈ 11.95s)
+exit 0
+

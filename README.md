@@ -40,11 +40,11 @@ Measured on a vast.ai **RTX A6000** (48 GB, 300 W, driver 570.195.03),
 | load | 280 s (int8 quantization at load) | 241 s | 49 s (4-bit upload) |
 | peak device memory | | | 24.3 GB |
 
-Per block at that geometry: 470 ms VSA / 815 ms dense on the A6000, 254 /
-385 ms on the L40S. The VSA fine stage is a third of the time; a
-32-rows-per-warp rewrite did not move it (it is bound by the gathered K/V
-loads), so that stays the next kernel to work on
-(`docs/runs/2026-11-07-vast-l40s-nvfp4-vsa2`).
+Per block at that geometry: 470 ms VSA / 815 ms dense on the A6000, 230 /
+354 ms on the L40S. The VSA phases on the L40S after the kernel work in
+`docs/runs/2026-11-07-vast-l40s-vsa-phases`: fine stage 66.5 ms (was 87),
+coarse + top-k 3.6 ms (was 6.4), pool 2.8 ms; the fine stage is still
+~2.7× its tensor-core floor and the record says what to try next.
 No PyTorch parity number yet (`scripts/reference/make_fixtures.py` needs a
 machine with torch); the clips themselves match their prompts
 (`docs/runs/2026-11-06-vast-a6000-first-gpu/*.png`).
