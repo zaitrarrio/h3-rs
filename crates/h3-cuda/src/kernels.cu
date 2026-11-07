@@ -2001,6 +2001,45 @@ extern "C" __global__ void fw_mx_quant(u64 x_, long blocks, int k, u64 codes_, u
         ((bf16_t*)out_)[idx] = bf(mx_e4m3_decode(code) * __int_as_float((int)byte << 23));
     }
 }
+// Eight consecutive elements per thread (one 16-byte load), four threads per
+// 32-column block: the same math as fw_mx_quant for 16-byte-aligned rows.
+// No early return: the 4-lane reductions need every lane of the warp.
+extern "C" __global__ void fw_mx_quant8(u64 x_, long total, int k, u64 codes_, u64 scales_, u64 out_, int mode) {
+    const long i0 = ((long)blockIdx.x * blockDim.x + threadIdx.x) * 8;
+    const bool valid = i0 < total;
+    uint4 raw = make_uint4(0u, 0u, 0u, 0u);
+    if (valid) raw = *(const uint4*)((const bf16_t*)x_ + i0);
+    float v[8];
+    v[0] = __uint_as_float(raw.x << 16); v[1] = __uint_as_float(raw.x & 0xFFFF0000u);
+    v[2] = __uint_as_float(raw.y << 16); v[3] = __uint_as_float(raw.y & 0xFFFF0000u);
+    v[4] = __uint_as_float(raw.z << 16); v[5] = __uint_as_float(raw.z & 0xFFFF0000u);
+    v[6] = __uint_as_float(raw.w << 16); v[7] = __uint_as_float(raw.w & 0xFFFF0000u);
+    float amax = 0.0f;
+    #pragma unroll
+    for (int j = 0; j < 8; ++j) amax = fmaxf(amax, fabsf(v[j]));
+    amax = fmaxf(amax, __shfl_xor_sync(0xffffffffu, amax, 1));
+    amax = fmaxf(amax, __shfl_xor_sync(0xffffffffu, amax, 2));
+    if (!valid) return;
+    float inv;
+    const unsigned byte = mx_e8m0(amax, &inv);
+    if (mode == 0) {
+        unsigned c[8];
+        #pragma unroll
+        for (int j = 0; j < 8; ++j) c[j] = mx_e4m3(v[j] * inv);
+        uint2 packed = make_uint2(c[0] | (c[1] << 8) | (c[2] << 16) | (c[3] << 24), c[4] | (c[5] << 8) | (c[6] << 16) | (c[7] << 24));
+        *(uint2*)((unsigned char*)codes_ + i0) = packed;
+        if ((threadIdx.x & 3) == 0) {
+            const long row = i0 / k; const int g = (int)((i0 - row * k) >> 5);
+            ((unsigned char*)scales_)[mx_scale_offset(row, g, ((k >> 5) + 3) >> 2)] = (unsigned char)byte;
+        }
+    } else {
+        const float scale = __int_as_float((int)byte << 23);
+        unsigned o[8];
+        #pragma unroll
+        for (int j = 0; j < 8; ++j) o[j] = bf(mx_e4m3_decode(mx_e4m3(v[j] * inv)) * scale);
+        *(uint4*)((bf16_t*)out_ + i0) = make_uint4(o[0] | (o[1] << 16), o[2] | (o[3] << 16), o[4] | (o[5] << 16), o[6] | (o[7] << 16));
+    }
+}
 // Expand MXFP8 weight codes + swizzled scales to bf16 (the emulation path on pre-Blackwell cards).
 extern "C" __global__ void fw_dequant_mxfp8(u64 out_, u64 codes_, u64 scales_, long n, int k) {
     bf16_t* out = (bf16_t*)out_;

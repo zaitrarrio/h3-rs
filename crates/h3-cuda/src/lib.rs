@@ -109,6 +109,9 @@ pub struct Cuda {
     sm_major: u32,
     /// `H3_CUDA_NO_FP8=1`: emulate MXFP8 in bf16 even on sm_100+.
     no_fp8: bool,
+    /// `H3_CUDA_LT_NTH=i`: use cuBLASLt's i-th heuristic candidate for the
+    /// MXFP8 GEMMs instead of timing them (experiments).
+    lt_nth: Option<usize>,
     scalar_conv: bool,
     scalar_attn: bool,
     /// `H3_CUDA_ATTN_V1=1`: the 16-rows-per-warp kernels for dense attention
@@ -185,6 +188,7 @@ struct Kernels {
     dequant_q4: CudaFunction,
     dequant_nvfp4: CudaFunction,
     mx_quant: CudaFunction,
+    mx_quant8: CudaFunction,
     dequant_mxfp8: CudaFunction,
     conv2d: CudaFunction,
     conv2d_mma: CudaFunction,
@@ -222,6 +226,12 @@ struct LtPlan {
     b: lt_sys::cublasLtMatrixLayout_t,
     c: lt_sys::cublasLtMatrixLayout_t,
     algo: lt_sys::cublasLtMatmulAlgo_t,
+    /// The heuristic's other candidates (MXFP8 plans): the first use of the
+    /// shape times each once and keeps the fastest in `algo`. cuBLASLt's
+    /// first pick for the FFN-up GEMM (n = 28672) on an RTX PRO 6000 ran at
+    /// 355 TFLOP/s, slower than bf16, while the other shapes ran at 780.
+    candidates: Vec<lt_sys::cublasLtMatmulAlgo_t>,
+    tuned: bool,
 }
 
 /// (n, k, rows, epilogue) → plan, `None` when cuBLASLt declined the shape.
@@ -299,7 +309,7 @@ impl Lt {
             .ok()?;
             let h = lt_result::get_matmul_algo_heuristic(self.handle, desc, a, b, c, c, pref);
             let _ = lt_result::destroy_matmul_pref(pref);
-            Some(LtPlan { desc, a, b, c, algo: h.ok()?.algo })
+            Some(LtPlan { desc, a, b, c, algo: h.ok()?.algo, candidates: Vec::new(), tuned: true })
         }
     }
 
@@ -346,9 +356,17 @@ impl Lt {
                 8,
             )
             .ok()?;
-            let h = lt_result::get_matmul_algo_heuristic(self.handle, desc, a, b, c, c, pref);
+            // Up to 8 candidates; the first call on the shape times them.
+            let mut hs: Vec<lt_sys::cublasLtMatmulHeuristicResult_t> = vec![std::mem::zeroed(); 8];
+            let mut found: i32 = 0;
+            let st = lt_sys::cublasLtMatmulAlgoGetHeuristic(self.handle, desc, a, b, c, c, pref, 8, hs.as_mut_ptr(), &mut found);
             let _ = lt_result::destroy_matmul_pref(pref);
-            Some(LtPlan { desc, a, b, c, algo: h.ok()?.algo })
+            if st != lt_sys::cublasStatus_t::CUBLAS_STATUS_SUCCESS || found <= 0 {
+                return None;
+            }
+            hs.truncate(found as usize);
+            let candidates: Vec<_> = hs.iter().map(|h| h.algo).collect();
+            Some(LtPlan { desc, a, b, c, algo: candidates[0], tuned: candidates.len() == 1, candidates })
         }
     }
 
@@ -427,6 +445,7 @@ impl Cuda {
             dequant_q4: get("fw_dequant_q4")?,
             dequant_nvfp4: get("fw_dequant_nvfp4")?,
             mx_quant: get("fw_mx_quant")?,
+            mx_quant8: get("fw_mx_quant8")?,
             dequant_mxfp8: get("fw_dequant_mxfp8")?,
             conv2d: get("fw_conv2d")?,
             conv2d_mma: get("fw_conv2d_mma")?,
@@ -450,6 +469,7 @@ impl Cuda {
             mx_scratch: std::sync::Mutex::new(None),
             sm_major: maj as u32,
             no_fp8: env1("H3_CUDA_NO_FP8"),
+            lt_nth: std::env::var("H3_CUDA_LT_NTH").ok().and_then(|v| v.parse().ok()),
             scalar_conv: env1("H3_CUDA_SCALAR_CONV"),
             scalar_attn: env1("H3_CUDA_SCALAR_ATTN"),
             attn_v1: env1("H3_CUDA_ATTN_V1"),
@@ -518,7 +538,7 @@ impl Cuda {
 
     fn kernel_name(&self, f: &CudaFunction) -> &'static str {
         let k = &self.f;
-        let all: [(&CudaFunction, &'static str); 56] = [
+        let all: [(&CudaFunction, &'static str); 59] = [
             (&k.bias_act, "bias_act"),
             (&k.swiglu, "swiglu"),
             (&k.gate_residual, "gate_residual"),
@@ -571,6 +591,9 @@ impl Cuda {
             (&k.dequant_q8, "dequant int8"),
             (&k.dequant_q4, "dequant int4"),
             (&k.dequant_nvfp4, "dequant nvfp4"),
+            (&k.mx_quant, "mx quant (activations, scalar)"),
+            (&k.mx_quant8, "mx quant (activations)"),
+            (&k.dequant_mxfp8, "dequant mxfp8"),
             (&k.conv2d, "conv2d (scalar)"),
             (&k.conv2d_mma, "conv2d (mma)"),
             (&k.conv3d, "conv3d (scalar)"),
@@ -581,6 +604,71 @@ impl Cuda {
 
     fn elems(n: usize) -> (u32, u32, u32) {
         ((n.div_ceil(256)) as u32, 1, 1)
+    }
+
+    /// MXFP8 activation quantization of `total` bf16 values at `xp` (`k`
+    /// columns per row): `codes` = (E4M3 codes, swizzled E8M0 scales) for the
+    /// FP8 GEMM, else the decoded bf16 copy into `out` (emulation). The
+    /// eight-per-thread kernel needs a 16-byte-aligned `xp`.
+    fn mx_quantize(&self, xp: u64, total: usize, k: usize, codes: Option<(u64, u64)>, out: u64) {
+        let (cp, sp, mode) = match codes {
+            Some((c, s)) => (c, s, 0),
+            None => (0, 0, 1),
+        };
+        let vec = xp % 16 == 0 && total % 8 == 0;
+        let f = if vec { &self.f.mx_quant8 } else { &self.f.mx_quant };
+        let threads = if vec { total / 8 } else { total };
+        self.launch(f, Self::elems(threads), (256, 1, 1), &[Arg::P(xp), Arg::L(if vec { total } else { total / 32 } as i64), Arg::I(k as i32), Arg::P(cp), Arg::P(sp), Arg::P(out), Arg::I(mode)]);
+    }
+
+    /// Time every heuristic candidate of an MXFP8 plan once on the real
+    /// operands (the output is recomputed by the winner's later calls) and
+    /// keep the fastest; `H3_CUDA_LT_NTH=i` picks candidate i instead.
+    fn tune_mx(&self, lt: &Lt, p: &mut LtPlan, ap: u64, bp: u64, yp: u64) {
+        p.tuned = true;
+        if let Some(i) = self.lt_nth {
+            if let Some(a) = p.candidates.get(i) {
+                p.algo = *a;
+            }
+            return;
+        }
+        let (alpha, beta) = (1.0f32, 0.0f32);
+        let ws = lt.workspace_ptr();
+        let mut best: Option<(f64, usize)> = None;
+        for (i, algo) in p.candidates.iter().enumerate() {
+            self.stream.synchronize().expect("sync");
+            let t = std::time::Instant::now();
+            // SAFETY: the same pointers and layouts the caller just ran.
+            let ok = unsafe {
+                lt_result::matmul(
+                    lt.handle,
+                    p.desc,
+                    (&alpha) as *const f32 as *const _,
+                    (&beta) as *const f32 as *const _,
+                    ap as *const _,
+                    p.a,
+                    bp as *const _,
+                    p.b,
+                    yp as *const _,
+                    p.c,
+                    yp as *mut _,
+                    p.c,
+                    algo,
+                    ws as *mut _,
+                    LT_WORKSPACE,
+                    self.stream.cu_stream() as *mut _,
+                )
+                .is_ok()
+            };
+            self.stream.synchronize().expect("sync");
+            let dt = t.elapsed().as_secs_f64();
+            if ok && best.is_none_or(|(b, _)| dt < b) {
+                best = Some((dt, i));
+            }
+        }
+        if let Some((_, i)) = best {
+            p.algo = p.candidates[i];
+        }
     }
 
     /// 32-bit words (u32 tables or f32 scratch) in a table buffer.
@@ -890,7 +978,6 @@ impl Backend for Cuda {
             // W8A8 on the FP8 tensor cores (sm_100+): quantize the activation
             // rows to E4M3 codes + swizzled E8M0 scales, then cuBLASLt with
             // VEC32_UE8M0 block scaling. Anything else emulates in bf16 below.
-            let blocks = rows * k / 32;
             if mx_scratch.as_ref().is_none_or(|(c, s, a)| c.len < (rows * k).div_ceil(2) || s.len < mx_scale_len(rows, k).div_ceil(2) || a.len < rows * k) {
                 *mx_scratch = Some((self.alloc((rows * k).div_ceil(2)), self.alloc(mx_scale_len(rows, k).div_ceil(2)), self.alloc(rows * k)));
             }
@@ -904,19 +991,12 @@ impl Backend for Cuda {
                 };
                 let mut plans = lt.mx_plans.lock().unwrap();
                 // A GELU epilogue cuBLASLt declines falls back to bias-only + a pass.
-                let (plan, epi) = match plans.entry((n, k, rows, epi)).or_insert_with(|| lt.plan_mx(n, k, rows, epi)) {
-                    Some(p) => (Some(p as &LtPlan), epi),
-                    None if epi == 2 => (plans.entry((n, k, rows, 1)).or_insert_with(|| lt.plan_mx(n, k, rows, 1)).as_ref(), 1u8),
-                    None => (None, epi),
-                };
+                let epi = if epi == 2 && plans.entry((n, k, rows, 2)).or_insert_with(|| lt.plan_mx(n, k, rows, 2)).is_none() { 1 } else { epi };
+                let plan = plans.entry((n, k, rows, epi)).or_insert_with(|| lt.plan_mx(n, k, rows, epi)).as_mut();
                 if let Some(p) = plan {
-                    self.launch(
-                        &self.f.mx_quant,
-                        Self::elems(blocks * 32),
-                        (256, 1, 1),
-                        &[Arg::P(xp), Arg::L(blocks as i64), Arg::I(k as i32), Arg::P(self.ptr(codes)), Arg::P(self.ptr(ascales)), Arg::P(0), Arg::I(0)],
-                    );
+                    self.mx_quantize(xp, rows * k, k, Some((self.ptr(codes), self.ptr(ascales))), 0);
                     let (ap, bp) = (self.ptr(&w.buf), self.ptr(codes));
+                    let algo = p.algo;
                     let (asp, bsp) = (self.ptr(wscales), self.ptr(ascales));
                     let biasp = bias.map(|b| self.ptr(b));
                     let ws = lt.workspace_ptr();
@@ -946,7 +1026,7 @@ impl Backend for Cuda {
                                 p.c,
                                 yp as *mut _,
                                 p.c,
-                                &p.algo,
+                                &algo,
                                 ws as *mut _,
                                 LT_WORKSPACE,
                                 self.stream.cu_stream() as *mut _,
@@ -955,6 +1035,9 @@ impl Backend for Cuda {
                         },
                     );
                     self.count_flops(rows, n, k);
+                    if !p.tuned {
+                        self.tune_mx(lt, p, ap, bp, yp);
+                    }
                     // The epilogue did the bias (and tanh-GELU when epi == 2); apply what is left.
                     let left = if act == Act::GeluTanh && epi == 2 { 0 } else { act_code };
                     if left != 0 || bias.is_some() && epi == 0 {
@@ -970,12 +1053,7 @@ impl Backend for Cuda {
                 }
             }
             // Emulation: round the activations through E4M3 / E8M0 into bf16 (exact), then the bf16 GEMM below.
-            self.launch(
-                &self.f.mx_quant,
-                Self::elems(blocks * 32),
-                (256, 1, 1),
-                &[Arg::P(xp), Arg::L(blocks as i64), Arg::I(k as i32), Arg::P(0), Arg::P(0), Arg::P(self.ptr(xround)), Arg::I(1)],
-            );
+            self.mx_quantize(xp, rows * k, k, None, self.ptr(xround));
             xp = self.ptr(xround);
         }
         let wp = match &w.quant {
