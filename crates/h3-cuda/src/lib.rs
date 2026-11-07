@@ -46,6 +46,11 @@ pub struct CuVsa {
     pooled_out: CuBuf,
     sel: CuBuf,
     nsel: CuBuf,
+    /// Paired-tile unions (`fw_vsa_pair`): `[heads][npairs][ustride]`, counts.
+    usel: CuBuf,
+    nusel: CuBuf,
+    npairs: usize,
+    ustride: usize,
     nb: usize,
     np: usize,
     nreg: usize,
@@ -103,6 +108,11 @@ pub struct Cuda {
     /// on 64-token tiles (2 warps per block), equal on 128-token tiles, so v1
     /// stays the VSA default.
     vsa_v2: bool,
+    /// `H3_CUDA_VSA_NOPAIR=1`: one 64-token query tile per block for the VSA
+    /// fine stage instead of two tiles sharing the union of their selections.
+    vsa_nopair: bool,
+    /// `H3_CUDA_VSA_COARSE1=1`: the one-query-tile coarse kernel.
+    vsa_coarse1: bool,
     prof: Option<std::sync::Mutex<std::collections::HashMap<String, (f64, usize)>>>,
 }
 
@@ -143,6 +153,10 @@ struct Kernels {
     vsa_fine: CudaFunction,
     vsa_fine_mma64: CudaFunction,
     vsa_fine_mma128: CudaFunction,
+    vsa_fine_pair_mma64: CudaFunction,
+    vsa_fine_pair_mma128: CudaFunction,
+    vsa_pair: CudaFunction,
+    vsa_coarse4: CudaFunction,
     dequant_q8: CudaFunction,
     dequant_q4: CudaFunction,
     dequant_nvfp4: CudaFunction,
@@ -323,6 +337,10 @@ impl Cuda {
             vsa_fine: get("fw_vsa_fine")?,
             vsa_fine_mma64: get("fw_vsa_fine_mma64")?,
             vsa_fine_mma128: get("fw_vsa_fine_mma128")?,
+            vsa_fine_pair_mma64: get("fw_vsa_fine_pair_mma64")?,
+            vsa_fine_pair_mma128: get("fw_vsa_fine_pair_mma128")?,
+            vsa_pair: get("fw_vsa_pair")?,
+            vsa_coarse4: get("fw_vsa_coarse4")?,
             dequant_q8: get("fw_dequant_q8")?,
             dequant_q4: get("fw_dequant_q4")?,
             dequant_nvfp4: get("fw_dequant_nvfp4")?,
@@ -349,6 +367,8 @@ impl Cuda {
             scalar_attn: env1("H3_CUDA_SCALAR_ATTN"),
             attn_v1: env1("H3_CUDA_ATTN_V1"),
             vsa_v2: env1("H3_CUDA_VSA_V2"),
+            vsa_nopair: env1("H3_CUDA_VSA_NOPAIR"),
+            vsa_coarse1: env1("H3_CUDA_VSA_COARSE1"),
             prof: env1("H3_PROFILE").then(Default::default),
         })
     }
@@ -403,7 +423,7 @@ impl Cuda {
 
     fn kernel_name(&self, f: &CudaFunction) -> &'static str {
         let k = &self.f;
-        let all: [(&CudaFunction, &'static str); 43] = [
+        let all: [(&CudaFunction, &'static str); 47] = [
             (&k.bias_act, "bias_act"),
             (&k.swiglu, "swiglu"),
             (&k.gate_residual, "gate_residual"),
@@ -440,6 +460,10 @@ impl Cuda {
             (&k.vsa_fine, "vsa fine (scalar)"),
             (&k.vsa_fine_mma64, "vsa fine (mma, d64)"),
             (&k.vsa_fine_mma128, "vsa fine (mma, d128)"),
+            (&k.vsa_fine_pair_mma64, "vsa fine (paired tiles, d64)"),
+            (&k.vsa_fine_pair_mma128, "vsa fine (paired tiles, d128)"),
+            (&k.vsa_pair, "vsa pair union"),
+            (&k.vsa_coarse4, "vsa coarse + top-k (4 query tiles)"),
             (&k.dequant_q8, "dequant int8"),
             (&k.dequant_q4, "dequant int4"),
             (&k.dequant_nvfp4, "dequant nvfp4"),
@@ -1039,6 +1063,10 @@ impl Backend for Cuda {
             pooled_out: self.words(&vec![0; h * nb * d]),
             sel: self.words(&vec![0; h * nb * maxsel]),
             nsel: self.words(&vec![0; h * nb]),
+            usel: self.words(&vec![0; h * nb.div_ceil(2) * nb.max(2 * maxsel)]),
+            nusel: self.words(&vec![0; h * nb.div_ceil(2)]),
+            npairs: nb.div_ceil(2),
+            ustride: nb.max(2 * maxsel),
             nb,
             np: plan.num_prefix_tiles,
             nreg: plan.regions.len(),
@@ -1077,9 +1105,12 @@ impl Backend for Cuda {
                 Arg::I(s.te as i32),
             ],
         );
+        // Four query tiles per block share the pooled K̄ / V̄ reads (nb ≤ 2048;
+        // `H3_CUDA_VSA_COARSE1=1` keeps one per block).
+        let coarse4 = s.nb <= 2048 && !self.vsa_coarse1;
         self.launch(
-            &self.f.vsa_coarse,
-            grid,
+            if coarse4 { &self.f.vsa_coarse4 } else { &self.f.vsa_coarse },
+            if coarse4 { (s.nb.div_ceil(4) as u32, s.heads as u32, 1) } else { grid },
             (256, 1, 1),
             &[
                 Arg::P(self.ptr(&s.pooled)),
@@ -1121,6 +1152,37 @@ impl Backend for Cuda {
             Arg::I(s.heads as i32),
             Arg::I(s.seq as i32),
         ];
+        // Paired tiles (64-token tiles, d 64 / 128): two query tiles per
+        // 256-thread block over the union of their selections.
+        let pair = match s.d {
+            128 => Some(&self.f.vsa_fine_pair_mma128),
+            64 => Some(&self.f.vsa_fine_pair_mma64),
+            _ => None,
+        };
+        if let (Some(f), true, false, false, true) = (pair, self.ampere, self.scalar_attn, self.vsa_nopair, s.te == 64) {
+            self.launch(
+                &self.f.vsa_pair,
+                (s.npairs as u32, s.heads as u32, 1),
+                (32, 1, 1),
+                &[
+                    Arg::P(self.ptr(&s.sel)),
+                    Arg::P(self.ptr(&s.nsel)),
+                    Arg::P(self.ptr(&s.usel)),
+                    Arg::P(self.ptr(&s.nusel)),
+                    Arg::I(s.nb as i32),
+                    Arg::I(s.np as i32),
+                    Arg::I(s.dense_all as i32),
+                    Arg::I(s.maxsel as i32),
+                    Arg::I(s.ustride as i32),
+                    Arg::I(s.npairs as i32),
+                ],
+            );
+            args.push(Arg::F(s.scale));
+            tail(&mut args);
+            args.extend([Arg::P(self.ptr(&s.usel)), Arg::P(self.ptr(&s.nusel)), Arg::I(s.npairs as i32), Arg::I(s.ustride as i32)]);
+            self.launch(f, (s.npairs as u32, s.heads as u32, 1), (256, 1, 1), &args);
+            return;
+        }
         // v1: 64 query rows per block (te/64 blocks per tile), 128 threads.
         // v2: 64 rows (2 warps) for 64-token tiles, 128 rows (4 warps) and
         // te/128 blocks per tile otherwise.

@@ -501,8 +501,15 @@ fn ops<B: Backend>(p: &mut Pair<'_, B>, rng: &mut Rng) {
         p.op(format!("attention h{heads} kv{kv} {sq}x{sk} d{d} causal={causal}"), |r| r.attention(&q, &k, &v, heads, kv, sq, sk, d, causal));
     }
     // VSA: a dense prefix, two regions (one sparse, one dense), partial tiles, with and without gate.
-    for &(tile, d) in &[(64usize, 32usize), (128, 64)] {
-        let segs = [Segment::Dense(70), Segment::Video { grid: (3, 5, 9), sparsity: 0.6 }, Segment::Dense(5), Segment::Video { grid: (2, 4, 4), sparsity: 0.0 }];
+    for &(tile, d, odd) in &[(64usize, 32usize, false), (128, 64, false), (64, 128, true)] {
+        // `odd`: the H3 shape (64-token tiles, 128-wide heads) with an odd
+        // number of tiles and a single prefix tile, so the paired-tile fine
+        // stage sees a prefix + video pair and a partnerless last tile.
+        let segs = if odd {
+            [Segment::Dense(40), Segment::Video { grid: (5, 6, 9), sparsity: 0.7 }, Segment::Dense(3), Segment::Video { grid: (3, 4, 4), sparsity: 0.5 }]
+        } else {
+            [Segment::Dense(70), Segment::Video { grid: (3, 5, 9), sparsity: 0.6 }, Segment::Dense(5), Segment::Video { grid: (2, 4, 4), sparsity: 0.0 }]
+        };
         let spec = VsaSpec::new(&segs, tile, 2, d);
         let n = spec.plan.seq * 2 * d;
         let (q, k, v, g) = (rng.normal(n), rng.normal(n), rng.normal(n), rng.normal(n));

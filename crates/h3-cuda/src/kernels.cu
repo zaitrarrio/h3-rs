@@ -603,32 +603,43 @@ __device__ __forceinline__ void cp_async_wait1() { asm volatile("cp.async.wait_g
 // Mode 1: query rows from slot[qt·te + qsub·64 + r]; key chunk c is 64 keys
 // of selected tile sel[h][qt][c / sub] (sub = te / 64 chunks per tile); the
 // epilogue adds pooled[h][qt] · gate (when has_gate).
-template <int D>
+// Mode 2 (paired tiles, WARPS = 8): block p covers query tiles 2p and 2p+1
+// (64 tokens each, warps 0-3 and 4-7) over the union of their selections
+// (usel[h][p], entry = tile | flags << 30, flags bit b = tile 2p+b selected
+// it); a warp whose tile did not select the key tile skips that chunk's
+// mma work but still takes part in the loads and barriers, so every K / V
+// row is gathered once for two tiles instead of once per tile.
+template <int D, int WARPS>
 __device__ __forceinline__ void attn_mma_body(int mode, const bf16_t* q, const bf16_t* k, const bf16_t* v, bf16_t* out,
         int heads, int kv_heads, int sq, int sk, int causal, float scale,
         const unsigned* slot, const unsigned* sel, const unsigned* nsel, const float* pooled, const bf16_t* gate,
         int has_gate, int nb, int np, int dense_all, int te, int maxsel,
+        const unsigned* usel, const unsigned* nusel, int npairs, int ustride,
         bf16_t* ks, bf16_t* vs, unsigned char* kvalid) {
     constexpr int KS_STRIDE = D + 8;
     constexpr int KK = D / 16;   // k-steps of Q·Kᵀ
     constexpr int DT = D / 8;    // 8-wide dim tiles of the output
     constexpr int CH = D / 8;    // 16-byte chunks per key row
-    constexpr int RP = 128 / CH; // key rows loaded per pass
+    constexpr int NTHR = 32 * WARPS;
+    constexpr int RP = NTHR / CH; // key rows loaded per pass
     const int h = blockIdx.y, tid = threadIdx.x, warp = tid >> 5, lane = tid & 31;
     const int g = lane >> 2, t = lane & 3;
     const int sub = mode == 0 ? 1 : te / 64;
-    const int qt = mode == 0 ? blockIdx.x : blockIdx.x / sub;
-    const int qsub = mode == 0 ? 0 : blockIdx.x % sub;
+    const int half = mode == 2 ? (warp * 16) / te : 0;
+    const int qt = mode == 0 ? blockIdx.x : (mode == 2 ? 2 * blockIdx.x + half : blockIdx.x / sub);
+    const int qsub = mode == 1 ? blockIdx.x % sub : 0;
     const int kh = mode == 0 ? h / (heads / kv_heads) : h;
-    const int lr0 = warp * 16 + g, lr1 = lr0 + 8;
+    const int lr0 = (mode == 2 ? (warp * 16) % te : warp * 16) + g, lr1 = lr0 + 8;
     int tok0, tok1;
     if (mode == 0) {
         tok0 = qt * 64 + lr0 < sq ? qt * 64 + lr0 : -1;
         tok1 = qt * 64 + lr1 < sq ? qt * 64 + lr1 : -1;
-    } else {
+    } else if (qt < nb) {
         const unsigned a = slot[(long)qt * te + qsub * 64 + lr0], b = slot[(long)qt * te + qsub * 64 + lr1];
         tok0 = a == 0xffffffffu ? -1 : (int)a;
         tok1 = b == 0xffffffffu ? -1 : (int)b;
+    } else {
+        tok0 = tok1 = -1;   // the odd tile at the end has no partner
     }
     const float sl2 = scale * 1.4426950408889634f;
 
@@ -657,16 +668,21 @@ __device__ __forceinline__ void attn_mma_body(int mode, const bf16_t* q, const b
             nchunks = min(nchunks, maxkey / MMA_BK + 1);
             if (maxkey < 0) nchunks = 0;
         }
+    } else if (mode == 2) {
+        nchunks = (int)nusel[(long)h * npairs + blockIdx.x] * sub;
     } else {
         nchunks = (int)nsel[(long)h * nb + qt] * sub;
     }
     const bool all_tiles = mode == 1 && (qt < np || dense_all);
+    const unsigned* urow = mode == 2 ? usel + ((long)h * npairs + blockIdx.x) * ustride : 0;
     const bf16_t* kbase = k + (long)kh * sk * D;
     const bf16_t* vbase = v + (long)kh * sk * D;
     const int ch = tid % CH, krow = tid / CH;
     auto key_tok = [&](int c, int key) -> int {
         if (mode == 0) return c * MMA_BK + key < sk ? c * MMA_BK + key : -1;
-        const unsigned tile = all_tiles ? (unsigned)(c / sub) : sel[((long)h * nb + qt) * maxsel + c / sub];
+        unsigned tile;
+        if (mode == 2) tile = urow[c / sub] & 0x3fffffffu;
+        else tile = all_tiles ? (unsigned)(c / sub) : sel[((long)h * nb + qt) * maxsel + c / sub];
         const unsigned s2 = slot[(long)tile * te + (c % sub) * 64 + key];
         return s2 == 0xffffffffu ? -1 : (int)s2;
     };
@@ -687,9 +703,13 @@ __device__ __forceinline__ void attn_mma_body(int mode, const bf16_t* q, const b
 
     for (int c = 0; c < nchunks; ++c) {
         const unsigned char* kv = kvalid + (c & 1) * MMA_BK;
+        // Paired mode: does this warp's tile select the key tile of chunk c?
+        const bool mine = mode != 2 || (((urow[c / sub] >> 30) >> half) & 1u);
         cp_async_wait1();          // K_c landed (V_c may still be in flight)
         __syncthreads();
         float s[8][4];
+        float mx0 = m0, mx1 = m1;
+        if (mine) {
         #pragma unroll
         for (int nt = 0; nt < 8; ++nt) {
             s[nt][0] = s[nt][1] = s[nt][2] = s[nt][3] = 0.0f;
@@ -701,7 +721,6 @@ __device__ __forceinline__ void attn_mma_body(int mode, const bf16_t* q, const b
                 mma_bf16(s[nt], qa[kk][0], qa[kk][1], qa[kk][2], qa[kk][3], b0, b1);
             }
         }
-        float mx0 = m0, mx1 = m1;
         #pragma unroll
         for (int nt = 0; nt < 8; ++nt) {
             #pragma unroll
@@ -719,9 +738,11 @@ __device__ __forceinline__ void attn_mma_body(int mode, const bf16_t* q, const b
                 mx1 = fmaxf(mx1, s[nt][2 + cc]);
             }
         }
+        }
         __syncthreads();           // every warp is done with ks
         if (c + 1 < nchunks) load(ks, kbase, c + 1, kvalid + ((c + 1) & 1) * MMA_BK);
         cp_async_commit();
+        if (mine) {
         #pragma unroll
         for (int off = 1; off < 4; off <<= 1) {
             mx0 = fmaxf(mx0, __shfl_xor_sync(0xffffffffu, mx0, off));
@@ -732,8 +753,10 @@ __device__ __forceinline__ void attn_mma_body(int mode, const bf16_t* q, const b
         l0 *= c0; l1 *= c1;
         #pragma unroll
         for (int i = 0; i < DT; ++i) { o[i][0] *= c0; o[i][1] *= c0; o[i][2] *= c1; o[i][3] *= c1; }
+        }
         cp_async_wait1();          // V_c landed (K_{c+1} may still be in flight)
         __syncthreads();
+        if (mine) {
         #pragma unroll
         for (int kk = 0; kk < 4; ++kk) {
             float p[8];
@@ -757,6 +780,7 @@ __device__ __forceinline__ void attn_mma_body(int mode, const bf16_t* q, const b
                 mma_bf16(o[dt + 1], a0, a1, a2, a3, b2, b3);
             }
         }
+        }
         __syncthreads();           // every warp is done with vs
         if (c + 1 < nchunks) load(vs, vbase, c + 1, 0);
         cp_async_commit();
@@ -771,7 +795,7 @@ __device__ __forceinline__ void attn_mma_body(int mode, const bf16_t* q, const b
     for (int dt = 0; dt < DT; ++dt) {
         const int c = dt * 8 + t * 2;
         float a0 = o[dt][0] * i0, a1 = o[dt][1] * i0, b0 = o[dt][2] * i1, b1 = o[dt][3] * i1;
-        if (mode == 1 && has_gate) {
+        if (mode != 0 && has_gate) {
             const float* cr = pooled + ((long)h * nb + qt) * D + c;
             if (tok0 >= 0) { const bf16_t* gr = gate + ((long)h * sq + tok0) * D + c; a0 += cr[0] * ld(gr, 0); a1 += cr[1] * ld(gr, 1); }
             if (tok1 >= 0) { const bf16_t* gr = gate + ((long)h * sq + tok1) * D + c; b0 += cr[0] * ld(gr, 0); b1 += cr[1] * ld(gr, 1); }
@@ -787,8 +811,8 @@ extern "C" __global__ void __launch_bounds__(128) fw_attention_mma##D(u64 q_, u6
     __shared__ __align__(16) bf16_t ks[MMA_BK * (D + 8)];                                                            \
     __shared__ __align__(16) bf16_t vs[MMA_BK * (D + 8)];                                                            \
     __shared__ unsigned char kvalid[2 * MMA_BK];                                                                     \
-    attn_mma_body<D>(0, (const bf16_t*)q_, (const bf16_t*)k_, (const bf16_t*)v_, (bf16_t*)out_, heads, kv_heads,    \
-                     sq, sk, causal, scale, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, ks, vs, kvalid);                        \
+    attn_mma_body<D, 4>(0, (const bf16_t*)q_, (const bf16_t*)k_, (const bf16_t*)v_, (bf16_t*)out_, heads, kv_heads, \
+                     sq, sk, causal, scale, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, ks, vs, kvalid);            \
 }                                                                                                                    \
 extern "C" __global__ void __launch_bounds__(128) fw_vsa_fine_mma##D(u64 q_, u64 k_, u64 v_, u64 out_, int heads,   \
         int seq, float scale, u64 slot_, u64 sel_, u64 nsel_, u64 pooled_, u64 gate_, int has_gate, int nb, int np,  \
@@ -796,13 +820,52 @@ extern "C" __global__ void __launch_bounds__(128) fw_vsa_fine_mma##D(u64 q_, u64
     __shared__ __align__(16) bf16_t ks[MMA_BK * (D + 8)];                                                            \
     __shared__ __align__(16) bf16_t vs[MMA_BK * (D + 8)];                                                            \
     __shared__ unsigned char kvalid[2 * MMA_BK];                                                                     \
-    attn_mma_body<D>(1, (const bf16_t*)q_, (const bf16_t*)k_, (const bf16_t*)v_, (bf16_t*)out_, heads, heads,       \
+    attn_mma_body<D, 4>(1, (const bf16_t*)q_, (const bf16_t*)k_, (const bf16_t*)v_, (bf16_t*)out_, heads, heads,    \
                      seq, seq, 0, scale, (const unsigned*)slot_, (const unsigned*)sel_, (const unsigned*)nsel_,      \
-                     (const float*)pooled_, (const bf16_t*)gate_, has_gate, nb, np, dense_all, te, maxsel, ks, vs,   \
-                     kvalid);                                                                                        \
+                     (const float*)pooled_, (const bf16_t*)gate_, has_gate, nb, np, dense_all, te, maxsel,           \
+                     0, 0, 0, 0, ks, vs, kvalid);                                                                    \
+}                                                                                                                    \
+extern "C" __global__ void __launch_bounds__(256) fw_vsa_fine_pair_mma##D(u64 q_, u64 k_, u64 v_, u64 out_,         \
+        int heads, int seq, float scale, u64 slot_, u64 sel_, u64 nsel_, u64 pooled_, u64 gate_, int has_gate,       \
+        int nb, int np, int dense_all, int te, int maxsel, u64 usel_, u64 nusel_, int npairs, int ustride) {         \
+    __shared__ __align__(16) bf16_t ks[MMA_BK * (D + 8)];                                                            \
+    __shared__ __align__(16) bf16_t vs[MMA_BK * (D + 8)];                                                            \
+    __shared__ unsigned char kvalid[2 * MMA_BK];                                                                     \
+    attn_mma_body<D, 8>(2, (const bf16_t*)q_, (const bf16_t*)k_, (const bf16_t*)v_, (bf16_t*)out_, heads, heads,    \
+                     seq, seq, 0, scale, (const unsigned*)slot_, (const unsigned*)sel_, (const unsigned*)nsel_,      \
+                     (const float*)pooled_, (const bf16_t*)gate_, has_gate, nb, np, dense_all, te, maxsel,           \
+                     (const unsigned*)usel_, (const unsigned*)nusel_, npairs, ustride, ks, vs, kvalid);              \
 }
 ATTN_MMA_KERNELS(64)
 ATTN_MMA_KERNELS(128)
+
+// The union of two consecutive query tiles' selections (sorted, deduplicated),
+// entry = tile | flags << 30. One warp per (pair, head); lane 0 merges (the
+// lists are ≤ maxsel long, a few hundred steps). Prefix / dense queries
+// attend to every tile: their list is the range 0..nb.
+extern "C" __global__ void fw_vsa_pair(u64 sel_, u64 nsel_, u64 usel_, u64 nusel_, int nb, int np, int dense_all,
+                                       int maxsel, int ustride, int npairs) {
+    const unsigned *sel = (const unsigned*)sel_, *nsel = (const unsigned*)nsel_;
+    unsigned *usel = (unsigned*)usel_, *nusel = (unsigned*)nusel_;
+    const int p = blockIdx.x, h = blockIdx.y;
+    if (threadIdx.x != 0) return;
+    const int qa = 2 * p, qb = qa + 1;
+    const bool alla = qa < np || dense_all, allb = qb < nb && (qb < np || dense_all);
+    const unsigned na = alla ? (unsigned)nb : nsel[(long)h * nb + qa];
+    const unsigned nbv = qb >= nb ? 0u : (allb ? (unsigned)nb : nsel[(long)h * nb + qb]);
+    const unsigned* la = sel + ((long)h * nb + qa) * maxsel;
+    const unsigned* lb = sel + ((long)h * nb + (qb < nb ? qb : qa)) * maxsel;
+    unsigned* o = usel + ((long)h * npairs + p) * ustride;
+    unsigned i = 0, j = 0, n = 0;
+    while (i < na || j < nbv) {
+        const unsigned ta = i < na ? (alla ? i : la[i]) : 0xffffffffu;
+        const unsigned tb = j < nbv ? (allb ? j : lb[j]) : 0xffffffffu;
+        if (ta < tb) { o[n++] = ta | (1u << 30); ++i; }
+        else if (tb < ta) { o[n++] = tb | (2u << 30); ++j; }
+        else { o[n++] = ta | (3u << 30); ++i; ++j; }
+    }
+    nusel[(long)h * npairs + p] = n;
+}
 
 // Second-generation body (v2): 32 query rows per warp (two m16 tiles), so
 // every K / V fragment read from shared memory feeds two mma instructions
@@ -1252,6 +1315,132 @@ extern "C" __global__ void __launch_bounds__(256) fw_vsa_coarse(u64 pooled_, u64
     }
     __syncthreads();
     if (!half && c < d) pooled_out[qb + c] = (acc + part[c]) / zt;
+}
+
+// Four consecutive query tiles per block (nb <= 2048): the pooled K̄ rows are
+// read once for four score rows and the pooled V̄ rows once for four gate
+// branches, which is what the one-tile kernel above spends its time on
+// (every block streams 2·nb·d floats from L2). Selection and compaction
+// run per query tile as above.
+#define VSA4_MAX_TILES 2048
+extern "C" __global__ void __launch_bounds__(256) fw_vsa_coarse4(u64 pooled_, u64 pooled_out_, u64 sel_, u64 nsel_, u64 reg_,
+        int heads, int d, int nb, int np, int nreg, int dense_all, int maxsel, int has_gate, float scale) {
+    __shared__ float sc[4][VSA4_MAX_TILES];
+    __shared__ unsigned char keep[VSA4_MAX_TILES];
+    __shared__ float qrow[4][128];
+    __shared__ float part[4][128];
+    __shared__ unsigned hist[256];
+    __shared__ unsigned wsum[8];
+    __shared__ float red[9];
+    __shared__ unsigned sh_prefix, sh_need;
+    const float* pooled = (const float*)pooled_;
+    float* pooled_out = (float*)pooled_out_;
+    unsigned* sel = (unsigned*)sel_;
+    unsigned* nsel = (unsigned*)nsel_;
+    const unsigned* reg = (const unsigned*)reg_;
+    const int q0 = blockIdx.x * 4, h = blockIdx.y, tid = threadIdx.x, lane = tid & 31, warp = tid >> 5;
+    const int nq = min(4, nb - q0);
+    const long plane = (long)heads * nb * d;
+    for (int qq = 0; qq < 4; ++qq)
+        if (tid < d) qrow[qq][tid] = qq < nq ? pooled[((long)h * nb + q0 + qq) * d + tid] : 0.0f;
+    __syncthreads();
+
+    // 1. scores: one warp per key tile, four query rows at once.
+    const int d4 = d >> 2;
+    for (int kt = warp; kt < nb; kt += 8) {
+        const float4* kr = (const float4*)(pooled + plane + ((long)h * nb + kt) * d);
+        float dot0 = 0.f, dot1 = 0.f, dot2 = 0.f, dot3 = 0.f;
+        for (int c = lane; c < d4; c += 32) {
+            const float4 kv = kr[c];
+            dot0 += qrow[0][4 * c] * kv.x + qrow[0][4 * c + 1] * kv.y + qrow[0][4 * c + 2] * kv.z + qrow[0][4 * c + 3] * kv.w;
+            dot1 += qrow[1][4 * c] * kv.x + qrow[1][4 * c + 1] * kv.y + qrow[1][4 * c + 2] * kv.z + qrow[1][4 * c + 3] * kv.w;
+            dot2 += qrow[2][4 * c] * kv.x + qrow[2][4 * c + 1] * kv.y + qrow[2][4 * c + 2] * kv.z + qrow[2][4 * c + 3] * kv.w;
+            dot3 += qrow[3][4 * c] * kv.x + qrow[3][4 * c + 1] * kv.y + qrow[3][4 * c + 2] * kv.z + qrow[3][4 * c + 3] * kv.w;
+        }
+        for (int o = 16; o > 0; o >>= 1) {
+            dot0 += __shfl_xor_sync(0xffffffffu, dot0, o);
+            dot1 += __shfl_xor_sync(0xffffffffu, dot1, o);
+            dot2 += __shfl_xor_sync(0xffffffffu, dot2, o);
+            dot3 += __shfl_xor_sync(0xffffffffu, dot3, o);
+        }
+        if (lane == 0) { sc[0][kt] = dot0 * scale; sc[1][kt] = dot1 * scale; sc[2][kt] = dot2 * scale; sc[3][kt] = dot3 * scale; }
+    }
+    __syncthreads();
+
+    // 2 + 3. per query tile: marks, then stable compaction into sel.
+    for (int qq = 0; qq < nq; ++qq) {
+        const int qt = q0 + qq;
+        const bool all = qt < np || dense_all;
+        if (all) {
+            for (int kt = tid; kt < nb; kt += 256) keep[kt] = 1;
+            __syncthreads();
+        } else {
+            for (int kt = tid; kt < nb; kt += 256) keep[kt] = kt < np ? 1 : 0;
+            __syncthreads();
+            for (int r = 0; r < nreg; ++r) {
+                const int lo = (int)reg[3 * r], hi = (int)reg[3 * r + 1];
+                const unsigned need = reg[3 * r + 2];
+                if (need >= (unsigned)(hi - lo)) {
+                    for (int kt = lo + tid; kt < hi; kt += 256) keep[kt] = 1;
+                    __syncthreads();
+                } else {
+                    vsa_mark_topk(sc[qq], keep, lo, hi, need, hist, wsum, &sh_prefix, &sh_need);
+                }
+            }
+        }
+        unsigned* o = sel + ((long)h * nb + qt) * maxsel;
+        const unsigned lt = (1u << lane) - 1u;
+        unsigned base_sel = all ? (unsigned)nb : 0u;
+        for (int c0 = all ? nb : 0; c0 < nb; c0 += 256) {
+            const int kt = c0 + tid;
+            const bool take = kt < nb && keep[kt];
+            const unsigned b = __ballot_sync(0xffffffffu, take);
+            if (lane == 0) wsum[warp] = __popc(b);
+            __syncthreads();
+            unsigned woff = 0u, tot = 0u;
+            for (int w = 0; w < 8; ++w) { if (w < warp) woff += wsum[w]; tot += wsum[w]; }
+            if (take) o[base_sel + woff + __popc(b & lt)] = (unsigned)kt;
+            base_sel += tot;
+            __syncthreads();
+        }
+        if (tid == 0) nsel[(long)h * nb + qt] = base_sel;
+        __syncthreads();
+    }
+
+    // 4. pooled branch for the four rows, V̄ read once.
+    if (!has_gate) return;
+    float zt[4];
+    for (int qq = 0; qq < 4; ++qq) {
+        float mx = -3.0e38f;
+        for (int kt = tid; kt < nb; kt += 256) mx = fmaxf(mx, sc[qq][kt]);
+        for (int s2 = 16; s2 > 0; s2 >>= 1) mx = fmaxf(mx, __shfl_xor_sync(0xffffffffu, mx, s2));
+        if (lane == 0) red[warp] = mx;
+        __syncthreads();
+        float m = red[0];
+        for (int i = 1; i < 8; ++i) m = fmaxf(m, red[i]);
+        __syncthreads();
+        float z = 0.f;
+        for (int kt = tid; kt < nb; kt += 256) { const float e = __expf(sc[qq][kt] - m); sc[qq][kt] = e; z += e; }
+        zt[qq] = block_sum256(z, red);   // syncs, so sc[qq][] holds the weights
+    }
+    const int c = tid & 127, hf = tid >> 7, mid = (nb + 1) >> 1;
+    float a0 = 0.f, a1 = 0.f, a2 = 0.f, a3 = 0.f;
+    if (c < d) {
+        const float* vp = pooled + 2 * plane + (long)h * nb * d + c;
+        for (int kt = hf ? mid : 0; kt < (hf ? nb : mid); ++kt) {
+            const float vv = vp[(long)kt * d];
+            a0 = fmaf(sc[0][kt], vv, a0); a1 = fmaf(sc[1][kt], vv, a1); a2 = fmaf(sc[2][kt], vv, a2); a3 = fmaf(sc[3][kt], vv, a3);
+        }
+        if (hf) { part[0][c] = a0; part[1][c] = a1; part[2][c] = a2; part[3][c] = a3; }
+    }
+    __syncthreads();
+    if (!hf && c < d) {
+        float* ob = pooled_out + ((long)h * nb + q0) * d + c;
+        if (nq > 0) ob[0] = (a0 + part[0][c]) / zt[0];
+        if (nq > 1) ob[d] = (a1 + part[1][c]) / zt[1];
+        if (nq > 2) ob[2 * d] = (a2 + part[2][c]) / zt[2];
+        if (nq > 3) ob[3 * d] = (a3 + part[3][c]) / zt[3];
+    }
 }
 
 // Scalar VSA fine stage (any d <= 128, any SM, any tile size): 64 threads
