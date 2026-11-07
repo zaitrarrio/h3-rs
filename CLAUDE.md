@@ -13,11 +13,13 @@ State and invariants only; the reasoning is in `docs/design.md`.
   the row-chunked GEMM / head_split paths; CUDA kernels are NVRTC-compiled
   in `cargo test -p h3-cuda`. Neither has run on AMD / Apple.
 - No speed claim without a measurement on named hardware (card, driver,
-  power limit) recorded under `docs/runs/`. 1344×768×124, VSA 0.8: RTX A6000
-  470 ms/block CUDA (25.1 s per real forward at int8; FastH3-V2 clip: denoise
-  201 s, decode 44 s), 7.6 s/block WebGPU; L40S 230 ms/block (Trim NVFP4
-  clip at 254 ms/block kernels: 11.9 s per forward, denoise 95 s, decode
-  22 s). `H3_PROFILE=1`.
+  power limit) recorded under `docs/runs/`. 1344×768×124, VSA 0.8, per
+  block / per real FastH3-V2 forward: RTX A6000 470 ms / 25.1 s (int8), L40S
+  230 ms / 11.9 s, RTX PRO 6000 Max-Q (300 W, sm_120) 185 ms / 9.6–10.1 s
+  (bf16 and int8 alike; Trim NVFP4 8.2–8.6 s; decode 20 s of which half is
+  host-side). WebGPU 7.6 s/block on the A6000. `H3_PROFILE=1` prints a
+  kernel table per stage of `generate`
+  (`docs/runs/2026-11-07-vast-pro6000-clips`).
 - CUDA attention kernels (all 97/97 on an L40S): dense attention runs v2
   (`attn_mma2_body`, 32 rows per warp, 128-row blocks; `H3_CUDA_ATTN_V1=1`
   for v1). The VSA fine stage runs `vsa_fine3_body` variant d (16 rows per

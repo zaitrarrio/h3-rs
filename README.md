@@ -32,13 +32,13 @@ Measured on a vast.ai **RTX A6000** (48 GB, 300 W, driver 570.195.03),
 1344×768×124 (5.2 s), VSA 0.8, int8 weights, precomputed AdaLN tables
 (`docs/runs/2026-11-06-vast-a6000-first-gpu`):
 
-| | FastH3-8-Step-V2 | FastH3-Trim-8-Step (bf16 tree, int8) | FastH3-Trim, ComfyUI NVFP4 file, **L40S** |
-|---|---|---|---|
-| denoise, 8 forwards | 201 s (25.1 s / forward) | 162 s (20.3 s / forward) | 95 s (11.9 s / forward) |
-| decode | 44 s | 36 s | 22 s |
-| prompt (Qwen3-VL, streamed from disk) | 290 s cold / 159 s warm | | 128 s |
-| load | 280 s (int8 quantization at load) | 241 s | 49 s (4-bit upload) |
-| peak device memory | | | 24.3 GB |
+| | FastH3-V2, A6000, int8 | FastH3-V2, **RTX PRO 6000 Max-Q**, bf16 | FastH3-Trim NVFP4 (ComfyUI file), PRO 6000 | FastH3 4-step V1, PRO 6000, int8 |
+|---|---|---|---|---|
+| denoise | 201 s (25.1 s / forward) | 79.5 s (9.6–10.1 s / forward) | 67.8 s (8.2–8.6 s) | 35.0 s (4 forwards) |
+| decode | 44 s | 20.5 s | 17.4 s | 20.4 s |
+| peak device memory | | 56.2 GB | 24.4 GB | 37.0 GB |
+
+(`docs/runs/2026-11-07-vast-pro6000-clips`; the Max-Q is the 300 W card.)
 
 Per block at that geometry: 470 ms VSA / 815 ms dense on the A6000, 230 /
 354 ms on the L40S. The VSA phases on the L40S after the kernel work in

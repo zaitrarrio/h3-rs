@@ -90,8 +90,10 @@ time); when the tables do not fit, they are uploaded per step.
    configuration, `pool` fused into `head_split`.
 2. `h3 quantize` the trees once (load was 280 s with int8 quantization at
    load) and the prompt gallery for demos (290 s cold prompt encode).
-3. Decode: 44 s for 124 frames on the ViT decoder is host-bound per chunk
-   (as fastwan's was); overlap chunk decode with the download / conversion.
+3. Decode: 20.5 s for 124 frames on the PRO 6000, of which 10.3 s is GPU
+   work: convert to RGB on the device and overlap the download with the
+   next chunk. Audio: fuse the 36k tiny copies around the BigVGAN
+   activations.
 4. A Blackwell FP4 tensor-core GEMM for the NVFP4 linears (now 4-bit
    resident, expanded to bf16 per GEMM); NVFP4 kept 4-bit on WebGPU too.
 5. Generate the parity fixtures; fix what they find.
