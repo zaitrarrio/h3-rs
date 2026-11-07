@@ -617,6 +617,14 @@ __device__ __forceinline__ unsigned pack_bf16(float lo, float hi) {
     asm("cvt.rn.bf16x2.f32 %0, %1, %2;" : "=r"(r) : "f"(hi), "f"(lo));   // hi lands in the upper half
     return r;
 }
+// B fragments of Q·Kᵀ for one 8-key n-tile and two 16-dim k-steps in one
+// ldmatrix.x4 (lanes 0-7 address keys at dims kk·16, 8-15 at +8, 16-23 at
+// +16, 24-31 at +24): b0, b1 of k-step kk and of kk+1.
+__device__ __forceinline__ void ldsm_k4(const bf16_t* krow8, int lane, unsigned& b0, unsigned& b1, unsigned& b2, unsigned& b3) {
+    const unsigned addr = (unsigned)__cvta_generic_to_shared(krow8 + (lane >> 3) * 8);
+    asm volatile("ldmatrix.sync.aligned.m8n8.x4.shared.b16 {%0,%1,%2,%3}, [%4];\n"
+                 : "=r"(b0), "=r"(b1), "=r"(b2), "=r"(b3) : "r"(addr));
+}
 __device__ __forceinline__ void cp_async16(void* smem, const void* gmem, bool valid) {
     const unsigned d = (unsigned)__cvta_generic_to_shared(smem);
     asm volatile("cp.async.cg.shared.global [%0], [%1], 16, %2;\n" :: "r"(d), "l"(gmem), "r"(valid ? 16 : 0));
@@ -755,13 +763,14 @@ __device__ __forceinline__ void attn_mma_body(int mode, const bf16_t* q, const b
         #pragma unroll
         for (int nt = 0; nt < 8; ++nt) {
             s[nt][0] = s[nt][1] = s[nt][2] = s[nt][3] = 0.0f;
-            const bf16_t* kr = ks + (nt * 8 + g) * KS_STRIDE;
+            const bf16_t* kr8 = ks + (nt * 8 + (lane & 7)) * KS_STRIDE;
             if (!(dbg & 2)) {
             #pragma unroll
-            for (int kk = 0; kk < KK; ++kk) {
-                const unsigned b0 = *(const unsigned*)(kr + kk * 16 + t * 2);
-                const unsigned b1 = *(const unsigned*)(kr + kk * 16 + 8 + t * 2);
+            for (int kk = 0; kk < KK; kk += 2) {
+                unsigned b0, b1, b2, b3;
+                ldsm_k4(kr8 + kk * 16, lane, b0, b1, b2, b3);
                 mma_bf16(s[nt], qa[kk][0], qa[kk][1], qa[kk][2], qa[kk][3], b0, b1);
+                mma_bf16(s[nt], qa[kk + 1][0], qa[kk + 1][1], qa[kk + 1][2], qa[kk + 1][3], b2, b3);
             }
             }
         }
@@ -807,11 +816,15 @@ __device__ __forceinline__ void attn_mma_body(int mode, const bf16_t* q, const b
             mx0 = fmaxf(mx0, __shfl_xor_sync(0xffffffffu, mx0, off));
             mx1 = fmaxf(mx1, __shfl_xor_sync(0xffffffffu, mx1, off));
         }
-        const float c0 = exp2f((m0 - mx0) * sl2), c1 = exp2f((m1 - mx1) * sl2);
-        m0 = mx0; m1 = mx1;
-        l0 *= c0; l1 *= c1;
-        #pragma unroll
-        for (int i = 0; i < DT; ++i) { o[i][0] *= c0; o[i][1] *= c0; o[i][2] *= c1; o[i][3] *= c1; }
+        // The running max changes a handful of times per tile: rescale only
+        // when some lane's did (warp-uniform branch, exact otherwise).
+        if (__any_sync(0xffffffffu, mx0 != m0 || mx1 != m1)) {
+            const float c0 = exp2f((m0 - mx0) * sl2), c1 = exp2f((m1 - mx1) * sl2);
+            m0 = mx0; m1 = mx1;
+            l0 *= c0; l1 *= c1;
+            #pragma unroll
+            for (int i = 0; i < DT; ++i) { o[i][0] *= c0; o[i][1] *= c0; o[i][2] *= c1; o[i][3] *= c1; }
+        }
         }
         const float ms0 = -m0 * sl2, ms1 = -m1 * sl2;   // p = exp2(s·sl2 − m·sl2)
         cp_async_wait1();          // V_c landed (K_{c+1} may still be in flight)
@@ -1005,21 +1018,24 @@ __device__ __forceinline__ void vsa_fine3_body(const bf16_t* q, const bf16_t* k,
         #pragma unroll
         for (int nt = 0; nt < NT; ++nt) {
             s[nt][0] = s[nt][1] = s[nt][2] = s[nt][3] = 0.0f;
-            const bf16_t* kr = kcur + (nt * 8 + g) * KS_STRIDE;
+            const bf16_t* kr8 = kcur + (nt * 8 + (lane & 7)) * KS_STRIDE;
             #pragma unroll
-            for (int kk = 0; kk < KK; ++kk) {
-                const unsigned b0 = *(const unsigned*)(kr + kk * 16 + t * 2);
-                const unsigned b1 = *(const unsigned*)(kr + kk * 16 + 8 + t * 2);
-                unsigned a0, a1, a2, a3;
-                if (QREG) { a0 = qa[kk][0]; a1 = qa[kk][1]; a2 = qa[kk][2]; a3 = qa[kk][3]; }
-                else {
-                    const int cc = (kk * 16 + t * 2) >> 1;
-                    a0 = tok0 >= 0 ? __ldg(q0 + cc) : 0u;
-                    a1 = tok1 >= 0 ? __ldg(q1 + cc) : 0u;
-                    a2 = tok0 >= 0 ? __ldg(q0 + cc + 4) : 0u;
-                    a3 = tok1 >= 0 ? __ldg(q1 + cc + 4) : 0u;
+            for (int kk = 0; kk < KK; kk += 2) {
+                unsigned b[4];
+                ldsm_k4(kr8 + kk * 16, lane, b[0], b[1], b[2], b[3]);
+                #pragma unroll
+                for (int u = 0; u < 2; ++u) {
+                    unsigned a0, a1, a2, a3;
+                    if (QREG) { a0 = qa[kk + u][0]; a1 = qa[kk + u][1]; a2 = qa[kk + u][2]; a3 = qa[kk + u][3]; }
+                    else {
+                        const int cc = ((kk + u) * 16 + t * 2) >> 1;
+                        a0 = tok0 >= 0 ? __ldg(q0 + cc) : 0u;
+                        a1 = tok1 >= 0 ? __ldg(q1 + cc) : 0u;
+                        a2 = tok0 >= 0 ? __ldg(q0 + cc + 4) : 0u;
+                        a3 = tok1 >= 0 ? __ldg(q1 + cc + 4) : 0u;
+                    }
+                    mma_bf16(s[nt], a0, a1, a2, a3, b[2 * u], b[2 * u + 1]);
                 }
-                mma_bf16(s[nt], a0, a1, a2, a3, b0, b1);
             }
         }
         float mx0 = m0, mx1 = m1;
@@ -1054,11 +1070,13 @@ __device__ __forceinline__ void vsa_fine3_body(const bf16_t* q, const bf16_t* k,
             mx0 = fmaxf(mx0, __shfl_xor_sync(0xffffffffu, mx0, off));
             mx1 = fmaxf(mx1, __shfl_xor_sync(0xffffffffu, mx1, off));
         }
-        const float c0 = exp2f((m0 - mx0) * sl2), c1 = exp2f((m1 - mx1) * sl2);
-        m0 = mx0; m1 = mx1;
-        l0 *= c0; l1 *= c1;
-        #pragma unroll
-        for (int i = 0; i < DT; ++i) { o[i][0] *= c0; o[i][1] *= c0; o[i][2] *= c1; o[i][3] *= c1; }
+        if (__any_sync(0xffffffffu, mx0 != m0 || mx1 != m1)) {
+            const float c0 = exp2f((m0 - mx0) * sl2), c1 = exp2f((m1 - mx1) * sl2);
+            m0 = mx0; m1 = mx1;
+            l0 *= c0; l1 *= c1;
+            #pragma unroll
+            for (int i = 0; i < DT; ++i) { o[i][0] *= c0; o[i][1] *= c0; o[i][2] *= c1; o[i][3] *= c1; }
+        }
         const float ms0 = -m0 * sl2, ms1 = -m1 * sl2;
         if (DB) {
             // V_c landed (K_{c+1}, V_{c+1} may be in flight).

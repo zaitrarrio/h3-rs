@@ -117,8 +117,10 @@ pub struct Cuda {
     /// `H3_CUDA_VSA_DBG=<bits>`: timing experiments in the fine kernel (see
     /// `attn_mma_body`); the output is wrong, only `bench` should use it.
     vsa_dbg: i32,
-    /// `H3_CUDA_VSA_FINE=a|b|c`: the third fine body's variants (32-key
-    /// chunks; a: Q re-read + 4 blocks/SM, b: double-buffered, c: both).
+    /// `H3_CUDA_VSA_FINE=v1|a|b|c`: the VSA fine body. Default b (32-key
+    /// chunks, K/V double-buffered a chunk ahead, Q resident: 75.8 vs v1's
+    /// 80.9 ms per call on an L40S); a and c re-read Q from L1 per mma and
+    /// are 2.5× slower, kept for the record.
     vsa_fine3: Option<usize>,
     prof: Option<std::sync::Mutex<std::collections::HashMap<String, (f64, usize)>>>,
 }
@@ -384,9 +386,9 @@ impl Cuda {
             vsa_dbg: std::env::var("H3_CUDA_VSA_DBG").ok().and_then(|v| v.parse().ok()).unwrap_or(0),
             vsa_fine3: match std::env::var("H3_CUDA_VSA_FINE").as_deref() {
                 Ok("a") => Some(0),
-                Ok("b") => Some(1),
                 Ok("c") => Some(2),
-                _ => None,
+                Ok("v1") => None,
+                _ => Some(1),
             },
             prof: env1("H3_PROFILE").then(Default::default),
         })
