@@ -27,8 +27,9 @@ State and invariants only; the reasoning is in `docs/design.md`.
   **RTX PRO 6000 Server Edition (600 W, 2.2–2.4 GHz under load, the card
   class fastvideo-rs measures on)**: bf16 126 ms / block, 6.3 s per forward,
   V2 clip denoise 50.6 s, decode 8.9 s, audio 0.19 s; `--weights mxfp8`
-  110 ms / block, denoise **45.0 s** (fastvideo-rs's MXFP8 recipe: 45.8 s),
-  peak 41 GB (`docs/runs/2026-11-07-vast-pro6000-server-mxfp8`).
+  110 ms / block and clip denoise **45.0 s** before the FFN-up split
+  (fastvideo-rs's MXFP8 recipe: 45.8 s), 96.5 ms / block after it (clip not
+  re-measured), peak 41 GB (`docs/runs/2026-11-07-vast-pro6000-server-mxfp8`).
 - MXFP8 (`--weights mxfp8`, `quant::Mxfp8`): W8A8, E4M3 codes with one E8M0
   scale per 32 input columns in cuBLASLt's `VEC32_UE8M0` swizzle
   (`mx_scale_offset`, rows padded to 128, groups to 4), the E4M3 / E8M0
@@ -39,8 +40,11 @@ State and invariants only; the reasoning is in `docs/design.md`.
   emulate exactly, sm_100+ runs cuBLASLt FP8 with the bias (+ tanh-GELU)
   epilogue. The first call on each shape times cuBLASLt's candidates
   (`H3_CUDA_LT_NTH=i` forces one); the `n=28672` FFN-up shape runs at 355
-  TFLOP/s with every candidate (the others at ~750): splitting it along N
-  is the open lever. No stored MXFP8 form yet (`h3 quantize` refuses it).
+  TFLOP/s with every candidate (the others at ~750), so GEMMs with
+  `n ≥ 24576` run as two row-slice GEMMs (`H3_CUDA_MX_SPLIT=p`,
+  `H3_CUDA_MX_SPLIT_MIN=n`): 32.9 → 15.1 ms, the forward 110 → 96.5 ms per
+  block (4.83 s) on the 600 W Server Edition; splitting the QKV shape gains
+  nothing. No stored MXFP8 form yet (`h3 quantize` refuses it).
 - Decode host path: tiles are decoded one ahead of their download, the
   stitch / chunk finish / 8-bit conversion are row-parallel (rayon) and
   tested against the sequential reference; the audio upsampler's crop is

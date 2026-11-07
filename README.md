@@ -48,7 +48,7 @@ On the **RTX PRO 6000 Server Edition (600 W)**, fastvideo-rs's gold GPU
 
 | | h3-rs bf16 | h3-rs `--weights mxfp8` | fastvideo-rs (MXFP8) |
 |---|---|---|---|
-| denoise | 50.6 s | **45.0 s** | 45.8 s |
+| denoise | 50.6 s | **45.0 s** (bench after the FFN-up GEMM split: 4.83 s / forward, ~38.6 s projected) | 45.8 s |
 | video decode | 8.9 s | 8.8 s | 4.7–6.3 s |
 | peak device memory | 56.2 GB | **41.0 GB** | 61.0 GiB |
 

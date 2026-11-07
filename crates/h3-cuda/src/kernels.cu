@@ -396,7 +396,7 @@ extern "C" __global__ void fw_snake(u64 x_, long n, int len, u64 alpha_, u64 bet
     const long c = i / len;
     float a = ld(al, c), inv;
     if (kind == 0) inv = 1.0f / (a + 1e-9f);
-    else { a = __expf(a); inv = 1.0f / (__expf(ld(be, c)) + 1e-9f); }
+    else { a = expf(a); inv = 1.0f / (expf(ld(be, c)) + 1e-9f); }  // precise exp: the fast intrinsic put `snake beta` at rel 3.0e-2 on driver 615
     const float v = ld(x, i), s = sinf(a * v);
     x[i] = bf(v + inv * s * s);
 }

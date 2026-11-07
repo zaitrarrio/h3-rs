@@ -45,7 +45,34 @@ four candidates for it does (`H3_CUDA_LT_NTH=0..3`: 32.9–33.0 ms), while
 (727). So the autotune gains nothing on this shape and the 8-wide
 quantizer took the activation quantization from 1.27 to 0.58 ms per call
 (2.3 % of the forward). The remaining lever on this shape is to split it
-along N (the two 14336-row halves that SwiGLU consumes anyway); untested.
+along N: see below.
+
+## The N-split (second instance, bench only)
+
+Vast instance 59631383 (offer 59376736): the same Server Edition at 600 W,
+driver 615.71.09, 128 CPU cores, Nevada, $1.20/h, 25 min, no weights
+(synthetic bench), binary = release of `CUDA MXFP8: optional N-split…`.
+Raw output: `output-5-nsplit-bench.txt`. `H3_CUDA_MX_SPLIT=p` runs an FP8
+GEMM with `n ≥ H3_CUDA_MX_SPLIT_MIN` as `p` GEMMs over row slices of the
+weight (whole 128-row scale tiles), writing column slices of the same y.
+
+| FFN-up `n=28672 k=5376` (11.7 TFLOP) | ms / call | TFLOP/s |
+|---|---|---|
+| whole | 32.9 | 355 |
+| ×2 (two 14336-row halves) | **15.1** | **775** |
+| ×4 | 15.1 | 775 |
+| ×7 | 15.3 | 765 |
+
+The QKV GEMM `n=21504` does not move (11.2 ms whole, 11.3 ×2, 11.1 ×3);
+`n=7168` ×4 is 3.87 vs 3.75 ms. Default: split 2 on `n ≥ 24576`, nothing
+else. Full depth, 50 blocks, 37 966 tokens: **4.80–4.83 s per forward
+(96.5 ms per block)** against 5.51–5.53 s with the split off and 6.29–6.34
+s in bf16; a V2 clip's 8 forwards project to ~38.6 s against the 45.0 s
+measured without the split (not re-measured as a clip on this instance:
+no weights). Conformance on this box: 108 / 109, the one failure `snake
+beta` at rel 3.01e-2 against the 3e-2 tolerance on driver 615.71.09 (it
+passed at 595.71.05 and on the Max-Q); the split-able MXFP8 cases pass
+with the split forced (`H3_CUDA_MX_SPLIT_MIN=256`, rel 3.6 / 4.4e-3).
 
 ## Clips (V2, seed 7, the fox prompt, 1344×768×124)
 
