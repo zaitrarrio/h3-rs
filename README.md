@@ -35,10 +35,14 @@ Measured on a vast.ai **RTX A6000** (48 GB, 300 W, driver 570.195.03),
 | | FastH3-V2, A6000, int8 | FastH3-V2, **RTX PRO 6000 Max-Q**, bf16 | FastH3-Trim NVFP4 (ComfyUI file), PRO 6000 | FastH3 4-step V1, PRO 6000, int8 |
 |---|---|---|---|---|
 | denoise | 201 s (25.1 s / forward) | 79.5 s (9.6–10.1 s / forward) | 67.8 s (8.2–8.6 s) | 35.0 s (4 forwards) |
-| decode | 44 s | 20.5 s | 17.4 s | 20.4 s |
+| decode | 44 s | **11.9 s** (was 20.5) | 17.4 s | 20.4 s |
+| audio decode | | **0.24 s** (was 0.46) | 0.46 s | 0.46 s |
 | peak device memory | | 56.2 GB | 24.4 GB | 37.0 GB |
 
-(`docs/runs/2026-11-07-vast-pro6000-clips`; the Max-Q is the 300 W card.)
+(`docs/runs/2026-11-07-vast-pro6000-clips`, decode and audio from
+`…-pro6000-decode`; the Max-Q is the 300 W card and runs the denoise
+power-capped at ~1.4 GHz, not its 3.09 GHz boost. fastvideo-rs on the 600 W
+Server Edition: V2 denoise 45.8 s with MXFP8 linears, decode 4.7–6.3 s.)
 
 Per block at that geometry: 470 ms VSA / 815 ms dense on the A6000, 230 /
 354 ms on the L40S. The VSA phases on the L40S after the kernel work in

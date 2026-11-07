@@ -1,0 +1,253 @@
++ grep -c FAILED /root/boot.log
+0
++ grep 'weights ' /root/boot.log
++ tail -1
+weights 138G in 362s
++ du -sh /w/h3
+138G	/w/h3
++ GEN='/w/h3-bin generate --backend cuda --variant fasth3-v2 --model-dir /w/h3 --tables /w/v2.tables --weights native --width 1344 --height 768 --frames 124 --seed 7'
++ echo '== adaln tables fasth3-v2'
+== adaln tables fasth3-v2
++ timeout 3000 /w/h3-bin adaln-tables --backend cuda --variant fasth3-v2 --model-dir /w/h3 --out /w/v2.tables
++ tail -3
+18 timesteps [0.0001001358, 0.0003336072, 0.014211655, 0.032424748, 0.04585159, 0.056831896, 0.090909064, 0.10048044, 0.14285713, 0.16725987, 0.23076922, 0.25, 0.35714287, 0.41176468, 0.5, 0.7, 0.999, 1.0] → /w/v2.tables (174.6 MB) in 180.5s
+
+real	3m8.048s
+user	1m36.015s
+sys	1m32.232s
++ CLK=8317
++ echo '== generate V2 bf16, unprofiled (wall times), 1344x768x124 seed 7'
+== generate V2 bf16, unprofiled (wall times), 1344x768x124 seed 7
++ nvidia-smi --query-gpu=timestamp,clocks.sm,clocks.mem,power.draw,temperature.gpu,memory.used,clocks_throttle_reasons.active --format=csv,noheader -l 2
++ grep -E '^run |^step|load|peak' /root/v2-unprofiled.log
++ tail -20
+load 113.0s
+step 1/8 9.57s
+step 2/8 9.72s
+step 3/8 9.85s
+step 4/8 9.96s
+step 5/8 10.01s
+step 6/8 10.02s
+step 7/8 10.03s
+step 8/8 10.03s
+run 0: total 91.86s  prepare 0.43s  adaln 0.00s  denoise 79.20s (["9.57", "9.72", "9.85", "9.96", "10.01", "10.02", "10.03", "10.03"])  decode 11.92s  audio 0.24s
++ kill 8317
++ sleep 1
++ echo '== clocks during the unprofiled run (sm MHz, W): min / median / max over samples'
+== clocks during the unprofiled run (sm MHz, W): min / median / max over samples
++ awk '-F, ' '{gsub(/ MHz/,"",$2); gsub(/ W/,"",$4); print $2, $4}' /root/clocks.log
++ sort -n
++ awk '{a[NR]=$1; b[NR]=$2} END {print "sm", a[1], a[int(NR/2)], a[NR], "samples", NR}'
+sm 1380 2272 2302 samples 159
++ awk '-F, ' '{gsub(/ W/,"",$4); print $4}' /root/clocks.log
++ sort -n
++ awk '{a[NR]=$1} END {print "power", a[1], a[int(NR/2)], a[NR]}'
+power 80.74 86.98 303.62
++ grep -c -i 'throttle\|HW Slowdown\|SW Power Cap' /root/clocks.log
+0
++ awk '-F, ' '{print $7}' /root/clocks.log
++ sort
++ uniq -c
++ sort -rn
++ head -5
+    114 0x0000000000000000
+     45 0x0000000000000004
++ curl -s -X PUT --upload-file /root/clocks.log 'https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/vast-20261107-1650/results/clocks.log?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261107%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261107T164837Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=06ab29bcb645b1924d3bccecfeab52c837f8ec0fddf978c65eb135d09c07bbfd'
++ curl -s -X PUT --upload-file /root/v2-unprofiled.log 'https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/vast-20261107-1650/results/v2-unprofiled.log?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261107%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261107T164837Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=706c60b9634811285e1dd0fc17b450502220e17168c1dab78391ecab173272ac'
++ echo '== generate V2 bf16, H3_PROFILE=1 per-stage tables (full output in results/v2-profiled.log)'
+== generate V2 bf16, H3_PROFILE=1 per-stage tables (full output in results/v2-profiled.log)
++ curl -s -X PUT --upload-file /root/v2-profiled.log 'https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/vast-20261107-1650/results/v2-profiled.log?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261107%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261107T164836Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=2ff68a0dd3424bdaba6febddcc7641f6effe2bce201decc6e04ebef619817d51'
++ grep -E '^== profile|^profile \(|^run ' /root/v2-profiled.log
+== profile: prompt encoding (Qwen3-VL)
+profile (CUDA, synced per op): 136.6 ms in ops; GEMMs 131.1 ms at 12.3 TFLOP/s
+== profile: prepare (latent encode, AdaLN tables)
+profile (CUDA, synced per op): 1.7 ms in ops; GEMMs 1.5 ms at 34.9 TFLOP/s
+== profile: denoise
+profile (CUDA, synced per op): 79008.2 ms in ops; GEMMs 52004.0 ms at 246.1 TFLOP/s
+== profile: video decode
+profile (CUDA, synced per op): 1535.8 ms in ops; GEMMs 1172.5 ms at 207.9 TFLOP/s
+== profile: video decode
+profile (CUDA, synced per op): 1530.1 ms in ops; GEMMs 1168.3 ms at 208.6 TFLOP/s
+== profile: video decode
+profile (CUDA, synced per op): 1529.6 ms in ops; GEMMs 1167.7 ms at 208.7 TFLOP/s
+== profile: video decode
+profile (CUDA, synced per op): 1530.3 ms in ops; GEMMs 1168.2 ms at 208.7 TFLOP/s
+== profile: video decode
+profile (CUDA, synced per op): 1529.4 ms in ops; GEMMs 1167.5 ms at 208.8 TFLOP/s
+== profile: video decode
+profile (CUDA, synced per op): 1529.2 ms in ops; GEMMs 1167.3 ms at 208.8 TFLOP/s
+== profile: video decode
+profile (CUDA, synced per op): 1529.4 ms in ops; GEMMs 1167.5 ms at 208.8 TFLOP/s
+== profile: video decode
+profile (CUDA, synced per op): -0.0 ms in ops; GEMMs -0.0 ms at 0.0 TFLOP/s
+== profile: audio decode
+profile (CUDA, synced per op): 242.5 ms in ops; GEMMs 0.1 ms at 0.7 TFLOP/s
+run 0: total 92.13s  prepare 0.44s  adaln 0.00s  denoise 79.04s (["9.52", "9.68", "9.80", "9.92", "10.00", "10.02", "10.04", "10.05"])  decode 12.31s  audio 0.25s
+== profile: remainder
+profile (CUDA, synced per op): -0.0 ms in ops; GEMMs -0.0 ms at 0.0 TFLOP/s
++ echo '== denoise / decode / audio tables'
+== denoise / decode / audio tables
++ awk '/== profile: (prepare|denoise|video decode|audio decode|remainder)/{p=1} p' /root/v2-profiled.log
++ grep -v '^  .* 0\.[0-4] ms'
++ head -150
+== profile: prepare (latent encode, AdaLN tables)
+profile (CUDA, synced per op): 1.7 ms in ops; GEMMs 1.5 ms at 34.9 TFLOP/s
+  gemm n=28672 k=5376 (small)                    0.6 ms  35.7%       2 calls     0.309 ms/call
+
+step 1/8 9.52s
+step 2/8 9.68s
+step 3/8 9.80s
+step 4/8 9.92s
+step 5/8 10.00s
+step 6/8 10.02s
+step 7/8 10.04s
+step 8/8 10.05s
+== profile: denoise
+profile (CUDA, synced per op): 79008.2 ms in ops; GEMMs 52004.0 ms at 246.1 TFLOP/s
+  vsa fine (3d, d128)                        21531.9 ms  27.3%     400 calls    53.830 ms/call
+  gemm n=28672 k=5376                        18721.2 ms  23.7%     400 calls    46.803 ms/call
+  gemm n=21504 k=5376                        14199.7 ms  18.0%     400 calls    35.499 ms/call
+  gemm n=5376 k=14336                         9459.2 ms  12.0%     400 calls    23.648 ms/call
+  gemm n=7168 k=5376                          4813.5 ms   6.1%     400 calls    12.034 ms/call
+  gemm n=5376 k=7168                          4803.8 ms   6.1%     400 calls    12.009 ms/call
+  head_split (qk-norm + rope)                 1627.5 ms   2.1%    1600 calls     1.017 ms/call
+  vsa coarse + top-k (4 query tiles)          1067.2 ms   1.4%     400 calls     2.668 ms/call
+  swiglu                                       998.1 ms   1.3%     400 calls     2.495 ms/call
+  rms_norm (+residual, modulation)             836.9 ms   1.1%     808 calls     1.036 ms/call
+  gate_residual                                482.2 ms   0.6%     400 calls     1.205 ms/call
+  vsa pool                                     460.1 ms   0.6%     400 calls     1.150 ms/call
+  gemm+bias n=5376 k=96                          3.5 ms   0.0%       8 calls     0.434 ms/call
+  gemm+bias n=96 k=5376                          2.8 ms   0.0%       8 calls     0.346 ms/call
+
+== profile: video decode
+profile (CUDA, synced per op): 1535.8 ms in ops; GEMMs 1172.5 ms at 207.9 TFLOP/s
+  gemm+bias n=16384 k=2048                     549.2 ms  35.8%    1008 calls     0.545 ms/call
+  gemm+bias n=2048 k=8192                      343.2 ms  22.3%    1008 calls     0.340 ms/call
+  attention (mma2, d64)                        190.3 ms  12.4%    1008 calls     0.189 ms/call
+  gemm+bias n=6144 k=2048                      179.9 ms  11.7%    1008 calls     0.178 ms/call
+  gemm+bias n=2048 k=2048                       97.1 ms   6.3%    1008 calls     0.096 ms/call
+  head_split (qk-norm + rope)                   52.8 ms   3.4%    3024 calls     0.017 ms/call
+  swiglu                                        52.1 ms   3.4%    1008 calls     0.052 ms/call
+  rms_norm (+residual, modulation)              42.0 ms   2.7%    2016 calls     0.021 ms/call
+  gate_residual                                 20.2 ms   1.3%    1008 calls     0.020 ms/call
+  gemm+bias n=3072 k=2048                        2.6 ms   0.2%      28 calls     0.093 ms/call
+  layer_norm                                     2.5 ms   0.2%      28 calls     0.089 ms/call
+  patchify / unpatchify                          1.7 ms   0.1%      56 calls     0.030 ms/call
+  conv3d (mma)                                   1.3 ms   0.1%      28 calls     0.047 ms/call
+  gemm+bias n=2048 k=24                          0.5 ms   0.0%      28 calls     0.018 ms/call
+
+== profile: video decode
+profile (CUDA, synced per op): 1530.1 ms in ops; GEMMs 1168.3 ms at 208.6 TFLOP/s
+  gemm+bias n=16384 k=2048                     547.1 ms  35.8%    1008 calls     0.543 ms/call
+  gemm+bias n=2048 k=8192                      341.8 ms  22.3%    1008 calls     0.339 ms/call
+  attention (mma2, d64)                        189.6 ms  12.4%    1008 calls     0.188 ms/call
+  gemm+bias n=6144 k=2048                      179.4 ms  11.7%    1008 calls     0.178 ms/call
+  gemm+bias n=2048 k=2048                       96.8 ms   6.3%    1008 calls     0.096 ms/call
+  head_split (qk-norm + rope)                   52.7 ms   3.4%    3024 calls     0.017 ms/call
+  swiglu                                        51.9 ms   3.4%    1008 calls     0.051 ms/call
+  rms_norm (+residual, modulation)              41.9 ms   2.7%    2016 calls     0.021 ms/call
+  gate_residual                                 20.1 ms   1.3%    1008 calls     0.020 ms/call
+  gemm+bias n=3072 k=2048                        2.6 ms   0.2%      28 calls     0.093 ms/call
+  layer_norm                                     2.5 ms   0.2%      28 calls     0.089 ms/call
+  patchify / unpatchify                          1.7 ms   0.1%      56 calls     0.030 ms/call
+  conv3d (mma)                                   1.3 ms   0.1%      28 calls     0.046 ms/call
+  gemm+bias n=2048 k=24                          0.5 ms   0.0%      28 calls     0.018 ms/call
+
+== profile: video decode
+profile (CUDA, synced per op): 1529.6 ms in ops; GEMMs 1167.7 ms at 208.7 TFLOP/s
+  gemm+bias n=16384 k=2048                     547.0 ms  35.8%    1008 calls     0.543 ms/call
+  gemm+bias n=2048 k=8192                      341.6 ms  22.3%    1008 calls     0.339 ms/call
+  attention (mma2, d64)                        189.5 ms  12.4%    1008 calls     0.188 ms/call
+  gemm+bias n=6144 k=2048                      179.2 ms  11.7%    1008 calls     0.178 ms/call
+  gemm+bias n=2048 k=2048                       96.7 ms   6.3%    1008 calls     0.096 ms/call
+  head_split (qk-norm + rope)                   52.7 ms   3.4%    3024 calls     0.017 ms/call
+  swiglu                                        51.9 ms   3.4%    1008 calls     0.051 ms/call
+  rms_norm (+residual, modulation)              41.9 ms   2.7%    2016 calls     0.021 ms/call
+  gate_residual                                 20.1 ms   1.3%    1008 calls     0.020 ms/call
+  gemm+bias n=3072 k=2048                        2.6 ms   0.2%      28 calls     0.093 ms/call
+  layer_norm                                     2.5 ms   0.2%      28 calls     0.089 ms/call
+  patchify / unpatchify                          1.7 ms   0.1%      56 calls     0.031 ms/call
+  conv3d (mma)                                   1.3 ms   0.1%      28 calls     0.047 ms/call
+  gemm+bias n=2048 k=24                          0.5 ms   0.0%      28 calls     0.019 ms/call
+
+== profile: video decode
+profile (CUDA, synced per op): 1530.3 ms in ops; GEMMs 1168.2 ms at 208.7 TFLOP/s
+  gemm+bias n=16384 k=2048                     547.1 ms  35.8%    1008 calls     0.543 ms/call
+  gemm+bias n=2048 k=8192                      341.8 ms  22.3%    1008 calls     0.339 ms/call
+  attention (mma2, d64)                        189.5 ms  12.4%    1008 calls     0.188 ms/call
+  gemm+bias n=6144 k=2048                      179.3 ms  11.7%    1008 calls     0.178 ms/call
+  gemm+bias n=2048 k=2048                       96.9 ms   6.3%    1008 calls     0.096 ms/call
+  head_split (qk-norm + rope)                   52.7 ms   3.4%    3024 calls     0.017 ms/call
+  swiglu                                        51.9 ms   3.4%    1008 calls     0.052 ms/call
+  rms_norm (+residual, modulation)              41.9 ms   2.7%    2016 calls     0.021 ms/call
+  gate_residual                                 20.2 ms   1.3%    1008 calls     0.020 ms/call
+  gemm+bias n=3072 k=2048                        2.6 ms   0.2%      28 calls     0.093 ms/call
+  layer_norm                                     2.5 ms   0.2%      28 calls     0.089 ms/call
+  patchify / unpatchify                          1.7 ms   0.1%      56 calls     0.030 ms/call
+  conv3d (mma)                                   1.3 ms   0.1%      28 calls     0.047 ms/call
+  gemm+bias n=2048 k=24                          0.5 ms   0.0%      28 calls     0.019 ms/call
+
+== profile: video decode
+profile (CUDA, synced per op): 1529.4 ms in ops; GEMMs 1167.5 ms at 208.8 TFLOP/s
+  gemm+bias n=16384 k=2048                     546.9 ms  35.8%    1008 calls     0.543 ms/call
+  gemm+bias n=2048 k=8192                      341.6 ms  22.3%    1008 calls     0.339 ms/call
+  attention (mma2, d64)                        189.5 ms  12.4%    1008 calls     0.188 ms/call
+  gemm+bias n=6144 k=2048                      179.2 ms  11.7%    1008 calls     0.178 ms/call
+  gemm+bias n=2048 k=2048                       96.7 ms   6.3%    1008 calls     0.096 ms/call
+  head_split (qk-norm + rope)                   52.7 ms   3.4%    3024 calls     0.017 ms/call
+  swiglu                                        51.9 ms   3.4%    1008 calls     0.052 ms/call
+  rms_norm (+residual, modulation)              41.9 ms   2.7%    2016 calls     0.021 ms/call
+  gate_residual                                 20.1 ms   1.3%    1008 calls     0.020 ms/call
+  gemm+bias n=3072 k=2048                        2.6 ms   0.2%      28 calls     0.093 ms/call
+  layer_norm                                     2.5 ms   0.2%      28 calls     0.089 ms/call
+  patchify / unpatchify                          1.7 ms   0.1%      56 calls     0.030 ms/call
+  conv3d (mma)                                   1.3 ms   0.1%      28 calls     0.046 ms/call
+  gemm+bias n=2048 k=24                          0.5 ms   0.0%      28 calls     0.018 ms/call
+
+== profile: video decode
+profile (CUDA, synced per op): 1529.2 ms in ops; GEMMs 1167.3 ms at 208.8 TFLOP/s
+  gemm+bias n=16384 k=2048                     546.8 ms  35.8%    1008 calls     0.542 ms/call
+  gemm+bias n=2048 k=8192                      341.6 ms  22.3%    1008 calls     0.339 ms/call
+  attention (mma2, d64)                        189.5 ms  12.4%    1008 calls     0.188 ms/call
+  gemm+bias n=6144 k=2048                      179.1 ms  11.7%    1008 calls     0.178 ms/call
+  gemm+bias n=2048 k=2048                       96.7 ms   6.3%    1008 calls     0.096 ms/call
+  head_split (qk-norm + rope)                   52.7 ms   3.4%    3024 calls     0.017 ms/call
+  swiglu                                        51.9 ms   3.4%    1008 calls     0.052 ms/call
+  rms_norm (+residual, modulation)              41.9 ms   2.7%    2016 calls     0.021 ms/call
+  gate_residual                                 20.2 ms   1.3%    1008 calls     0.020 ms/call
+  gemm+bias n=3072 k=2048                        2.6 ms   0.2%      28 calls     0.093 ms/call
+  layer_norm                                     2.5 ms   0.2%      28 calls     0.089 ms/call
+  patchify / unpatchify                          1.7 ms   0.1%      56 calls     0.030 ms/call
+  conv3d (mma)                                   1.3 ms   0.1%      28 calls     0.047 ms/call
+  gemm+bias n=2048 k=24                          0.5 ms   0.0%      28 calls     0.018 ms/call
+
+== profile: video decode
+profile (CUDA, synced per op): 1529.4 ms in ops; GEMMs 1167.5 ms at 208.8 TFLOP/s
+  gemm+bias n=16384 k=2048                     546.9 ms  35.8%    1008 calls     0.543 ms/call
+  gemm+bias n=2048 k=8192                      341.6 ms  22.3%    1008 calls     0.339 ms/call
+  attention (mma2, d64)                        189.4 ms  12.4%    1008 calls     0.188 ms/call
+  gemm+bias n=6144 k=2048                      179.2 ms  11.7%    1008 calls     0.178 ms/call
+  gemm+bias n=2048 k=2048                       96.7 ms   6.3%    1008 calls     0.096 ms/call
+  head_split (qk-norm + rope)                   52.8 ms   3.5%    3024 calls     0.017 ms/call
+  swiglu                                        51.9 ms   3.4%    1008 calls     0.052 ms/call
+  rms_norm (+residual, modulation)              42.0 ms   2.7%    2016 calls     0.021 ms/call
+  gate_residual                                 20.1 ms   1.3%    1008 calls     0.020 ms/call
+  gemm+bias n=3072 k=2048                        2.6 ms   0.2%      28 calls     0.092 ms/call
+  layer_norm                                     2.5 ms   0.2%      28 calls     0.089 ms/call
+  patchify / unpatchify                          1.7 ms   0.1%      56 calls     0.030 ms/call
+  conv3d (mma)                                   1.3 ms   0.1%      28 calls     0.046 ms/call
+  gemm+bias n=2048 k=24                          0.5 ms   0.0%      28 calls     0.018 ms/call
+
+== profile: video decode
+profile (CUDA, synced per op): -0.0 ms in ops; GEMMs -0.0 ms at 0.0 TFLOP/s
++ cmp /w/v2a.y4m /w/v2b.y4m
++ echo 'profiled and unprofiled clips are identical'
+profiled and unprofiled clips are identical
++ ffmpeg -loglevel error -y -i /w/v2a.y4m -i /w/v2a.wav -c:v libx264 -crf 18 -pix_fmt yuv420p -c:a aac -b:a 192k -shortest /w/v2a.mp4
++ curl -s -X PUT --upload-file /w/v2a.mp4 'https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/vast-20261107-1650/results/fox-v2-bf16.mp4?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261107%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261107T164836Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=d6a4e9ef19174bf826c72414fec934c4a8f33975e79aa9ffb8b11c3c3fb1a678'
++ ffmpeg -loglevel error -y -i /w/v2a.y4m -vf 'select='\''eq(n\,0)+eq(n\,40)+eq(n\,80)+eq(n\,120)'\'',scale=448:-1,tile=2x2' -vframes 1 /w/v2a-grid.png
++ curl -s -X PUT --upload-file /w/v2a-grid.png 'https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/vast-20261107-1650/results/fox-v2-bf16-grid.png?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261107%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261107T164836Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=a7e2f84c69b9fa26269c8dabde3c6521c7898e16b2c5024357599ca84afff254'
++ echo uploaded
+uploaded
+exit 0
+

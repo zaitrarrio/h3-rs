@@ -16,10 +16,20 @@ State and invariants only; the reasoning is in `docs/design.md`.
   power limit) recorded under `docs/runs/`. 1344×768×124, VSA 0.8, per
   block / per real FastH3-V2 forward: RTX A6000 470 ms / 25.1 s (int8), L40S
   230 ms / 11.9 s, RTX PRO 6000 Max-Q (300 W, sm_120) 185 ms / 9.6–10.1 s
-  (bf16 and int8 alike; Trim NVFP4 8.2–8.6 s; decode 20 s of which half is
-  host-side). WebGPU 7.6 s/block on the A6000. `H3_PROFILE=1` prints a
-  kernel table per stage of `generate`
-  (`docs/runs/2026-11-07-vast-pro6000-clips`).
+  (bf16 and int8 alike; Trim NVFP4 8.2–8.6 s). Video decode 11.9 s for
+  124 frames (GPU-bound, 1.53 s per chunk; was 20.5 s with half host-side),
+  audio decode 0.24 s. The Max-Q runs the denoise power-capped at ~1.4 GHz
+  (3.09 GHz boost): its per-block number is 197 ms sustained vs 185 ms in a
+  cold bench, and fastvideo-rs's 600 W Server Edition is not comparable
+  without that caveat. WebGPU 7.6 s/block on the A6000. `H3_PROFILE=1`
+  prints a kernel table per stage of `generate`
+  (`docs/runs/2026-11-07-vast-pro6000-clips`, `…-pro6000-decode`).
+- Decode host path: tiles are decoded one ahead of their download, the
+  stitch / chunk finish / 8-bit conversion are row-parallel (rayon) and
+  tested against the sequential reference; the audio upsampler's crop is
+  the transposed conv's `pad` (symmetric) with ×ratio in the filter. Keep
+  `cargo test -p h3-model --release -- --ignored host_decode_chunk_timing`
+  under ~0.2 s per chunk.
 - CUDA attention kernels (all 97/97 on an L40S): dense attention runs v2
   (`attn_mma2_body`, 32 rows per warp, 128-row blocks; `H3_CUDA_ATTN_V1=1`
   for v1). The VSA fine stage runs `vsa_fine3_body` variant d (16 rows per
