@@ -804,6 +804,266 @@ extern "C" __global__ void __launch_bounds__(128) fw_vsa_fine_mma##D(u64 q_, u64
 ATTN_MMA_KERNELS(64)
 ATTN_MMA_KERNELS(128)
 
+// Second-generation body (v2): 32 query rows per warp (two m16 tiles), so
+// every K / V fragment read from shared memory feeds two mma instructions
+// instead of one. The v1 body above is shared-memory-bandwidth bound at
+// ~half the tensor peak: per m16n8k16 it reads 256 B of K (or V) for 2048
+// MACs, which on GA10x is exactly the 128 B/clk the SM can deliver. Chunks
+// are 32 keys (MMA2_BK) so the S tile stays at 32 registers per m-tile and
+// the K + V staging is 17 KB per block: 4-5 blocks per SM. WARPS warps =
+// 32·WARPS query rows per block: 4 (128 rows) for dense attention and for
+// VSA tiles of 128 / 256, 2 (64 rows) for 64-token VSA tiles.
+#define MMA2_BK 32
+
+template <int D, int WARPS>
+__device__ __forceinline__ void attn_mma2_body(int mode, const bf16_t* q, const bf16_t* k, const bf16_t* v, bf16_t* out,
+        int heads, int kv_heads, int sq, int sk, int causal, float scale,
+        const unsigned* slot, const unsigned* sel, const unsigned* nsel, const float* pooled, const bf16_t* gate,
+        int has_gate, int nb, int np, int dense_all, int te, int maxsel,
+        bf16_t* ks, bf16_t* vs, unsigned char* kvalid) {
+    constexpr int KS_STRIDE = D + 8;
+    constexpr int KK = D / 16;        // k-steps of Q·Kᵀ
+    constexpr int DT = D / 8;         // 8-wide dim tiles of the output
+    constexpr int CH = D / 8;         // 16-byte chunks per key row
+    constexpr int NTHR = 32 * WARPS;
+    constexpr int QR = 32 * WARPS;    // query rows per block
+    constexpr int RP = NTHR / CH;     // key rows loaded per pass
+    constexpr int NT = MMA2_BK / 8;   // n-tiles of S per chunk (4)
+    const int h = blockIdx.y, tid = threadIdx.x, warp = tid >> 5, lane = tid & 31;
+    const int g = lane >> 2, t = lane & 3;
+    // VSA: a tile of te keys is te/32 chunks; its te queries are te/QR blocks.
+    const int csub = mode == 0 ? 1 : te / MMA2_BK;
+    const int qsubs = mode == 0 ? 1 : (te > QR ? te / QR : 1);
+    const int qt = mode == 0 ? blockIdx.x : blockIdx.x / qsubs;
+    const int qsub = mode == 0 ? 0 : blockIdx.x % qsubs;
+    const int kh = mode == 0 ? h / (heads / kv_heads) : h;
+    // Rows: m-tile mt of this warp covers block rows warp·32 + mt·16 + {g, g+8}.
+    int tok[2][2];
+    #pragma unroll
+    for (int mt = 0; mt < 2; ++mt) {
+        #pragma unroll
+        for (int hh = 0; hh < 2; ++hh) {
+            const int lr = warp * 32 + mt * 16 + hh * 8 + g;
+            if (mode == 0) {
+                tok[mt][hh] = qt * QR + lr < sq ? qt * QR + lr : -1;
+            } else {
+                const int qi = qsub * QR + lr;
+                const unsigned a = qi < te ? slot[(long)qt * te + qi] : 0xffffffffu;
+                tok[mt][hh] = a == 0xffffffffu ? -1 : (int)a;
+            }
+        }
+    }
+    const float sl2 = scale * 1.4426950408889634f;
+
+    unsigned qa[2][KK][4];
+    #pragma unroll
+    for (int mt = 0; mt < 2; ++mt) {
+        const unsigned* q0 = (const unsigned*)(q + ((long)h * sq + (tok[mt][0] < 0 ? 0 : tok[mt][0])) * D);
+        const unsigned* q1 = (const unsigned*)(q + ((long)h * sq + (tok[mt][1] < 0 ? 0 : tok[mt][1])) * D);
+        #pragma unroll
+        for (int kk = 0; kk < KK; ++kk) {
+            const int c = (kk * 16 + t * 2) >> 1;
+            qa[mt][kk][0] = tok[mt][0] >= 0 ? q0[c] : 0u;
+            qa[mt][kk][1] = tok[mt][1] >= 0 ? q1[c] : 0u;
+            qa[mt][kk][2] = tok[mt][0] >= 0 ? q0[c + 4] : 0u;
+            qa[mt][kk][3] = tok[mt][1] >= 0 ? q1[c + 4] : 0u;
+        }
+    }
+    float o[2][DT][4];
+    #pragma unroll
+    for (int mt = 0; mt < 2; ++mt)
+        #pragma unroll
+        for (int i = 0; i < DT; ++i) o[mt][i][0] = o[mt][i][1] = o[mt][i][2] = o[mt][i][3] = 0.0f;
+    float m[2][2], l[2][2];
+    #pragma unroll
+    for (int mt = 0; mt < 2; ++mt) { m[mt][0] = m[mt][1] = -1e30f; l[mt][0] = l[mt][1] = 0.0f; }
+
+    int nchunks;
+    if (mode == 0) {
+        nchunks = (sk + MMA2_BK - 1) / MMA2_BK;
+        if (causal) {
+            const int maxrow = min(sq - 1, qt * QR + QR - 1);
+            const int maxkey = maxrow + sk - sq;            // inclusive
+            nchunks = min(nchunks, maxkey / MMA2_BK + 1);
+            if (maxkey < 0) nchunks = 0;
+        }
+    } else {
+        nchunks = (int)nsel[(long)h * nb + qt] * csub;
+    }
+    const bool all_tiles = mode == 1 && (qt < np || dense_all);
+    const bf16_t* kbase = k + (long)kh * sk * D;
+    const bf16_t* vbase = v + (long)kh * sk * D;
+    const int ch = tid % CH, krow = tid / CH;
+    auto key_tok = [&](int c, int key) -> int {
+        if (mode == 0) return c * MMA2_BK + key < sk ? c * MMA2_BK + key : -1;
+        const unsigned tile = all_tiles ? (unsigned)(c / csub) : sel[((long)h * nb + qt) * maxsel + c / csub];
+        const unsigned s2 = slot[(long)tile * te + (c % csub) * MMA2_BK + key];
+        return s2 == 0xffffffffu ? -1 : (int)s2;
+    };
+    auto load = [&](bf16_t* dst, const bf16_t* src, int c, unsigned char* valid) {
+        #pragma unroll
+        for (int j = 0; j < MMA2_BK / RP; ++j) {
+            const int key = krow + RP * j, tk = key_tok(c, key);
+            cp_async16(dst + key * KS_STRIDE + ch * 8, src + (long)(tk < 0 ? 0 : tk) * D + ch * 8, tk >= 0);
+            if (valid && ch == 0) valid[key] = tk >= 0;
+        }
+    };
+    if (nchunks > 0) {
+        load(ks, kbase, 0, kvalid);
+        cp_async_commit();
+        load(vs, vbase, 0, 0);
+        cp_async_commit();
+    }
+
+    for (int c = 0; c < nchunks; ++c) {
+        const unsigned char* kv = kvalid + (c & 1) * MMA2_BK;
+        cp_async_wait1();          // K_c landed (V_c may still be in flight)
+        __syncthreads();
+        float s[2][NT][4];
+        #pragma unroll
+        for (int nt = 0; nt < NT; ++nt) {
+            s[0][nt][0] = s[0][nt][1] = s[0][nt][2] = s[0][nt][3] = 0.0f;
+            s[1][nt][0] = s[1][nt][1] = s[1][nt][2] = s[1][nt][3] = 0.0f;
+            const bf16_t* kr = ks + (nt * 8 + g) * KS_STRIDE;
+            #pragma unroll
+            for (int kk = 0; kk < KK; ++kk) {
+                const unsigned b0 = *(const unsigned*)(kr + kk * 16 + t * 2);
+                const unsigned b1 = *(const unsigned*)(kr + kk * 16 + 8 + t * 2);
+                mma_bf16(s[0][nt], qa[0][kk][0], qa[0][kk][1], qa[0][kk][2], qa[0][kk][3], b0, b1);
+                mma_bf16(s[1][nt], qa[1][kk][0], qa[1][kk][1], qa[1][kk][2], qa[1][kk][3], b0, b1);
+            }
+        }
+        float mx[2][2];
+        #pragma unroll
+        for (int mt = 0; mt < 2; ++mt) {
+            mx[mt][0] = m[mt][0]; mx[mt][1] = m[mt][1];
+            #pragma unroll
+            for (int nt = 0; nt < NT; ++nt) {
+                #pragma unroll
+                for (int cc = 0; cc < 2; ++cc) {
+                    const int key = nt * 8 + t * 2 + cc;
+                    bool ok0 = kv[key], ok1 = ok0;
+                    if (mode == 0 && causal) {
+                        const int j = c * MMA2_BK + key;
+                        ok0 = ok0 && tok[mt][0] >= 0 && j <= tok[mt][0] + sk - sq;
+                        ok1 = ok1 && tok[mt][1] >= 0 && j <= tok[mt][1] + sk - sq;
+                    }
+                    s[mt][nt][cc] = ok0 ? s[mt][nt][cc] * sl2 : -1e30f;
+                    s[mt][nt][2 + cc] = ok1 ? s[mt][nt][2 + cc] * sl2 : -1e30f;
+                    mx[mt][0] = fmaxf(mx[mt][0], s[mt][nt][cc]);
+                    mx[mt][1] = fmaxf(mx[mt][1], s[mt][nt][2 + cc]);
+                }
+            }
+        }
+        __syncthreads();           // every warp is done with ks
+        if (c + 1 < nchunks) load(ks, kbase, c + 1, kvalid + ((c + 1) & 1) * MMA2_BK);
+        cp_async_commit();
+        #pragma unroll
+        for (int mt = 0; mt < 2; ++mt) {
+            #pragma unroll
+            for (int off = 1; off < 4; off <<= 1) {
+                mx[mt][0] = fmaxf(mx[mt][0], __shfl_xor_sync(0xffffffffu, mx[mt][0], off));
+                mx[mt][1] = fmaxf(mx[mt][1], __shfl_xor_sync(0xffffffffu, mx[mt][1], off));
+            }
+            const float c0 = exp2f(m[mt][0] - mx[mt][0]), c1 = exp2f(m[mt][1] - mx[mt][1]);
+            m[mt][0] = mx[mt][0]; m[mt][1] = mx[mt][1];
+            l[mt][0] *= c0; l[mt][1] *= c1;
+            #pragma unroll
+            for (int i = 0; i < DT; ++i) { o[mt][i][0] *= c0; o[mt][i][1] *= c0; o[mt][i][2] *= c1; o[mt][i][3] *= c1; }
+        }
+        cp_async_wait1();          // V_c landed (K_{c+1} may still be in flight)
+        __syncthreads();
+        #pragma unroll
+        for (int kk = 0; kk < MMA2_BK / 16; ++kk) {
+            unsigned a[2][4];
+            #pragma unroll
+            for (int mt = 0; mt < 2; ++mt) {
+                float p[8];
+                #pragma unroll
+                for (int cc = 0; cc < 4; ++cc) {
+                    p[cc] = exp2f(s[mt][2 * kk][cc] - (cc < 2 ? m[mt][0] : m[mt][1]));
+                    p[4 + cc] = exp2f(s[mt][2 * kk + 1][cc] - (cc < 2 ? m[mt][0] : m[mt][1]));
+                }
+                l[mt][0] += p[0] + p[1] + p[4] + p[5];
+                l[mt][1] += p[2] + p[3] + p[6] + p[7];
+                a[mt][0] = pack_bf16(p[0], p[1]); a[mt][1] = pack_bf16(p[2], p[3]);
+                a[mt][2] = pack_bf16(p[4], p[5]); a[mt][3] = pack_bf16(p[6], p[7]);
+            }
+            const int vkey = kk * 16 + (lane & 7) + ((lane >> 3) & 1) * 8;
+            #pragma unroll
+            for (int dt = 0; dt < DT; dt += 2) {
+                const unsigned addr = (unsigned)__cvta_generic_to_shared(vs + vkey * KS_STRIDE + dt * 8 + (lane >> 4) * 8);
+                unsigned b0, b1, b2, b3;
+                asm volatile("ldmatrix.sync.aligned.m8n8.x4.trans.shared.b16 {%0,%1,%2,%3}, [%4];\n"
+                             : "=r"(b0), "=r"(b1), "=r"(b2), "=r"(b3) : "r"(addr));
+                mma_bf16(o[0][dt], a[0][0], a[0][1], a[0][2], a[0][3], b0, b1);
+                mma_bf16(o[0][dt + 1], a[0][0], a[0][1], a[0][2], a[0][3], b2, b3);
+                mma_bf16(o[1][dt], a[1][0], a[1][1], a[1][2], a[1][3], b0, b1);
+                mma_bf16(o[1][dt + 1], a[1][0], a[1][1], a[1][2], a[1][3], b2, b3);
+            }
+        }
+        __syncthreads();           // every warp is done with vs
+        if (c + 1 < nchunks) load(vs, vbase, c + 1, 0);
+        cp_async_commit();
+    }
+    #pragma unroll
+    for (int mt = 0; mt < 2; ++mt) {
+        #pragma unroll
+        for (int off = 1; off < 4; off <<= 1) {
+            l[mt][0] += __shfl_xor_sync(0xffffffffu, l[mt][0], off);
+            l[mt][1] += __shfl_xor_sync(0xffffffffu, l[mt][1], off);
+        }
+        const float i0 = l[mt][0] > 0.0f ? 1.0f / l[mt][0] : 0.0f, i1 = l[mt][1] > 0.0f ? 1.0f / l[mt][1] : 0.0f;
+        const int tok0 = tok[mt][0], tok1 = tok[mt][1];
+        #pragma unroll
+        for (int dt = 0; dt < DT; ++dt) {
+            const int cidx = dt * 8 + t * 2;
+            float a0 = o[mt][dt][0] * i0, a1 = o[mt][dt][1] * i0, b0 = o[mt][dt][2] * i1, b1 = o[mt][dt][3] * i1;
+            if (mode == 1 && has_gate) {
+                const float* cr = pooled + ((long)h * nb + qt) * D + cidx;
+                if (tok0 >= 0) { const bf16_t* gr = gate + ((long)h * sq + tok0) * D + cidx; a0 += cr[0] * ld(gr, 0); a1 += cr[1] * ld(gr, 1); }
+                if (tok1 >= 0) { const bf16_t* gr = gate + ((long)h * sq + tok1) * D + cidx; b0 += cr[0] * ld(gr, 0); b1 += cr[1] * ld(gr, 1); }
+            }
+            if (tok0 >= 0) *(unsigned*)(out + ((long)tok0 * heads + h) * D + cidx) = pack_bf16(a0, a1);
+            if (tok1 >= 0) *(unsigned*)(out + ((long)tok1 * heads + h) * D + cidx) = pack_bf16(b0, b1);
+        }
+    }
+}
+
+#define ATTN_MMA2_KERNELS(D)                                                                                         \
+extern "C" __global__ void __launch_bounds__(128) fw_attention_mma2_##D(u64 q_, u64 k_, u64 v_, u64 out_, int heads, \
+        int kv_heads, int sq, int sk, int causal, float scale) {                                                     \
+    __shared__ __align__(16) bf16_t ks[MMA2_BK * (D + 8)];                                                           \
+    __shared__ __align__(16) bf16_t vs[MMA2_BK * (D + 8)];                                                           \
+    __shared__ unsigned char kvalid[2 * MMA2_BK];                                                                    \
+    attn_mma2_body<D, 4>(0, (const bf16_t*)q_, (const bf16_t*)k_, (const bf16_t*)v_, (bf16_t*)out_, heads,          \
+                         kv_heads, sq, sk, causal, scale, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, ks, vs, kvalid);          \
+}                                                                                                                    \
+extern "C" __global__ void __launch_bounds__(64) fw_vsa_fine_mma2_##D##_w2(u64 q_, u64 k_, u64 v_, u64 out_,         \
+        int heads, int seq, float scale, u64 slot_, u64 sel_, u64 nsel_, u64 pooled_, u64 gate_, int has_gate,       \
+        int nb, int np, int dense_all, int te, int maxsel) {                                                         \
+    __shared__ __align__(16) bf16_t ks[MMA2_BK * (D + 8)];                                                           \
+    __shared__ __align__(16) bf16_t vs[MMA2_BK * (D + 8)];                                                           \
+    __shared__ unsigned char kvalid[2 * MMA2_BK];                                                                    \
+    attn_mma2_body<D, 2>(1, (const bf16_t*)q_, (const bf16_t*)k_, (const bf16_t*)v_, (bf16_t*)out_, heads, heads,   \
+                         seq, seq, 0, scale, (const unsigned*)slot_, (const unsigned*)sel_, (const unsigned*)nsel_,  \
+                         (const float*)pooled_, (const bf16_t*)gate_, has_gate, nb, np, dense_all, te, maxsel, ks,   \
+                         vs, kvalid);                                                                                 \
+}                                                                                                                    \
+extern "C" __global__ void __launch_bounds__(128) fw_vsa_fine_mma2_##D##_w4(u64 q_, u64 k_, u64 v_, u64 out_,        \
+        int heads, int seq, float scale, u64 slot_, u64 sel_, u64 nsel_, u64 pooled_, u64 gate_, int has_gate,       \
+        int nb, int np, int dense_all, int te, int maxsel) {                                                         \
+    __shared__ __align__(16) bf16_t ks[MMA2_BK * (D + 8)];                                                           \
+    __shared__ __align__(16) bf16_t vs[MMA2_BK * (D + 8)];                                                           \
+    __shared__ unsigned char kvalid[2 * MMA2_BK];                                                                    \
+    attn_mma2_body<D, 4>(1, (const bf16_t*)q_, (const bf16_t*)k_, (const bf16_t*)v_, (bf16_t*)out_, heads, heads,   \
+                         seq, seq, 0, scale, (const unsigned*)slot_, (const unsigned*)sel_, (const unsigned*)nsel_,  \
+                         (const float*)pooled_, (const bf16_t*)gate_, has_gate, nb, np, dense_all, te, maxsel, ks,   \
+                         vs, kvalid);                                                                                 \
+}
+ATTN_MMA2_KERNELS(64)
+ATTN_MMA2_KERNELS(128)
+
 // ---------------------------------------------------------------- VSA
 
 // Tile means (f32): block (tile, head), thread c < d. pooled is [3][heads][nb][d].
@@ -1095,14 +1355,15 @@ __device__ __forceinline__ float e4m3(unsigned b) {
     if (exp == 15 && man == 7.0f) return __int_as_float(0x7fc00000);
     return sign * (1.0f + man / 8.0f) * exp2f((float)(exp - 7));
 }
-extern "C" __global__ void fw_dequant_nvfp4(u64 out_, u64 q_, u64 s_, long n, int cols, float alpha) {
+extern "C" __global__ void fw_dequant_nvfp4(u64 out_, u64 q_, u64 s_, long n, int cols, float alpha, int first_high) {
     bf16_t* out = (bf16_t*)out_;
     const unsigned char* q = (const unsigned char*)q_;
     const unsigned char* s = (const unsigned char*)s_;
     long i = (long)blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= n) return;
     const long r = i / cols; const int c = (int)(i - r * cols);
-    const unsigned code = (q[i >> 1] >> ((i & 1) * 4)) & 15u;
+    const int shift = ((int)(i & 1) ^ first_high) * 4;   // ComfyUI packs the first code in the high nibble
+    const unsigned code = (q[i >> 1] >> shift) & 15u;
     const float sc = e4m3(s[r * (cols / 16) + c / 16]);
     out[i] = bf(e2m1(code) * sc * alpha);
 }

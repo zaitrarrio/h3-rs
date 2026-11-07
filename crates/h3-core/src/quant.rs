@@ -325,49 +325,83 @@ pub const NVFP4_GROUP: usize = 16;
 /// per 16 columns, one f32 `alpha` per tensor. `w = code · e4m3(scale) · alpha`.
 #[derive(Debug, Clone)]
 pub struct Nvfp4 {
-    /// Two codes per byte, column `2i` in the low nibble: `[rows, cols / 2]`.
+    /// Two codes per byte, `[rows, cols / 2]`: column `2i` in the low nibble
+    /// (FlashInfer / ModelOpt, `first_high == false`) or in the high nibble
+    /// (ComfyUI's `float.py`, `first_high == true`).
     pub packed: Vec<u8>,
     /// Row-major `[rows, cols / 16]` E4M3 bytes (unswizzled).
     pub scales: Vec<u8>,
     pub alpha: f32,
     pub rows: usize,
     pub cols: usize,
+    pub first_high: bool,
 }
 
 impl Nvfp4 {
-    /// Undo FlashInfer's 128×4 swizzle: the stored scale tensor is `[rows
-    /// padded to 128, groups padded to 4]` laid out as `(rows/128, groups/4,
-    /// 32, 4, 4)` permuted `(0, 3, 2, 1, 4)`. Returns the row-major scales.
+    /// Undo NVIDIA's 128×4 block-scale swizzle (torchao `to_blocked`,
+    /// FlashInfer, ComfyUI's `TensorCoreNVFP4Layout`): the stored tensor is
+    /// `[rows padded to 128, groups padded to 4]` viewed as `(rows/128, 4, 32,
+    /// groups/4, 4)` and permuted to `(0, 3, 2, 1, 4)`. Returns the row-major
+    /// scales. Verified against the bf16 twin of the FastH3-Trim NVFP4 file
+    /// (`docs/runs/2026-11-07-vast-nvfp4-vsa2`).
     pub fn unswizzle_scales(swizzled: &[u8], rows: usize, groups: usize) -> Vec<u8> {
         let rp = rows.div_ceil(128) * 128;
         let gp = groups.div_ceil(4) * 4;
         assert_eq!(swizzled.len(), rp * gp, "swizzled scale tensor is {} bytes, expected {}", swizzled.len(), rp * gp);
-        let gb = gp / 4;
+        let nc = gp / 4;
         let mut out = vec![0u8; rows * groups];
-        // stored index: ((((i0·4 + i3)·32 + i2)·gb + i1)·4 + i4) with the
-        // logical row = i0·128 + i3·32 + i2 and group = i1·4 + i4.
         for r in 0..rows {
             let (i0, rem) = (r / 128, r % 128);
             let (i3, i2) = (rem / 32, rem % 32);
             for g in 0..groups {
                 let (i1, i4) = (g / 4, g % 4);
-                let src = (((i0 * 4 + i3) * 32 + i2) * gb + i1) * 4 + i4;
-                out[r * groups + g] = swizzled[src];
+                out[r * groups + g] = swizzled[Self::swizzled_index(i0, i1, i2, i3, i4, nc)];
             }
         }
         out
     }
 
-    pub fn from_stored(packed: &[u8], swizzled_scales: &[u8], alpha: f32, rows: usize, cols: usize) -> Self {
+    /// Where the scale of logical row `i0·128 + i3·32 + i2`, group `i1·4 + i4`
+    /// sits in the blocked tensor (`nc` = padded groups / 4).
+    pub fn swizzled_index(i0: usize, i1: usize, i2: usize, i3: usize, i4: usize, nc: usize) -> usize {
+        (((i0 * nc + i1) * 32 + i2) * 4 + i3) * 4 + i4
+    }
+
+    pub fn from_stored(packed: &[u8], swizzled_scales: &[u8], alpha: f32, rows: usize, cols: usize, first_high: bool) -> Self {
         assert_eq!(packed.len(), rows * cols / 2);
         assert_eq!(cols % NVFP4_GROUP, 0);
         let scales = Self::unswizzle_scales(swizzled_scales, rows, cols / NVFP4_GROUP);
-        Self { packed: packed.to_vec(), scales, alpha, rows, cols }
+        Self { packed: packed.to_vec(), scales, alpha, rows, cols, first_high }
     }
 
     pub fn code(&self, r: usize, c: usize) -> u8 {
         let b = self.packed[(r * self.cols + c) / 2];
-        if c % 2 == 0 { b & 15 } else { b >> 4 }
+        if (c % 2 == 0) != self.first_high { b & 15 } else { b >> 4 }
+    }
+
+    /// Rows `[start, end)` as their own matrix (a part of a fused QKV).
+    pub fn rows(&self, start: usize, end: usize) -> Self {
+        let groups = self.cols / NVFP4_GROUP;
+        Self {
+            packed: self.packed[start * self.cols / 2..end * self.cols / 2].to_vec(),
+            scales: self.scales[start * groups..end * groups].to_vec(),
+            alpha: self.alpha,
+            rows: end - start,
+            cols: self.cols,
+            first_high: self.first_high,
+        }
+    }
+
+    /// The two row halves exchanged (a `[gate | value]` SwiGLU input
+    /// projection becoming `[value | gate]`).
+    pub fn swap_halves(&self) -> Self {
+        let h = self.rows / 2;
+        let mut lo = self.rows(h, self.rows);
+        let hi = self.rows(0, h);
+        lo.packed.extend(hi.packed);
+        lo.scales.extend(hi.scales);
+        lo.rows = self.rows;
+        lo
     }
 
     pub fn dequantize(&self) -> Vec<f32> {
@@ -393,7 +427,7 @@ impl Nvfp4 {
         let mut it = parts.into_iter();
         let mut a = it.next()?;
         for b in it {
-            if a.cols != b.cols || a.alpha != b.alpha {
+            if a.cols != b.cols || a.alpha != b.alpha || a.first_high != b.first_high {
                 return None;
             }
             a.packed.extend(b.packed);
@@ -483,10 +517,13 @@ mod tests {
             let (i3, i2) = (rem / 32, rem % 32);
             for g in 0..groups {
                 let (i1, i4) = (g / 4, g % 4);
-                let idx = (((i0 * 4 + i3) * 32 + i2) * (gp / 4) + i1) * 4 + i4;
+                let idx = Nvfp4::swizzled_index(i0, i1, i2, i3, i4, gp / 4);
                 sw[idx] = ((r * 3 + g * 7) % 127) as u8 | 0x38; // ≈ 1..2 range
             }
         }
+        // Not the identity: row 32's scales sit after the first 32 rows' first
+        // group block, not at 32·groups.
+        assert_ne!(Nvfp4::swizzled_index(0, 0, 0, 1, 0, gp / 4), 32 * gp);
         let scales = Nvfp4::unswizzle_scales(&sw, rows, groups);
         for r in 0..rows {
             for g in 0..groups {
@@ -494,12 +531,24 @@ mod tests {
             }
         }
         let packed: Vec<u8> = (0..rows * cols / 2).map(|i| (i % 256) as u8).collect();
-        let q = Nvfp4::from_stored(&packed, &sw, 0.5, rows, cols);
+        let q = Nvfp4::from_stored(&packed, &sw, 0.5, rows, cols, false);
         let d = q.dequantize();
         assert_eq!(d.len(), rows * cols);
         // Column 1 of row 0: code = high nibble of byte 0 = 0 → 0.
         assert_eq!(d[1], 0.0);
         // Column 3 of row 0: byte 1 = 0x01 → high nibble 0; column 2 → low nibble 1 → 0.5.
         assert_eq!(d[2], 0.5 * e4m3_to_f32(q.scales[0]) * 0.5);
+        // ComfyUI order: the same bytes read first-high put the 1 in column 3.
+        let qh = Nvfp4::from_stored(&packed, &sw, 0.5, rows, cols, true);
+        let dh = qh.dequantize();
+        assert_eq!(dh[2], 0.0);
+        assert_eq!(dh[3], 0.5 * e4m3_to_f32(q.scales[0]) * 0.5);
+        // Row slices and the half swap keep every row's bytes together.
+        // (compared as bits: the synthetic scale bytes include NaN patterns)
+        let bits = |v: &[f32]| v.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
+        let part = q.rows(100, 140);
+        assert_eq!(bits(&part.dequantize()), bits(&d[100 * cols..140 * cols]));
+        let sw2 = q.swap_halves();
+        assert_eq!(bits(&sw2.dequantize()[..cols]), bits(&d[(rows / 2) * cols..(rows / 2 + 1) * cols]));
     }
 }

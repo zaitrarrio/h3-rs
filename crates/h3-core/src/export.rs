@@ -20,7 +20,7 @@ use crate::{
     Error, Result,
     config::H3Config,
     quant::{Q4, Q8, Stored, WeightQuant},
-    weights::{SafetensorsDir, WeightSource, h3_manifest},
+    weights::{WeightSource, h3_manifest},
 };
 use safetensors::Dtype;
 use std::collections::HashMap;
@@ -35,7 +35,7 @@ pub type Patch<'a> = &'a dyn Fn(&str, &mut [f32], &[usize]) -> Result<()>;
 /// The DiT's tensors with the block linears quantized as `quant` says, after
 /// `patch` (if any) has edited each f32 weight. Gate linears are included
 /// when the source has them.
-pub fn quantize_dit(src: &SafetensorsDir, cfg: &H3Config, quant: WeightQuant, patch: Option<Patch<'_>>, skip_adaln: bool) -> Result<Vec<Tensor>> {
+pub fn quantize_dit(src: &dyn WeightSource, cfg: &H3Config, quant: WeightQuant, patch: Option<Patch<'_>>, skip_adaln: bool) -> Result<Vec<Tensor>> {
     let with_gate = src.has_linear("transformer_blocks.0.attn.to_gate_compress");
     let names = h3_manifest(cfg, with_gate);
     let mut out = Vec::new();
@@ -56,7 +56,7 @@ pub fn quantize_dit(src: &SafetensorsDir, cfg: &H3Config, quant: WeightQuant, pa
             p(&name, &mut w, &shape)?;
         }
         if fmt == WeightQuant::Native {
-            out.push(plain(&name, &shape, &w, src.raw(&name).ok().map(|(dt, _, _)| dt))?);
+            out.push(plain(&name, &shape, &w, None)?);
             continue;
         }
         let (rows, cols) = (shape[0], shape[1..].iter().product::<usize>());
@@ -142,6 +142,7 @@ pub fn stored_matches(stored: &Option<Stored>, fmt: WeightQuant) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::weights::SafetensorsDir;
     use crate::weights::{Synthetic, missing};
 
     /// Synthetic tiny DiT → f32 safetensors → quantized file → `stored()`

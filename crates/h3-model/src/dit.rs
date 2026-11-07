@@ -26,7 +26,7 @@ use h3_core::{
     rope::h3_rope,
     timestep::TimeEmbedder,
     vsa::{VsaSpec, segments_for_layout},
-    weights::{WeightSource, h3_manifest},
+    weights::{ADALN_TABLE_KEY, WeightSource, h3_manifest},
 };
 
 pub const SHIFT_MSA: usize = 0;
@@ -311,7 +311,17 @@ impl<B: Backend> H3Dit<B> {
             Ok(linear::load_host(src, &shapes, &[k], true, WeightQuant::Native, adapters)?.upload(be))
         };
         let te_in = cfg.time_embed_hidden;
-        let time = TimeEmbedder {
+        let adaln_in = cfg.adaln_rank.unwrap_or(cfg.time_embed_dim);
+        let time = if src.contains(ADALN_TABLE_KEY) {
+            let shape = src.shape(ADALN_TABLE_KEY)?;
+            if shape.len() != 2 || shape[1] != adaln_in || shape[0] < 2 {
+                return Err(Error::Weights(format!("`{ADALN_TABLE_KEY}` is {shape:?}, expected [grid, {adaln_in}]")));
+            }
+            let data = src.get(ADALN_TABLE_KEY, &shape)?;
+            TimeEmbedder::from_table(h3_core::timestep::AdalnTable { grid: shape[0], width: shape[1], data })
+        } else {
+        TimeEmbedder {
+            table: None,
             freq_dim: cfg.freq_dim,
             l1w: {
                 let mut w = src.get("time_embedder.linear_1.weight", &[te_in, cfg.freq_dim])?;
@@ -345,8 +355,8 @@ impl<B: Backend> H3Dit<B> {
                 Some(r) => Some(src.get("adaln_basis.weight", &[r, cfg.time_embed_dim])?),
                 None => None,
             },
+        }
         };
-        let adaln_in = cfg.adaln_rank.unwrap_or(cfg.time_embed_dim);
         let norm_out_lin = {
             let mut w = src.get("norm_out.linear.weight", &[2 * d, adaln_in])?;
             let mut b = src.get("norm_out.linear.bias", &[2 * d])?;

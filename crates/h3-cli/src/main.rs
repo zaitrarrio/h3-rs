@@ -479,18 +479,26 @@ impl ModelArgs {
     }
 }
 
-fn open_transformer(r: &Resolved) -> Result<(SafetensorsDir, bool)> {
-    let src = SafetensorsDir::open(&r.transformer)?;
+fn open_transformer(r: &Resolved) -> Result<(Box<dyn WeightSource>, bool)> {
+    let dir = SafetensorsDir::open(&r.transformer)?;
+    let src: Box<dyn WeightSource> = if h3_core::weights::ComfySource::detect(&dir) {
+        eprintln!("{}: ComfyUI single-file layout", r.transformer.display());
+        Box::new(h3_core::weights::ComfySource { inner: dir })
+    } else {
+        Box::new(dir)
+    };
+    let src_box = src;
+    let src = &*src_box;
     let skip_adaln = r.tables.is_some();
     let with_gate = src.has_linear("transformer_blocks.0.attn.to_gate_compress");
-    let miss: Vec<String> = missing(&src, &h3_manifest(&r.variant.config, with_gate))
+    let miss: Vec<String> = missing(src, &h3_manifest(&r.variant.config, with_gate))
         .into_iter()
         .filter(|n| !(skip_adaln && n.contains(".adaln_proj.")))
         .collect();
     if !miss.is_empty() {
         bail!("{} DiT tensors missing from {}, e.g. {:?}", miss.len(), r.transformer.display(), &miss[..miss.len().min(3)]);
     }
-    Ok((src, with_gate))
+    Ok((src_box, with_gate))
 }
 
 fn sampler_plan(v: &Variant) -> Result<SamplerPlan> {
@@ -574,8 +582,8 @@ fn main() -> Result<()> {
             with_backend!(backend, |be| {
                 let t0 = std::time::Instant::now();
                 // Only the small parts load; the AdaLN weights stream through once.
-                let dit = H3Dit::load(&be, r.variant.config.clone(), &src, &LoadOptions { quant: WeightQuant::Int8, stream_blocks: true }, &r.adapters)?;
-                let tables = dit.adaln_tables(&be, &src, &r.adapters, &ts, None)?;
+                let dit = H3Dit::load(&be, r.variant.config.clone(), src.as_ref(), &LoadOptions { quant: WeightQuant::Int8, stream_blocks: true }, &r.adapters)?;
+                let tables = dit.adaln_tables(&be, src.as_ref(), &r.adapters, &ts, None)?;
                 tables.save(&out, &r.variant.name)?;
                 println!("{} timesteps {:?} → {} ({:.1} MB) in {:.1}s", ts.len(), ts, out.display(), tables.bytes() as f64 / 2e6, t0.elapsed().as_secs_f64());
             })
@@ -606,7 +614,7 @@ fn main() -> Result<()> {
                 }
                 Ok(())
             };
-            let tensors = h3_core::export::quantize_dit(&src, &r.variant.config, weights, Some(&patch), skip_adaln)?;
+            let tensors = h3_core::export::quantize_dit(src.as_ref(), &r.variant.config, weights, Some(&patch), skip_adaln)?;
             let bytes: usize = tensors.iter().map(|t| t.3.len()).sum();
             h3_core::export::write(&out, &tensors, h3_core::export::metadata(weights, &r.variant.name))?;
             println!("{weights}: {} tensors, {:.3} GB -> {} in {:.1}s", tensors.len(), bytes as f64 / 1e9, out.display(), t0.elapsed().as_secs_f64());
@@ -754,7 +762,7 @@ fn generate<B: Backend>(
         None => None,
     };
     let need_encoder = first_image.is_some() || last_image.is_some() || !refs.is_empty() || continuation.is_some();
-    let dit = H3Dit::load(be, cfg.clone(), &src, &LoadOptions { quant: attn.weights, stream_blocks: attn.stream_blocks }, &r.adapters)?;
+    let dit = H3Dit::load(be, cfg.clone(), src.as_ref(), &LoadOptions { quant: attn.weights, stream_blocks: attn.stream_blocks }, &r.adapters)?;
     let vae = VideoVae::load(be, vae_cfg, &SafetensorsDir::open(&vae_dir)?, need_encoder, !preview)?;
     let audio_vae = AudioVae::load(be, AudioVaeConfig::h3(), &SafetensorsDir::open(&model_dir.join("audio_vae"))?, refs.iter().any(|s| s.contains("audio")) || continuation.as_deref().is_some_and(|c| c.contains("audio")), true)?;
     let tae = match (&r.tae, preview) {
@@ -859,7 +867,7 @@ fn generate<B: Backend>(
     be.profile_reset();
     for run in 0..runs.max(1) {
         let t0 = std::time::Instant::now();
-        let generation = pipe.generate(be, &src, &r.adapters, tables.as_ref(), &req, &mut |ev| {
+        let generation = pipe.generate(be, src.as_ref(), &r.adapters, tables.as_ref(), &req, &mut |ev| {
             if let Event::Step { index, total, secs } = ev {
                 eprintln!("step {}/{total} {secs:.2}s", index + 1);
             }

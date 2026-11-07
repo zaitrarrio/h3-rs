@@ -438,6 +438,13 @@ fn ops<B: Backend>(p: &mut Pair<'_, B>, rng: &mut Rng) {
             if k % 16 == 0 {
                 let nv = synth_nvfp4(&w, n, k);
                 p.op(format!("linear nvfp4 {m}x{k}x{n}"), |r| r.linear(&x, 3, m, &Mat::Nvfp4(&nv), None, act, m + 2, 2));
+                // The same matrix in ComfyUI's nibble order (first code high).
+                let nvh = Nvfp4 {
+                    packed: nv.packed.iter().map(|b| (b << 4) | (b >> 4)).collect(),
+                    first_high: true,
+                    ..nv.clone()
+                };
+                p.op(format!("linear nvfp4 first-high {m}x{k}x{n}"), |r| r.linear(&x, 3, m, &Mat::Nvfp4(&nvh), None, act, m + 2, 2));
             }
         }
     }
@@ -656,7 +663,7 @@ pub fn synth_nvfp4(w: &[f32], rows: usize, cols: usize) -> Nvfp4 {
             }
         }
     }
-    Nvfp4 { packed, scales, alpha, rows, cols }
+    Nvfp4 { packed, scales, alpha, rows, cols, first_high: false }
 }
 
 fn models<B: Backend>(p: &mut Pair<'_, B>) {
@@ -681,7 +688,7 @@ fn dit_forward<B: Backend>(be: &B, attention: Attention, quant: WeightQuant, gat
             self.0.get(n, s)
         }
         fn contains(&self, n: &str) -> bool {
-            !n.contains("to_gate_compress")
+            !n.contains("to_gate_compress") && self.0.contains(n)
         }
     }
     let src_dyn: Box<dyn h3_core::weights::WeightSource> = if gate { Box::new(src) } else { Box::new(NoGate(src)) };

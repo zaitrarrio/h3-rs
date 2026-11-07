@@ -220,7 +220,7 @@ pub fn engine<B: Backend>(be: B, s: &Settings, shared: Arc<Shared>, rx: mpsc::Re
             None => None,
         };
         stage(&format!("loading the transformer onto the device ({} blocks, {})", cfg.layers, s.attn.weights));
-        let dit = H3Dit::load(&be, cfg.clone(), &src, &LoadOptions { quant: s.attn.weights, stream_blocks: s.attn.stream_blocks }, &r.adapters)?;
+        let dit = H3Dit::load(&be, cfg.clone(), src.as_ref(), &LoadOptions { quant: s.attn.weights, stream_blocks: s.attn.stream_blocks }, &r.adapters)?;
         stage("loading the decoders");
         let vae_dir = model_dir.join("vae");
         let vae = VideoVae::load(&be, VideoVaeConfig::h3(), &SafetensorsDir::open(&vae_dir)?, false, !s.preview)?;
@@ -239,7 +239,7 @@ pub fn engine<B: Backend>(be: B, s: &Settings, shared: Arc<Shared>, rx: mpsc::Re
             if matches!(text, Text::Gallery(..)) { " · prompt gallery" } else { "" },
             if s.attn.weights != h3_core::quant::WeightQuant::Native { format!(" · {}", s.attn.weights) } else { String::new() }
         );
-        (pipe, text, model, r.variant.clone(), Box::new(src), &r.adapters[..], tables)
+        (pipe, text, model, r.variant.clone(), src, &r.adapters[..], tables)
     };
     stage("waiting for the device");
     be.sync();

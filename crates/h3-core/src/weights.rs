@@ -15,11 +15,20 @@ use crate::{
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+/// ComfyUI's single-file H3 checkpoints carry `adaln_t_table [grid, rank]`
+/// instead of a time embedder (see [`ComfySource`]).
+pub const ADALN_TABLE_KEY: &str = "adaln_t_table";
+
 pub trait WeightSource {
     /// The tensor as f32, checked against `shape` (size-1 dims are ignored,
     /// so a Conv3d `[o, i, 1, 1, 1]` may be asked for as `[o, i]`).
     fn get(&self, name: &str, shape: &[usize]) -> Result<Vec<f32>>;
     fn contains(&self, name: &str) -> bool;
+    /// The stored shape of a tensor whose shape the model does not know in
+    /// advance (`adaln_t_table`).
+    fn shape(&self, name: &str) -> Result<Vec<usize>> {
+        Err(Error::Weights(format!("`{name}`: this source cannot report shapes")))
+    }
     /// The linear `key` (no `.weight`) if the checkpoint stores it quantized
     /// (`<key>.weight.q8` / `.q4` + `.scale` [+ `.zero`], see [`crate::export`],
     /// or the Trim NVFP4 triple `<nvfp4 module>::_nvfp4_weight` / `_scale` /
@@ -190,6 +199,10 @@ impl WeightSource for SafetensorsDir {
         self.index.contains_key(name)
     }
 
+    fn shape(&self, name: &str) -> Result<Vec<usize>> {
+        Ok(self.raw(name)?.1)
+    }
+
     fn stored(&self, key: &str) -> Result<Option<Stored>> {
         use safetensors::Dtype;
         let f32s = |name: &str| -> Result<(Vec<usize>, Vec<f32>)> {
@@ -243,7 +256,7 @@ impl WeightSource for SafetensorsDir {
                 return Err(bad(format!("nvfp4 scales are {sdt:?} {sshape:?} for codes {shape:?}")));
             }
             let alpha = self.scalar(&format!("{m}::_nvfp4_alpha"))?;
-            return Ok(Some(Stored::Nvfp4(Nvfp4::from_stored(data, sdata, alpha, rows, cols))));
+            return Ok(Some(Stored::Nvfp4(Nvfp4::from_stored(data, sdata, alpha, rows, cols, false))));
         }
         Ok(None)
     }
@@ -273,8 +286,182 @@ impl<S: WeightSource> WeightSource for Remapped<S> {
     fn contains(&self, name: &str) -> bool {
         self.inner.contains(&(self.map)(name))
     }
+    fn shape(&self, name: &str) -> Result<Vec<usize>> {
+        self.inner.shape(&(self.map)(name))
+    }
     fn stored(&self, key: &str) -> Result<Option<Stored>> {
         self.inner.stored(&(self.map)(key))
+    }
+}
+
+/// Which part of a ComfyUI tensor a Diffusers key names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ComfyPart {
+    Whole,
+    /// Row block `i` of 3 (`qkv_proj` → `to_q` / `to_k` / `to_v`).
+    Third(usize),
+    /// The two row halves exchanged (`mlp.fc1` is `[gate | value]`,
+    /// Diffusers' `ff.net.0.proj` is `[value | gate]`).
+    SwapHalves,
+}
+
+/// Diffusers DiT key → ComfyUI single-file key (`comfy/ldm/minimax/model.py`
+/// names) and the part of that tensor. `None` for keys the file never
+/// carries (`time_embedder.*`, `adaln_basis.weight`: the file holds
+/// `adaln_t_table` instead).
+pub fn comfy_h3_key(name: &str) -> Option<(String, ComfyPart)> {
+    use ComfyPart::*;
+    let whole = |k: String| Some((k, Whole));
+    if name.starts_with("time_embedder.") || name == "adaln_basis.weight" {
+        return None;
+    }
+    let fixed = [
+        ("proj_in.", "video_patch_proj."),
+        ("audio_proj_in.", "audio_patch_proj."),
+        ("context_embedder.", "condition_proj."),
+        ("proj_out.", "final_layer.video_out."),
+        ("audio_proj_out.", "final_layer.audio_out."),
+        ("norm_out.linear.", "final_layer.adaln_proj.linear."),
+        ("norm_out.norm.", "final_layer.norm."),
+    ];
+    for (d, c) in fixed {
+        if let Some(rest) = name.strip_prefix(d) {
+            return whole(format!("{c}{rest}"));
+        }
+    }
+    let (prefix, rest) = if let Some(r) = name.strip_prefix("transformer_blocks.") {
+        ("blocks.", r)
+    } else if let Some(r) = name.strip_prefix("token_refiner.refiner_blocks.") {
+        ("token_refiner.blocks.", r)
+    } else {
+        return whole(name.to_string());
+    };
+    let (n, field) = rest.split_once('.')?;
+    let p = format!("{prefix}{n}.");
+    Some(match field {
+        "attn.to_q.weight" => (format!("{p}attn.qkv_proj.weight"), Third(0)),
+        "attn.to_k.weight" => (format!("{p}attn.qkv_proj.weight"), Third(1)),
+        "attn.to_v.weight" => (format!("{p}attn.qkv_proj.weight"), Third(2)),
+        "attn.to_out.0.weight" => (format!("{p}attn.out_proj.weight"), Whole),
+        "attn.norm_q.weight" => (format!("{p}attn.q_norm.weight"), Whole),
+        "attn.norm_k.weight" => (format!("{p}attn.k_norm.weight"), Whole),
+        "ff.net.0.proj.weight" => (format!("{p}mlp.fc1.weight"), SwapHalves),
+        "ff.net.2.weight" => (format!("{p}mlp.fc2.weight"), Whole),
+        other => (format!("{p}{other}"), Whole),
+    })
+}
+
+/// A ComfyUI single-file H3 checkpoint (`video_patch_proj`, fused
+/// `qkv_proj`, `mlp.fc1/fc2`, optional `comfy_quant` NVFP4 triples `weight`
+/// U8 `[out, in/2]` first-code-high + `weight_scale` E4M3 swizzled 128×4 +
+/// `weight_scale_2` f32, `adaln_t_table`) read through Diffusers keys.
+pub struct ComfySource {
+    pub inner: SafetensorsDir,
+}
+
+impl ComfySource {
+    /// Whether a checkpoint is in this layout.
+    pub fn detect(src: &SafetensorsDir) -> bool {
+        src.contains("video_patch_proj.weight") && src.contains("blocks.0.attn.qkv_proj.weight")
+    }
+
+    fn is_nvfp4(&self, comfy_weight: &str) -> bool {
+        let base = comfy_weight.strip_suffix(".weight").unwrap_or(comfy_weight);
+        self.inner.contains_raw(&format!("{base}.weight_scale")) && self.inner.contains_raw(&format!("{base}.comfy_quant"))
+    }
+
+    /// The whole NVFP4 tensor behind `<base>.weight`.
+    fn nvfp4(&self, comfy_weight: &str) -> Result<Nvfp4> {
+        use safetensors::Dtype;
+        let base = comfy_weight.strip_suffix(".weight").unwrap_or(comfy_weight);
+        let bad = |m: String| Error::Weights(format!("`{comfy_weight}`: {m}"));
+        let (dt, shape, data) = self.inner.raw(comfy_weight)?;
+        if dt != Dtype::U8 || shape.len() != 2 {
+            return Err(bad(format!("nvfp4 codes are {dt:?} {shape:?}")));
+        }
+        let (rows, cols) = (shape[0], 2 * shape[1]);
+        let (sdt, sshape, sdata) = self.inner.raw(&format!("{base}.weight_scale"))?;
+        if sdt != Dtype::F8_E4M3 || sshape.len() != 2 || sshape[0] != rows.div_ceil(128) * 128 || sshape[1] != (cols / 16).div_ceil(4) * 4 {
+            return Err(bad(format!("nvfp4 scales are {sdt:?} {sshape:?} for codes {shape:?}")));
+        }
+        let fmt = self.inner.raw(&format!("{base}.comfy_quant"))?.2;
+        if !std::str::from_utf8(fmt).unwrap_or("").contains("\"nvfp4\"") {
+            return Err(bad(format!("comfy_quant is {:?}, not nvfp4", String::from_utf8_lossy(fmt))));
+        }
+        let alpha = self.inner.scalar(&format!("{base}.weight_scale_2"))?;
+        Ok(Nvfp4::from_stored(data, sdata, alpha, rows, cols, true))
+    }
+
+    fn part_of(q: Nvfp4, part: ComfyPart) -> Nvfp4 {
+        match part {
+            ComfyPart::Whole => q,
+            ComfyPart::Third(i) => {
+                let n = q.rows / 3;
+                q.rows(i * n, (i + 1) * n)
+            }
+            ComfyPart::SwapHalves => q.swap_halves(),
+        }
+    }
+
+    fn part_rows(v: &[f32], rows: usize, part: ComfyPart) -> Vec<f32> {
+        let per = v.len() / rows;
+        match part {
+            ComfyPart::Whole => v.to_vec(),
+            ComfyPart::Third(i) => {
+                let n = rows / 3;
+                v[i * n * per..(i + 1) * n * per].to_vec()
+            }
+            ComfyPart::SwapHalves => {
+                let h = rows / 2;
+                let mut out = v[h * per..].to_vec();
+                out.extend_from_slice(&v[..h * per]);
+                out
+            }
+        }
+    }
+}
+
+impl WeightSource for ComfySource {
+    fn contains(&self, name: &str) -> bool {
+        comfy_h3_key(name).is_some_and(|(k, _)| self.inner.contains(&k))
+    }
+
+    fn shape(&self, name: &str) -> Result<Vec<usize>> {
+        let (k, part) = comfy_h3_key(name).ok_or_else(|| Error::Weights(format!("`{name}` has no ComfyUI counterpart")))?;
+        let mut shape = self.inner.shape(&k)?;
+        if self.is_nvfp4(&k) && shape.len() == 2 {
+            shape[1] *= 2;
+        }
+        if let ComfyPart::Third(_) = part {
+            shape[0] /= 3;
+        }
+        Ok(shape)
+    }
+
+    fn get(&self, name: &str, shape: &[usize]) -> Result<Vec<f32>> {
+        let (k, part) = comfy_h3_key(name).ok_or_else(|| Error::Weights(format!("`{name}` has no ComfyUI counterpart")))?;
+        let stored = self.shape(name)?;
+        if squeeze(&stored) != squeeze(shape) {
+            return Err(Error::Weights(format!("`{name}` (`{k}`) is {stored:?}, expected {shape:?}")));
+        }
+        if self.is_nvfp4(&k) {
+            return Ok(Self::part_of(self.nvfp4(&k)?, part).dequantize());
+        }
+        let full = self.inner.shape(&k)?;
+        let v = self.inner.get(&k, &full)?;
+        Ok(Self::part_rows(&v, full[0], part))
+    }
+
+    fn stored(&self, key: &str) -> Result<Option<Stored>> {
+        let Some((k, part)) = comfy_h3_key(&format!("{key}.weight")) else { return Ok(None) };
+        if !self.is_nvfp4(&k) {
+            return Ok(None);
+        }
+        Ok(Some(Stored::Nvfp4(Self::part_of(self.nvfp4(&k)?, part))))
+    }
+
+    fn has_linear(&self, key: &str) -> bool {
+        self.contains(&format!("{key}.weight"))
     }
 }
 
@@ -302,8 +489,10 @@ pub struct Synthetic {
 }
 
 impl WeightSource for Synthetic {
-    fn contains(&self, _name: &str) -> bool {
-        true
+    /// Everything but the ComfyUI table: the synthetic model follows the
+    /// Diffusers layout (time embedder + basis).
+    fn contains(&self, name: &str) -> bool {
+        name != ADALN_TABLE_KEY
     }
 
     fn get(&self, name: &str, shape: &[usize]) -> Result<Vec<f32>> {
@@ -691,10 +880,14 @@ pub fn qwen3vl_manifest(cfg: &Qwen3VlConfig) -> Manifest {
 
 /// Names in `manifest` that `src` lacks (plain, quantized or weight-normed).
 pub fn missing(src: &dyn WeightSource, manifest: &[(String, Vec<usize>)]) -> Vec<String> {
+    let table = src.contains(ADALN_TABLE_KEY);
     manifest
         .iter()
         .filter(|(n, _)| {
             if src.contains(n) {
+                return false;
+            }
+            if table && (n.starts_with("time_embedder.") || n == "adaln_basis.weight") {
                 return false;
             }
             if let Some(k) = n.strip_suffix(".weight") {
@@ -769,6 +962,28 @@ mod tests {
         assert!(!q.iter().any(|(n, _)| n.starts_with("model.language_model.layers.50.")));
         assert!(q.iter().any(|(n, s)| n == "model.visual.deepstack_merger_list.2.norm.weight" && s == &vec![4608]));
         assert!(q.iter().any(|(n, s)| n == "model.visual.patch_embed.proj.weight" && s == &vec![1152, 3, 2, 16, 16]));
+    }
+
+    #[test]
+    fn comfy_keys_map_to_the_single_file_layout() {
+        use ComfyPart::*;
+        let k = |n: &str| comfy_h3_key(n);
+        assert_eq!(k("transformer_blocks.3.attn.to_k.weight"), Some(("blocks.3.attn.qkv_proj.weight".into(), Third(1))));
+        assert_eq!(k("transformer_blocks.3.ff.net.0.proj.weight"), Some(("blocks.3.mlp.fc1.weight".into(), SwapHalves)));
+        assert_eq!(k("transformer_blocks.3.ff.net.2.weight"), Some(("blocks.3.mlp.fc2.weight".into(), Whole)));
+        assert_eq!(k("transformer_blocks.3.attn.to_out.0.weight"), Some(("blocks.3.attn.out_proj.weight".into(), Whole)));
+        assert_eq!(k("transformer_blocks.3.attn.norm_q.weight"), Some(("blocks.3.attn.q_norm.weight".into(), Whole)));
+        assert_eq!(k("transformer_blocks.3.adaln_proj.linear.bias"), Some(("blocks.3.adaln_proj.linear.bias".into(), Whole)));
+        assert_eq!(k("token_refiner.refiner_blocks.1.attn.to_v.weight"), Some(("token_refiner.blocks.1.attn.qkv_proj.weight".into(), Third(2))));
+        assert_eq!(k("token_refiner.final_norm.weight"), Some(("token_refiner.final_norm.weight".into(), Whole)));
+        assert_eq!(k("proj_in.bias"), Some(("video_patch_proj.bias".into(), Whole)));
+        assert_eq!(k("audio_proj_out.weight"), Some(("final_layer.audio_out.weight".into(), Whole)));
+        assert_eq!(k("norm_out.linear.weight"), Some(("final_layer.adaln_proj.linear.weight".into(), Whole)));
+        assert_eq!(k("norm_out.norm.weight"), Some(("final_layer.norm.weight".into(), Whole)));
+        assert_eq!(k("context_embedder.weight"), Some(("condition_proj.weight".into(), Whole)));
+        assert_eq!(k(ADALN_TABLE_KEY), Some((ADALN_TABLE_KEY.into(), Whole)));
+        assert_eq!(k("time_embedder.linear_1.weight"), None);
+        assert_eq!(k("adaln_basis.weight"), None);
     }
 
     #[test]

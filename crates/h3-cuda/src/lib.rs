@@ -92,6 +92,9 @@ pub struct Cuda {
     q8_scratch: std::sync::Mutex<Option<CuBuf>>,
     scalar_conv: bool,
     scalar_attn: bool,
+    /// `H3_CUDA_ATTN_V1=1`: the 16-rows-per-warp attention / VSA fine kernels
+    /// (the v2 kernels, 32 rows per warp, are the default).
+    attn_v1: bool,
     prof: Option<std::sync::Mutex<std::collections::HashMap<String, (f64, usize)>>>,
 }
 
@@ -121,6 +124,12 @@ struct Kernels {
     attention: CudaFunction,
     attention_mma64: CudaFunction,
     attention_mma128: CudaFunction,
+    attention_mma2_64: CudaFunction,
+    attention_mma2_128: CudaFunction,
+    vsa_fine_mma2_64_w2: CudaFunction,
+    vsa_fine_mma2_64_w4: CudaFunction,
+    vsa_fine_mma2_128_w2: CudaFunction,
+    vsa_fine_mma2_128_w4: CudaFunction,
     vsa_pool: CudaFunction,
     vsa_coarse: CudaFunction,
     vsa_fine: CudaFunction,
@@ -295,6 +304,12 @@ impl Cuda {
             attention: get("fw_attention")?,
             attention_mma64: get("fw_attention_mma64")?,
             attention_mma128: get("fw_attention_mma128")?,
+            attention_mma2_64: get("fw_attention_mma2_64")?,
+            attention_mma2_128: get("fw_attention_mma2_128")?,
+            vsa_fine_mma2_64_w2: get("fw_vsa_fine_mma2_64_w2")?,
+            vsa_fine_mma2_64_w4: get("fw_vsa_fine_mma2_64_w4")?,
+            vsa_fine_mma2_128_w2: get("fw_vsa_fine_mma2_128_w2")?,
+            vsa_fine_mma2_128_w4: get("fw_vsa_fine_mma2_128_w4")?,
             vsa_pool: get("fw_vsa_pool")?,
             vsa_coarse: get("fw_vsa_coarse")?,
             vsa_fine: get("fw_vsa_fine")?,
@@ -324,6 +339,7 @@ impl Cuda {
             q8_scratch: std::sync::Mutex::new(None),
             scalar_conv: env1("H3_CUDA_SCALAR_CONV"),
             scalar_attn: env1("H3_CUDA_SCALAR_ATTN"),
+            attn_v1: env1("H3_CUDA_ATTN_V1"),
             prof: env1("H3_PROFILE").then(Default::default),
         })
     }
@@ -378,7 +394,7 @@ impl Cuda {
 
     fn kernel_name(&self, f: &CudaFunction) -> &'static str {
         let k = &self.f;
-        let all: [(&CudaFunction, &'static str); 37] = [
+        let all: [(&CudaFunction, &'static str); 43] = [
             (&k.bias_act, "bias_act"),
             (&k.swiglu, "swiglu"),
             (&k.gate_residual, "gate_residual"),
@@ -404,6 +420,12 @@ impl Cuda {
             (&k.attention, "attention (scalar)"),
             (&k.attention_mma64, "attention (mma, d64)"),
             (&k.attention_mma128, "attention (mma, d128)"),
+            (&k.attention_mma2_64, "attention (mma2, d64)"),
+            (&k.attention_mma2_128, "attention (mma2, d128)"),
+            (&k.vsa_fine_mma2_64_w2, "vsa fine (mma2, d64)"),
+            (&k.vsa_fine_mma2_64_w4, "vsa fine (mma2, d64)"),
+            (&k.vsa_fine_mma2_128_w2, "vsa fine (mma2, d128)"),
+            (&k.vsa_fine_mma2_128_w4, "vsa fine (mma2, d128)"),
             (&k.vsa_pool, "vsa pool"),
             (&k.vsa_coarse, "vsa coarse + top-k"),
             (&k.vsa_fine, "vsa fine (scalar)"),
@@ -681,7 +703,7 @@ impl Backend for Cuda {
             &self.f.dequant_nvfp4,
             Self::elems(n),
             (256, 1, 1),
-            &[Arg::P(self.ptr(&out)), Arg::P(self.ptr(&gc)), Arg::P(self.ptr(&gs)), Arg::L(n as i64), Arg::I(q.cols as i32), Arg::F(q.alpha)],
+            &[Arg::P(self.ptr(&out)), Arg::P(self.ptr(&gc)), Arg::P(self.ptr(&gs)), Arg::L(n as i64), Arg::I(q.cols as i32), Arg::F(q.alpha), Arg::I(q.first_high as i32)],
         );
         CuWeight { buf: out, rows: q.rows, cols: q.cols, quant: None }
     }
@@ -937,15 +959,17 @@ impl Backend for Cuda {
         assert!(d <= 128 && heads.is_multiple_of(kv_heads));
         assert!(heads * sq * d <= q.len && kv_heads * sk * d <= k.len && kv_heads * sk * d <= v.len && sq * heads * d <= out.len);
         let scale = 1.0 / (d as f32).sqrt();
-        let mma = match d {
-            128 => Some(&self.f.attention_mma128),
-            64 => Some(&self.f.attention_mma64),
+        let mma = match (d, self.attn_v1) {
+            (128, true) => Some((&self.f.attention_mma128, 64)),
+            (64, true) => Some((&self.f.attention_mma64, 64)),
+            (128, false) => Some((&self.f.attention_mma2_128, 128)),
+            (64, false) => Some((&self.f.attention_mma2_64, 128)),
             _ => None,
         };
-        if let (Some(f), true, false) = (mma, self.ampere, self.scalar_attn) {
+        if let (Some((f, qr)), true, false) = (mma, self.ampere, self.scalar_attn) {
             self.launch(
                 f,
-                (sq.div_ceil(64) as u32, heads as u32, 1),
+                (sq.div_ceil(qr) as u32, heads as u32, 1),
                 (128, 1, 1),
                 &[
                     Arg::P(self.ptr(q)),
@@ -1088,16 +1112,22 @@ impl Backend for Cuda {
             Arg::I(s.heads as i32),
             Arg::I(s.seq as i32),
         ];
-        let mma = match s.d {
-            128 => Some(&self.f.vsa_fine_mma128),
-            64 => Some(&self.f.vsa_fine_mma64),
+        // v1: 64 query rows per block (te/64 blocks per tile), 128 threads.
+        // v2: 64 rows (2 warps) for 64-token tiles, 128 rows (4 warps) and
+        // te/128 blocks per tile otherwise.
+        let mma = match (s.d, self.attn_v1, s.te >= 128) {
+            (128, true, _) => Some((&self.f.vsa_fine_mma128, (s.te / 64) as u32, 128)),
+            (64, true, _) => Some((&self.f.vsa_fine_mma64, (s.te / 64) as u32, 128)),
+            (128, false, false) => Some((&self.f.vsa_fine_mma2_128_w2, 1, 64)),
+            (64, false, false) => Some((&self.f.vsa_fine_mma2_64_w2, 1, 64)),
+            (128, false, true) => Some((&self.f.vsa_fine_mma2_128_w4, (s.te / 128) as u32, 128)),
+            (64, false, true) => Some((&self.f.vsa_fine_mma2_64_w4, (s.te / 128) as u32, 128)),
             _ => None,
         };
-        if let (Some(f), true, false) = (mma, self.ampere, self.scalar_attn) {
+        if let (Some((f, sub, threads)), true, false) = (mma, self.ampere, self.scalar_attn) {
             args.push(Arg::F(s.scale));
             tail(&mut args);
-            let sub = (s.te / 64) as u32;
-            self.launch(f, (s.nb as u32 * sub, s.heads as u32, 1), (128, 1, 1), &args);
+            self.launch(f, (s.nb as u32 * sub, s.heads as u32, 1), (threads, 1, 1), &args);
         } else {
             args.push(Arg::I(s.d as i32));
             args.push(Arg::F(s.scale));

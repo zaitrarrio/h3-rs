@@ -33,7 +33,8 @@ fn nvfp4_of(src: &SafetensorsDir, key: &str, rows: usize, cols: usize) -> Result
         return Err(Error::Weights(format!("`{key}.weight_scale` is {sshape:?}, expected [{rows}, {}]", cols / 16)));
     }
     let global = src.scalar(&format!("{key}.weight_global_scale"))?;
-    Ok(Nvfp4 { packed: packed.to_vec(), scales: scales.to_vec(), alpha: 1.0 / global, rows, cols })
+    // compressed-tensors packs the first code of each pair in the low nibble.
+    Ok(Nvfp4 { packed: packed.to_vec(), scales: scales.to_vec(), alpha: 1.0 / global, rows, cols, first_high: false })
 }
 
 /// A linear from a plain or NVFP4 checkpoint.
