@@ -1,7 +1,7 @@
 // fw_linear, f16 math variant (needs `shader-f16`; f16 weights only,
 // `H3_WGPU_F16=1`). Shared tiles are f16; each K-tile of 16 is summed in
 // vec4<f16> and flushed into f32 accumulators.
-struct P { m: u32, n: u32, k: u32, x_row: u32, y_row: u32, has_bias: u32, act: u32, _p: u32 }
+struct P { m: u32, n: u32, k: u32, x_off: u32, y_off: u32, has_bias: u32, act: u32, _p: u32 }
 @group(0) @binding(0) var<uniform> p: P;
 @group(0) @binding(1) var<storage, read> x: array<f32>;
 @group(0) @binding(2) var<storage, read> w: array<u32>;
@@ -20,7 +20,7 @@ fn store(m: u32, n: u32, v: f32) {
     if (m >= p.m || n >= p.n) { return; }
     var o = v;
     if (p.has_bias != 0u) { o = o + bias[n]; }
-    y[(p.y_row + m) * p.n + n] = act(o, p.act);
+    y[p.y_off + m * p.n + n] = act(o, p.act);
 }
 
 @compute @workgroup_size(16, 16)
@@ -41,7 +41,7 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>, @builtin(workgroup_id) wid
             let kk = e % 16u;
             let gk = k0 + kk;
             var xv = 0.0h;
-            if (m0 + r < p.m && gk < p.k) { xv = f16(x[(p.x_row + m0 + r) * p.k + gk]); }
+            if (m0 + r < p.m && gk < p.k) { xv = f16(x[p.x_off + (m0 + r) * p.k + gk]); }
             xs[kk * 64u + r] = xv;
             var wv = 0.0h;
             if (n0 + r < p.n && gk < p.k) { wv = load_w((n0 + r) * p.k + gk); }

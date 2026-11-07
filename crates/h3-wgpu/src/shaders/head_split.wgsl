@@ -1,8 +1,10 @@
 // fw_head_split: one 256-thread workgroup per token. Optional per-head RMS
 // (over `hd` channels, optional weight[hd]), optional rotate-half RoPE over the
 // first `rot` channels of every head (cos/sin [rows, rot/2]), scatter to
-// [heads, rows, hd].
-struct P { rows: u32, stride: u32, col_off: u32, heads: u32, hd: u32, has_norm: u32, has_w: u32, has_rope: u32, rot: u32, eps: f32, _a: u32, _b: u32 }
+// [heads, rows_total, hd]. `rows` tokens of this dispatch start at global
+// row `row0` (the source may be bound as a row sub-range: see
+// Wgpu::head_split); cos/sin and the output are indexed by the global row.
+struct P { rows: u32, stride: u32, col_off: u32, heads: u32, hd: u32, has_norm: u32, has_w: u32, has_rope: u32, rot: u32, eps: f32, row0: u32, rows_total: u32 }
 @group(0) @binding(0) var<uniform> p: P;
 @group(0) @binding(1) var<storage, read> src: array<f32>;
 @group(0) @binding(2) var<storage, read> nw: array<f32>;
@@ -19,6 +21,7 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>, @builtin(workgroup_id) wid
     let t = lid.x;
     let width = p.heads * p.hd;
     let base = r * p.stride + p.col_off;
+    let g = r + p.row0;
     if (p.has_norm != 0u) {
         // One thread per head sums its channels (heads ≤ 256).
         for (var hh = t; hh < p.heads; hh = hh + 256u) {
@@ -47,11 +50,11 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>, @builtin(workgroup_id) wid
                 y = y * inv[hh];
                 if (p.has_w != 0u) { y = y * nw[partner_c]; }
             }
-            let co = cs[r * half + ang];
-            let si = sn[r * half + ang];
+            let co = cs[g * half + ang];
+            let si = sn[g * half + ang];
             if (c < half) { x = x * co - y * si; } else { x = x * co + y * si; }
         }
-        out[(hh * p.rows + r) * p.hd + c] = x;
+        out[(hh * p.rows_total + g) * p.hd + c] = x;
     }
     if (p.rows == 0xfffffffeu) { out[0] = nw[0] + cs[0] + sn[0]; }
 }

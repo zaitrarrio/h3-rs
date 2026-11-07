@@ -1,9 +1,9 @@
-// fw_linear: y[y_row + m, n] = act(Σ_k x[x_row + m, k] · W[n, k] + b[n]).
+// fw_linear: y[y_off + m·n + n'] = act(Σ_k x[x_off + m·k + k'] · W[n', k'] + b[n']) (element offsets).
 // 64×64 output tile per workgroup, 16×16 threads, the 4×4 register block as
 // four named vec4 (NVIDIA's Vulkan compiler spills array accumulators). W is
 // read through `load_w`: f16 pairs, f32, or int8 / 4-bit codes with per-group
 // scales (`p._p` columns per group, binding 5).
-struct P { m: u32, n: u32, k: u32, x_row: u32, y_row: u32, has_bias: u32, act: u32, _p: u32 }
+struct P { m: u32, n: u32, k: u32, x_off: u32, y_off: u32, has_bias: u32, act: u32, _p: u32 }
 @group(0) @binding(0) var<uniform> p: P;
 @group(0) @binding(1) var<storage, read> x: array<f32>;
 @group(0) @binding(2) var<storage, read> w: array<{W_TYPE}>;
@@ -19,7 +19,7 @@ fn store(m: u32, n: u32, v: f32) {
     if (m >= p.m || n >= p.n) { return; }
     var o = v;
     if (p.has_bias != 0u) { o = o + bias[n]; }
-    y[(p.y_row + m) * p.n + n] = act(o, p.act);
+    y[p.y_off + m * p.n + n] = act(o, p.act);
 }
 
 @compute @workgroup_size(16, 16)
@@ -40,7 +40,7 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>, @builtin(workgroup_id) wid
             let kk = e % 16u;
             let gk = k0 + kk;
             var xv = 0.0;
-            if (m0 + r < p.m && gk < p.k) { xv = x[(p.x_row + m0 + r) * p.k + gk]; }
+            if (m0 + r < p.m && gk < p.k) { xv = x[p.x_off + (m0 + r) * p.k + gk]; }
             xs[kk * 64u + r] = xv;
             var wv = 0.0;
             if (n0 + r < p.n && gk < p.k) { wv = load_w((n0 + r) * p.k + gk); }

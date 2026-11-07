@@ -102,6 +102,7 @@ struct Kernels {
     rms: CudaFunction,
     layer_norm: CudaFunction,
     head_split: CudaFunction,
+    head_split_warp: CudaFunction,
     patch: CudaFunction,
     flow_step: CudaFunction,
     axpby: CudaFunction,
@@ -275,6 +276,7 @@ impl Cuda {
             rms: get("fw_rms")?,
             layer_norm: get("fw_layer_norm")?,
             head_split: get("fw_head_split")?,
+            head_split_warp: get("fw_head_split_warp")?,
             patch: get("fw_patch")?,
             flow_step: get("fw_flow_step")?,
             axpby: get("fw_axpby")?,
@@ -376,13 +378,14 @@ impl Cuda {
 
     fn kernel_name(&self, f: &CudaFunction) -> &'static str {
         let k = &self.f;
-        let all: [(&CudaFunction, &'static str); 36] = [
+        let all: [(&CudaFunction, &'static str); 37] = [
             (&k.bias_act, "bias_act"),
             (&k.swiglu, "swiglu"),
             (&k.gate_residual, "gate_residual"),
             (&k.rms, "rms_norm (+residual, modulation)"),
             (&k.layer_norm, "layer_norm"),
             (&k.head_split, "head_split (qk-norm + rope)"),
+            (&k.head_split_warp, "head_split (qk-norm + rope)"),
             (&k.patch, "patchify / unpatchify"),
             (&k.flow_step, "flow_step"),
             (&k.axpby, "axpby"),
@@ -905,8 +908,9 @@ impl Backend for Cuda {
             assert!(r.rot.is_multiple_of(2) && r.rot <= hd);
         }
         let w = norm.as_ref().and_then(|n| n.w);
+        let warp_kernel = hd.is_multiple_of(32) && hd <= 128;
         self.launch(
-            &self.f.head_split,
+            if warp_kernel { &self.f.head_split_warp } else { &self.f.head_split },
             (rows as u32, 1, 1),
             (256, 1, 1),
             &[

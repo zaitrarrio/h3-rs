@@ -91,6 +91,10 @@ pub struct WgpuOptions {
     pub f16: bool,
     /// Accept a CPU rasterizer adapter (`H3_ALLOW_SOFTWARE=1`).
     pub allow_software: bool,
+    /// Cap one storage binding at this many bytes, below the device's limit,
+    /// forcing the row-chunked GEMM / head_split paths (`H3_WGPU_MAX_BINDING`;
+    /// the conformance test sets 64 KiB).
+    pub max_binding: Option<u64>,
 }
 
 impl WgpuOptions {
@@ -98,6 +102,7 @@ impl WgpuOptions {
         Self {
             f16: std::env::var("H3_WGPU_F16").is_ok_and(|v| v == "1"),
             allow_software: std::env::var("H3_ALLOW_SOFTWARE").is_ok_and(|v| v == "1"),
+            max_binding: std::env::var("H3_WGPU_MAX_BINDING").ok().and_then(|v| v.parse().ok()),
         }
     }
 }
@@ -132,6 +137,7 @@ pub struct Wgpu {
     flash_ok: bool,
     coarse_ok: bool,
     f16: bool,
+    max_binding: Option<u64>,
     pipelines: Mutex<HashMap<String, Arc<wgpu::ComputePipeline>>>,
     names: Mutex<HashMap<usize, String>>,
     tag: Mutex<Option<String>>,
@@ -229,6 +235,7 @@ impl Wgpu {
             flash_ok,
             coarse_ok,
             f16,
+            max_binding: opts.max_binding,
             pipelines: Mutex::new(HashMap::new()),
             names: Mutex::new(HashMap::new()),
             tag: Mutex::new(None),
@@ -351,6 +358,42 @@ impl Wgpu {
     }
 
     fn dispatch(&self, pipe: &wgpu::ComputePipeline, params: &[u32], bufs: &[&GBuf], groups: (u32, u32, u32)) {
+        let full: Vec<(&GBuf, Option<(u64, u64)>)> = bufs.iter().map(|b| (*b, None)).collect();
+        self.dispatch_ranges(pipe, params, &full, groups);
+    }
+
+    /// Bytes one storage binding may cover (2 GiB on NVIDIA Vulkan); larger
+    /// activations are bound as row sub-ranges by the ops that touch them.
+    fn max_binding_bytes(&self) -> u64 {
+        let l = self.device.limits();
+        let dev = (l.max_storage_buffer_binding_size as u64).min(l.max_buffer_size);
+        match self.max_binding {
+            Some(v) => v.min(dev),
+            None => dev,
+        }
+    }
+
+    /// Rows per chunk so that `rows × width × 4` bytes (plus the alignment
+    /// remainder) fit one binding, for the widest of the given widths.
+    fn row_chunk(&self, widths: &[usize]) -> usize {
+        let lim = self.max_binding_bytes() as usize;
+        let wmax = widths.iter().copied().max().unwrap_or(1).max(1);
+        (lim.saturating_sub(256) / (wmax * 4)).max(1)
+    }
+
+    /// A binding covering elements `[start, start + len)`: the byte range,
+    /// aligned down to the device's offset alignment, and the element offset
+    /// of `start` inside it.
+    fn sub_range(&self, start: usize, len: usize) -> ((u64, u64), usize) {
+        let align = (self.device.limits().min_storage_buffer_offset_alignment as usize).max(4);
+        let bytes = start * 4;
+        let off = bytes - bytes % align;
+        let rem = (bytes - off) / 4;
+        ((off as u64, ((rem + len) * 4) as u64), rem)
+    }
+
+    /// `dispatch` where a buffer may be bound as a byte sub-range `(offset, size)`.
+    fn dispatch_ranges(&self, pipe: &wgpu::ComputePipeline, params: &[u32], bufs: &[(&GBuf, Option<(u64, u64)>)], groups: (u32, u32, u32)) {
         let tag = self.tag.lock().unwrap().take();
         let slot = self.prof.as_ref().map(|prof| {
             let full = {
@@ -378,8 +421,16 @@ impl Wgpu {
             usage: wgpu::BufferUsages::UNIFORM,
         });
         let mut entries = vec![wgpu::BindGroupEntry { binding: 0, resource: ubuf.as_entire_binding() }];
-        for (i, b) in bufs.iter().enumerate() {
-            entries.push(wgpu::BindGroupEntry { binding: i as u32 + 1, resource: b.buf.as_entire_binding() });
+        for (i, (b, range)) in bufs.iter().enumerate() {
+            let resource = match range {
+                None => b.buf.as_entire_binding(),
+                Some((offset, size)) => wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                    buffer: &b.buf,
+                    offset: *offset,
+                    size: std::num::NonZeroU64::new(*size),
+                }),
+            };
+            entries.push(wgpu::BindGroupEntry { binding: i as u32 + 1, resource });
         }
         let bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: None,
@@ -675,6 +726,10 @@ impl Backend for Wgpu {
         )
     }
 
+    fn max_buffer_elems(&self) -> usize {
+        (self.max_binding_bytes() / 4) as usize
+    }
+
     fn alloc(&self, len: usize) -> GBuf {
         GBuf {
             buf: Arc::new(self.device.create_buffer(&wgpu::BufferDescriptor {
@@ -863,17 +918,42 @@ impl Backend for Wgpu {
             rows as u32,
             w.rows as u32,
             w.cols as u32,
-            x_row as u32,
-            y_row as u32,
+            (x_row * w.cols) as u32,
+            (y_row * w.rows) as u32,
             bias.is_some() as u32,
             act_code,
             w.quant.as_ref().map_or(0, |q| q.2) as u32,
         ];
-        let groups = (w.rows.div_ceil(64) as u32, rows.div_ceil(64) as u32, 1);
         let b = bias.unwrap_or(&self.dummy);
-        match &w.quant {
-            Some((_, scales, _)) => self.dispatch(&pipe, &p, &[x, &w.buf, b, y, scales], groups),
-            None => self.dispatch(&pipe, &p, &[x, &w.buf, b, y], groups),
+        let lim = self.max_binding_bytes();
+        if (x.len as u64) * 4 <= lim && (y.len as u64) * 4 <= lim {
+            let groups = (w.rows.div_ceil(64) as u32, rows.div_ceil(64) as u32, 1);
+            return match &w.quant {
+                Some((_, scales, _)) => self.dispatch(&pipe, &p, &[x, &w.buf, b, y, scales], groups),
+                None => self.dispatch(&pipe, &p, &[x, &w.buf, b, y], groups),
+            };
+        }
+        // An activation larger than one binding (the DiT's fused QKV at
+        // 38k tokens is 3.3 GB): run the GEMM over row chunks, binding each
+        // chunk's rows of x and y as sub-ranges; the binding offset is
+        // aligned down and the remainder rides in the element offsets.
+        let chunk = self.row_chunk(&[w.cols, w.rows]);
+        let mut r0 = 0;
+        while r0 < rows {
+            let n = chunk.min(rows - r0);
+            let mut pc = p;
+            pc[0] = n as u32;
+            let (xr, xo) = self.sub_range((x_row + r0) * w.cols, n * w.cols);
+            let (yr, yo) = self.sub_range((y_row + r0) * w.rows, n * w.rows);
+            pc[3] = xo as u32;
+            pc[4] = yo as u32;
+            let (xr, yr) = (Some(xr), Some(yr));
+            let groups = (w.rows.div_ceil(64) as u32, n.div_ceil(64) as u32, 1);
+            match &w.quant {
+                Some((_, scales, _)) => self.dispatch_ranges(&pipe, &pc, &[(x, xr), (&w.buf, None), (b, None), (y, yr), (scales, None)], groups),
+                None => self.dispatch_ranges(&pipe, &pc, &[(x, xr), (&w.buf, None), (b, None), (y, yr)], groups),
+            }
+            r0 += n;
         }
     }
 
@@ -946,21 +1026,19 @@ impl Backend for Wgpu {
             Some(r) => (1u32, r.cos, r.sin, r.rot),
             None => (0, d, d, 0),
         };
-        let p = [
-            rows as u32,
-            stride as u32,
-            col_off as u32,
-            heads as u32,
-            hd as u32,
-            has_norm,
-            norm.and_then(|n| n.w).is_some() as u32,
-            has_rope,
-            rot as u32,
-            eps.to_bits(),
-            0,
-            0,
-        ];
-        self.dispatch(&pipe, &p, &[src, w, cs, sn, out], Self::grid(rows));
+        let has_w = norm.and_then(|n| n.w).is_some() as u32;
+        let chunk = if (src.len as u64) * 4 <= self.max_binding_bytes() { rows } else { self.row_chunk(&[stride]) };
+        let mut r0 = 0;
+        while r0 < rows {
+            let n = chunk.min(rows - r0);
+            let (sr, rem) = if chunk == rows { (None, 0) } else {
+                let (r, rem) = self.sub_range(r0 * stride, n * stride);
+                (Some(r), rem)
+            };
+            let p = [n as u32, stride as u32, (col_off + rem) as u32, heads as u32, hd as u32, has_norm, has_w, has_rope, rot as u32, eps.to_bits(), r0 as u32, rows as u32];
+            self.dispatch_ranges(&pipe, &p, &[(src, sr), (w, None), (cs, None), (sn, None), (out, None)], Self::grid(n));
+            r0 += n;
+        }
     }
 
     #[allow(clippy::too_many_arguments)]

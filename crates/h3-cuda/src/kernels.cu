@@ -60,6 +60,20 @@ __device__ __forceinline__ double block_dsum256(double v, double* red) {
     __syncthreads();
     return r;
 }
+__device__ __forceinline__ float block_fsum256(float v, float* red) {
+    const int t = threadIdx.x;
+    for (int o = 16; o > 0; o >>= 1) v += __shfl_xor_sync(0xffffffffu, v, o);
+    if ((t & 31) == 0) red[t >> 5] = v;
+    __syncthreads();
+    float r = 0.0f;
+    if (t < 8) r = red[t];
+    if (t < 32) for (int o = 4; o > 0; o >>= 1) r += __shfl_xor_sync(0xffffffffu, r, o);
+    if (t == 0) red[8] = r;
+    __syncthreads();
+    r = red[8];
+    __syncthreads();
+    return r;
+}
 // PyTorch reflect padding index (no edge repeat); -1 for zero padding.
 __device__ __forceinline__ int pad_index(int p, int n, int reflect) {
     if (p >= 0 && p < n) return p;
@@ -120,7 +134,7 @@ extern "C" __global__ void fw_rms(u64 h_, u64 a_, u64 out_, int rows, int dim, i
                                   int gkind, u64 gvec_, u64 gtab_, u64 gidx_, int gslots, int gslot,
                                   int has_w, u64 w_, int has_mod, u64 mtab_, u64 midx_, int mslots, int mscale, int mshift,
                                   float eps) {
-    __shared__ double red[9];
+    __shared__ float red[9];
     bf16_t* h = (bf16_t*)h_;
     const bf16_t* a = (const bf16_t*)a_;
     const bf16_t* w = (const bf16_t*)w_;
@@ -130,7 +144,9 @@ extern "C" __global__ void fw_rms(u64 h_, u64 a_, u64 out_, int rows, int dim, i
     const long base = (long)row * dim;
     float cache[RMS_REG];
     const bool reg = dim <= 256 * RMS_REG;
-    double ss = 0.0;
+    // f32 accumulation: the inputs are bf16 and double runs at 1/32 rate on
+    // GeForce / RTX workstation parts (this kernel was 5 ms/call on an A6000).
+    float ss = 0.0f;
     for (int j = threadIdx.x, i = 0; j < dim; j += 256, ++i) {
         float v = ld(h, base + j);
         if (mode == 1) {
@@ -139,10 +155,10 @@ extern "C" __global__ void fw_rms(u64 h_, u64 a_, u64 out_, int rows, int dim, i
             h[base + j] = bf(v);
         }
         if (reg) cache[i] = v;
-        ss += (double)v * (double)v;
+        ss += v * v;
     }
-    const double ms = block_dsum256(ss, red) / dim;
-    const float inv = (float)(1.0 / sqrt(ms + (double)eps));
+    const float ms = block_fsum256(ss, red) / dim;
+    const float inv = rsqrtf(ms + eps);
     const float* mt = (const float*)mtab_;
     const unsigned* mi = (const unsigned*)midx_;
     long mbase = 0;
@@ -217,6 +233,56 @@ extern "C" __global__ void fw_head_split(u64 src_, u64 out_, int rows, int strid
             out[o + half] = bf(x2 * co + x1 * si);
         } else {
             out[o] = bf(x1);
+        }
+    }
+}
+
+// One warp per head (hd % 32 == 0, hd <= 128): lane l owns channels
+// [l·k, l·k+k) with k = hd/32; the sum of squares is a warp reduction and the
+// RoPE partner channel is re-read from global (L1-resident). Replaces the
+// shared-memory atomics of fw_head_split for the DiT's 128-wide heads.
+extern "C" __global__ void fw_head_split_warp(u64 src_, u64 out_, int rows, int stride, int col_off, int heads, int hd,
+                                              int has_norm, int has_w, u64 w_, float eps, int has_rope, u64 cos_, u64 sin_, int rot) {
+    const bf16_t *src = (const bf16_t*)src_, *w = (const bf16_t*)w_;
+    const float *cs = (const float*)cos_, *sn = (const float*)sin_;
+    bf16_t* out = (bf16_t*)out_;
+    const int r = blockIdx.x;
+    if (r >= rows) return;
+    const int warp = threadIdx.x >> 5, lane = threadIdx.x & 31, k = hd >> 5;
+    const long base = (long)r * stride + col_off;
+    const int half = rot / 2;
+    for (int hh = warp; hh < heads; hh += 8) {
+        const long hbase = base + (long)hh * hd;
+        float x[4];
+        float ss = 0.0f;
+        #pragma unroll
+        for (int i = 0; i < 4; ++i) {
+            x[i] = i < k ? ld(src, hbase + lane * k + i) : 0.0f;
+            ss += x[i] * x[i];
+        }
+        float hinv = 1.0f;
+        if (has_norm) {
+            for (int o = 16; o > 0; o >>= 1) ss += __shfl_xor_sync(0xffffffffu, ss, o);
+            hinv = rsqrtf(ss / hd + eps);
+        }
+        const long o = ((long)hh * rows + r) * hd;
+        #pragma unroll
+        for (int i = 0; i < 4; ++i) {
+            if (i >= k) break;
+            const int c = lane * k + i;
+            if (has_rope && c >= half && c < rot) continue;  // written by the partner channel
+            float x1 = x[i];
+            if (has_norm) { x1 *= hinv; if (has_w) x1 *= ld(w, c); }
+            if (has_rope && c < half) {
+                float x2 = ld(src, hbase + c + half);
+                if (has_norm) { x2 *= hinv; if (has_w) x2 *= ld(w, c + half); }
+                const long ti = (long)r * half + c;
+                const float co = cs[ti], si = sn[ti];
+                out[o + c] = bf(x1 * co - x2 * si);
+                out[o + c + half] = bf(x2 * co + x1 * si);
+            } else {
+                out[o + c] = bf(x1);
+            }
         }
     }
 }

@@ -59,3 +59,24 @@ fn wgpu_f16_matches_cpu_reference() {
     let bad: Vec<_> = results.iter().filter(|r| !r.ok).map(|r| format!("{} {:.2e}", r.name, r.rel_err)).collect();
     assert!(bad.is_empty(), "failed: {bad:?}");
 }
+
+/// The row-chunked GEMM / head_split paths that a > 2 GiB activation takes
+/// on a real card, forced here by a 64 KiB binding cap.
+#[test]
+fn wgpu_chunked_bindings_match_cpu_reference() {
+    let mut opts = h3_wgpu::WgpuOptions::from_env();
+    if std::env::var("CI").is_ok() {
+        opts.allow_software = true;
+    }
+    opts.max_binding = Some(65536);
+    let be = match h3_wgpu::Wgpu::with_options(opts) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("skipping: {e}");
+            return;
+        }
+    };
+    let results = h3_model::check::run_all(&be, 2e-3);
+    let bad: Vec<_> = results.iter().filter(|r| !r.ok).map(|r| r.name.clone()).collect();
+    assert!(bad.is_empty(), "failed: {bad:?}");
+}

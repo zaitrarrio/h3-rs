@@ -1,0 +1,209 @@
+### cmd 1: conformance
++ nvidia-smi --query-gpu=name,driver_version,power.limit,memory.total,clocks.max.sm --format=csv
+name, driver_version, power.limit [W], memory.total [MiB], clocks.max.sm [MHz]
+NVIDIA RTX A6000, 570.195.03, 300.00 W, 46068 MiB, 2100 MHz
++ nproc
+48
++ free -g
++ head -2
+               total        used        free      shared  buff/cache   available
+Mem:             282          56          40           0         190         226
++ /w/h3-bin --help
++ head -1
+MiniMax H3 video + audio generation on CPU, WebGPU or CUDA
++ echo '== check cuda (scalar attention / conv)'
+== check cuda (scalar attention / conv)
++ H3_CUDA_SCALAR_ATTN=1
++ H3_CUDA_SCALAR_CONV=1
++ timeout 1500 /w/h3-bin check --backend cuda
++ grep -v ' ok$'
++ tail -40
+cuda NVIDIA RTX A6000 (sm_86)
+all 90 checks pass (tolerance 3e-2)
++ echo '== check cuda (mma)'
+== check cuda (mma)
++ timeout 1500 /w/h3-bin check --backend cuda
++ grep -v ' ok$'
++ tail -40
+cuda NVIDIA RTX A6000 (sm_86)
+all 90 checks pass (tolerance 3e-2)
++ echo '== vulkan'
+== vulkan
++ vulkaninfo --summary
++ grep -iE 'deviceName|driverName|driverInfo'
++ head -6
+	deviceName         = NVIDIA RTX A6000
+	driverName         = NVIDIA
+	driverInfo         = 570.195.03
+	deviceName         = llvmpipe (LLVM 20.1.2, 256 bits)
+	driverName         = llvmpipe
+	driverInfo         = Mesa 25.2.8-0ubuntu0.24.04.4 (LLVM 20.1.2)
++ echo '== check wgpu'
+== check wgpu
++ timeout 1500 /w/h3-bin check --backend wgpu
++ grep -v ' ok$'
++ tail -40
+wgpu Vulkan: NVIDIA RTX A6000 (NVIDIA 570.195.03)
+all 90 checks pass (tolerance 1e-2)
+exit 0
+
+
+### cmd 2: bench
++ echo '== bench cuda fasth3-v2 1344x768x124, 4 layers, 2 steps'
+== bench cuda fasth3-v2 1344x768x124, 4 layers, 2 steps
++ tail -15
++ timeout 1500 /w/h3-bin bench --backend cuda --variant fasth3-v2 --layers 4 --steps 2
+cuda NVIDIA RTX A6000 (sm_86)  |  fasth3-v2 1344x768x124  37966 tokens  4 blocks  weights native
+load (synthetic) 22.28s
+adaln tables 9.53s (96768 per block)
+forward 0: 1.892s (472.9 ms/block; ×50/4 blocks ≈ 23.65s)
+forward 1: 1.901s (475.2 ms/block; ×50/4 blocks ≈ 23.76s)
++ echo '== bench cuda with profile'
+== bench cuda with profile
++ H3_PROFILE=1
++ timeout 1500 /w/h3-bin bench --backend cuda --variant fasth3-v2 --layers 4 --steps 1
++ tail -60
+cuda NVIDIA RTX A6000 (sm_86)  |  fasth3-v2 1344x768x124  37966 tokens  4 blocks  weights native
+load (synthetic) 22.82s
+adaln tables 9.62s (96768 per block)
+forward 0: 1.917s (479.2 ms/block; ×50/4 blocks ≈ 23.96s)
+profile (CUDA, synced per op): 1916.5 ms in ops; GEMMs 1032.7 ms at 124.7 TFLOP/s
+  vsa fine (mma, d128)                         629.8 ms  32.9%       4 calls   157.440 ms/call
+  gemm n=28672 k=5376                          373.4 ms  19.5%       4 calls    93.357 ms/call
+  gemm n=21504 k=5376                          278.3 ms  14.5%       4 calls    69.566 ms/call
+  gemm n=5376 k=14336                          186.0 ms   9.7%       4 calls    46.492 ms/call
+  head_split (qk-norm + rope)                  113.0 ms   5.9%      16 calls     7.061 ms/call
+  gemm n=5376 k=7168                            92.5 ms   4.8%       4 calls    23.117 ms/call
+  gemm n=7168 k=5376                            92.1 ms   4.8%       4 calls    23.016 ms/call
+  vsa coarse + top-k                            52.6 ms   2.7%       4 calls    13.142 ms/call
+  rms_norm (+residual, modulation)              45.8 ms   2.4%       9 calls     5.087 ms/call
+  swiglu                                        21.4 ms   1.1%       4 calls     5.359 ms/call
+  vsa pool                                      11.8 ms   0.6%       4 calls     2.942 ms/call
+  gate_residual                                  9.4 ms   0.5%       4 calls     2.362 ms/call
+  gemm+bias n=32 k=5376 (small)                  8.9 ms   0.5%       1 calls     8.877 ms/call
+  gemm+bias n=5376 k=96                          0.9 ms   0.0%       1 calls     0.884 ms/call
+  gemm+bias n=96 k=5376                          0.8 ms   0.0%       1 calls     0.756 ms/call
+  copy (dtod)                                    0.0 ms   0.0%       1 calls     0.035 ms/call
+  gemm+bias n=5376 k=32 (small)                  0.0 ms   0.0%       1 calls     0.024 ms/call
++ echo '== bench cuda dense'
+== bench cuda dense
++ tail -8
++ timeout 1500 /w/h3-bin bench --backend cuda --variant fasth3-v2 --attention dense --layers 4 --steps 2
+cuda NVIDIA RTX A6000 (sm_86)  |  fasth3-v2 1344x768x124  37966 tokens  4 blocks  weights native
+load (synthetic) 23.42s
+adaln tables 11.19s (96768 per block)
+forward 0: 3.258s (814.6 ms/block; ×50/4 blocks ≈ 40.73s)
+forward 1: 3.280s (820.0 ms/block; ×50/4 blocks ≈ 41.00s)
++ echo '== bench wgpu'
+== bench wgpu
++ timeout 2400 /w/h3-bin bench --backend wgpu --variant fasth3-v2 --layers 2 --steps 1
++ tail -15
+wgpu Vulkan: NVIDIA RTX A6000 (NVIDIA 570.195.03)  |  fasth3-v2 1344x768x124  37966 tokens  2 blocks  weights native
+load (synthetic) 26.34s
+
+thread 'main' (9028) panicked at /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wgpu-30.0.1/src/backend/wgpu_core.rs:1619:18:
+wgpu error: Validation Error
+
+Caused by:
+  In Device::create_buffer
+    Buffer size 4354244608 is greater than the maximum buffer size (4292870144)
+
+
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
++ nvidia-smi --query-gpu=memory.used --format=csv
+memory.used [MiB]
+1 MiB
+exit 0
+
+
+### cmd 3: adaln tables
++ '[' '!' -f /w/weights.done ']'
++ sleep 15
++ '[' '!' -f /w/weights.done ']'
++ sleep 15
++ '[' '!' -f /w/weights.done ']'
++ sleep 15
++ '[' '!' -f /w/weights.done ']'
++ sleep 15
++ '[' '!' -f /w/weights.done ']'
++ sleep 15
++ '[' '!' -f /w/weights.done ']'
++ sleep 15
++ '[' '!' -f /w/weights.done ']'
++ sleep 15
++ '[' '!' -f /w/weights.done ']'
++ sleep 15
++ '[' '!' -f /w/weights.done ']'
++ sleep 15
++ '[' '!' -f /w/weights.done ']'
++ sleep 15
++ '[' '!' -f /w/weights.done ']'
++ sleep 15
++ '[' '!' -f /w/weights.done ']'
++ sleep 15
++ '[' '!' -f /w/weights.done ']'
++ sleep 15
++ '[' '!' -f /w/weights.done ']'
++ sleep 15
++ '[' '!' -f /w/weights.done ']'
++ sleep 15
++ '[' '!' -f /w/weights.done ']'
++ sleep 15
++ '[' '!' -f /w/weights.done ']'
++ sleep 15
++ '[' '!' -f /w/weights.done ']'
++ sleep 15
++ '[' '!' -f /w/weights.done ']'
++ sleep 15
++ '[' '!' -f /w/weights.done ']'
++ grep -c FAILED /root/boot.log
+0
++ grep 'weights ' /root/boot.log
++ tail -1
+weights 149G in 468s
++ du -sh /w/h3 /w/trim /w/tae
+138G	/w/h3
+12G	/w/trim
+123M	/w/tae
++ ls /w/h3 /w/h3/transformer
++ head -30
+/w/h3:
+audio_vae
+text_encoder
+tokenizer
+transformer
+vae
+
+/w/h3/transformer:
+config.json
+diffusion_pytorch_model-00001-of-00014.safetensors
+diffusion_pytorch_model-00002-of-00014.safetensors
+diffusion_pytorch_model-00003-of-00014.safetensors
+diffusion_pytorch_model-00004-of-00014.safetensors
+diffusion_pytorch_model-00005-of-00014.safetensors
+diffusion_pytorch_model-00006-of-00014.safetensors
+diffusion_pytorch_model-00007-of-00014.safetensors
+diffusion_pytorch_model-00008-of-00014.safetensors
+diffusion_pytorch_model-00009-of-00014.safetensors
+diffusion_pytorch_model-00010-of-00014.safetensors
+diffusion_pytorch_model-00011-of-00014.safetensors
+diffusion_pytorch_model-00012-of-00014.safetensors
+diffusion_pytorch_model-00013-of-00014.safetensors
+diffusion_pytorch_model-00014-of-00014.safetensors
+diffusion_pytorch_model.safetensors.index.json
++ echo '== adaln tables fasth3-v2'
+== adaln tables fasth3-v2
++ timeout 3600 /w/h3-bin adaln-tables --backend cuda --variant fasth3-v2 --model-dir /w/h3 --out /w/v2.tables
++ tail -20
+18 timesteps [0.0001001358, 0.0003336072, 0.014211655, 0.032424748, 0.04585159, 0.056831896, 0.090909064, 0.10048044, 0.14285713, 0.16725987, 0.23076922, 0.25, 0.35714287, 0.41176468, 0.5, 0.7, 0.999, 1.0] → /w/v2.tables (174.6 MB) in 432.7s
+
+real	7m21.284s
+user	3m19.476s
+sys	2m53.347s
++ ls -la /w/v2.tables
+-rw------- 1 root root 174573856 Nov  6 23:51 /w/v2.tables
++ curl -s -X PUT --upload-file /w/v2.tables 'https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/vast-20261106-2335/results/v2.tables?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261106%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261106T233753Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=d7fe3d6471b8266d5576a95305a378b6af5469818f87cd1c270b10b6045722b6'
++ echo 'tables uploaded'
+tables uploaded
+exit 0
+

@@ -4,9 +4,13 @@ Ported from fastwan-rs; the same R2 command channel. The box polls for
 numbered command scripts and uploads each one's output:
 
 1. `make_boot.py BIN_KEY` writes the bootstrap to `h3-runs/<run>/boot.sh` and
-   prints the instance's `onstart` line. It pulls the mirrored
-   `MiniMaxAI/MiniMax-H3` tree (`H3_WEIGHTS_PREFIX`) and `taeh3.safetensors`
-   into `/w/h3`, then the `h3` binary from `<run>/BIN_KEY`.
+   prints the instance's `onstart` line. It fetches the `h3` binary from
+   `<run>/BIN_KEY`, then pulls every `prefix=dest` of `H3_WEIGHT_SETS` from the
+   `fv-weights` mirror in the background (`/w/weights.done` when complete).
+   Mirrored there: `weights/h3-8step/<sha>/` (FastH3-8-Step-V2 full tree with
+   text encoder and tokenizer, 138 GiB), `weights/h3-base/<sha>/` (MiniMax-H3),
+   `weights/h3-ref2va/`, `weights/fasth3-trim-8step-nvfp4/<sha>/` (11 GiB
+   single file), `weights/auxiliary/tae/eu-20261011/taeh3.safetensors`.
 2. Rent with `vast_api.py` (`PUT /asks/<offer>/`, image
    `nvidia/cuda:12.8.1-runtime-ubuntu24.04`, `runtype: ssh`, env
    `NVIDIA_DRIVER_CAPABILITIES=all`, disk ≥ 250 GB: the base tree is 95 GB

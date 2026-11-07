@@ -342,6 +342,12 @@ pub trait Backend {
 
     fn name(&self) -> String;
 
+    /// The most f32 elements one buffer may hold (WebGPU caps a buffer at
+    /// 4 GiB; the model chunks its FFN hidden to stay under it).
+    fn max_buffer_elems(&self) -> usize {
+        usize::MAX
+    }
+
     // ---- memory ----------------------------------------------------------
     /// Zero-filled.
     fn alloc(&self, len: usize) -> Self::Buf;

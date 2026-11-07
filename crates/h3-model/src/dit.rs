@@ -539,7 +539,10 @@ impl<B: Backend> H3Dit<B> {
         let c = &self.cfg;
         let s = layout.sequence_length;
         let (d, qkv) = (c.hidden, c.dim());
-        let chunk = ffn_chunk.clamp(1, s);
+        // The FFN hidden `[chunk, 2·ffn]` is the largest activation; keep it
+        // under the backend's buffer limit (4 GiB on WebGPU).
+        let chunk_cap = (be.max_buffer_elems() / (2 * c.ffn_dim)).max(1);
+        let chunk = ffn_chunk.min(chunk_cap).clamp(1, s);
         let rope = h3_rope(&layout.position_ids, c.rope_freq_dim, c.rope_theta);
         let (vsa, vsa_dense) = match attention {
             Attention::Dense => (None, None),
