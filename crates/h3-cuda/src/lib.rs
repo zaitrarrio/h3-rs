@@ -112,6 +112,12 @@ pub struct Cuda {
     /// `H3_CUDA_LT_NTH=i`: use cuBLASLt's i-th heuristic candidate for the
     /// MXFP8 GEMMs instead of timing them (experiments).
     lt_nth: Option<usize>,
+    /// MXFP8 GEMMs with `n >= mx_split_min` run as `mx_split` GEMMs over
+    /// row slices of the weight (`H3_CUDA_MX_SPLIT=p`, `H3_CUDA_MX_SPLIT_MIN=n`):
+    /// cuBLASLt's FP8 kernels for the 28672-row FFN-up ran at 355 TFLOP/s on
+    /// an RTX PRO 6000, the 21504-row QKV at 720.
+    mx_split: usize,
+    mx_split_min: usize,
     scalar_conv: bool,
     scalar_attn: bool,
     /// `H3_CUDA_ATTN_V1=1`: the 16-rows-per-warp kernels for dense attention
@@ -241,8 +247,8 @@ struct Lt {
     handle: lt_sys::cublasLtHandle_t,
     workspace: CudaSlice<u8>,
     plans: std::sync::Mutex<PlanCache>,
-    /// MXFP8 plans: (n, k, rows, epilogue 0 none / 1 bias / 2 bias + tanh-GELU).
-    mx_plans: std::sync::Mutex<PlanCache>,
+    /// MXFP8 plans: (n, k, rows, ldc, epilogue 0 none / 1 bias / 2 bias + tanh-GELU).
+    mx_plans: std::sync::Mutex<std::collections::HashMap<(usize, usize, usize, usize, u8), Option<LtPlan>>>,
 }
 
 // SAFETY: the handles are only used from the thread that owns the backend,
@@ -318,11 +324,11 @@ impl Lt {
     /// 32 of K in cuBLASLt's `VEC32_UE8M0` layout; C = D = y (bf16, `n ×
     /// rows`). `epi` 0 = none, 1 = bias, 2 = bias + tanh-GELU. `None` when
     /// cuBLASLt has no kernel (pre-Blackwell, or a shape it declines).
-    fn plan_mx(&self, n: usize, k: usize, rows: usize, epi: u8) -> Option<LtPlan> {
+    fn plan_mx(&self, n: usize, k: usize, rows: usize, ldc: usize, epi: u8) -> Option<LtPlan> {
         use lt_sys::cudaDataType_t::{CUDA_R_8F_E4M3, CUDA_R_16BF, CUDA_R_32F};
         let a = lt_result::create_matrix_layout(CUDA_R_8F_E4M3, k as u64, n as u64, k as i64).ok()?;
         let b = lt_result::create_matrix_layout(CUDA_R_8F_E4M3, k as u64, rows as u64, k as i64).ok()?;
-        let c = lt_result::create_matrix_layout(CUDA_R_16BF, n as u64, rows as u64, n as i64).ok()?;
+        let c = lt_result::create_matrix_layout(CUDA_R_16BF, n as u64, rows as u64, ldc as i64).ok()?;
         let desc = lt_result::create_matmul_desc(lt_sys::cublasComputeType_t::CUBLAS_COMPUTE_32F, CUDA_R_32F).ok()?;
         let t: i32 = 1;
         let epilogue = match epi {
@@ -470,6 +476,8 @@ impl Cuda {
             sm_major: maj as u32,
             no_fp8: env1("H3_CUDA_NO_FP8"),
             lt_nth: std::env::var("H3_CUDA_LT_NTH").ok().and_then(|v| v.parse().ok()),
+            mx_split: std::env::var("H3_CUDA_MX_SPLIT").ok().and_then(|v| v.parse().ok()).unwrap_or(2).max(1),
+            mx_split_min: std::env::var("H3_CUDA_MX_SPLIT_MIN").ok().and_then(|v| v.parse().ok()).unwrap_or(24576),
             scalar_conv: env1("H3_CUDA_SCALAR_CONV"),
             scalar_attn: env1("H3_CUDA_SCALAR_ATTN"),
             attn_v1: env1("H3_CUDA_ATTN_V1"),
@@ -990,53 +998,71 @@ impl Backend for Cuda {
                     (true, _) => 1,
                 };
                 let mut plans = lt.mx_plans.lock().unwrap();
+                // Row slices of the weight when the shape is one cuBLASLt runs badly whole.
+                let parts = if n >= self.mx_split_min && n % (128 * self.mx_split) == 0 { self.mx_split } else { 1 };
+                let np = n / parts;
                 // A GELU epilogue cuBLASLt declines falls back to bias-only + a pass.
-                let epi = if epi == 2 && plans.entry((n, k, rows, 2)).or_insert_with(|| lt.plan_mx(n, k, rows, 2)).is_none() { 1 } else { epi };
-                let plan = plans.entry((n, k, rows, epi)).or_insert_with(|| lt.plan_mx(n, k, rows, epi)).as_mut();
+                let epi = if epi == 2 && plans.entry((np, k, rows, n, 2)).or_insert_with(|| lt.plan_mx(np, k, rows, n, 2)).is_none() { 1 } else { epi };
+                let plan = plans.entry((np, k, rows, n, epi)).or_insert_with(|| lt.plan_mx(np, k, rows, n, epi)).as_mut();
                 if let Some(p) = plan {
                     self.mx_quantize(xp, rows * k, k, Some((self.ptr(codes), self.ptr(ascales))), 0);
-                    let (ap, bp) = (self.ptr(&w.buf), self.ptr(codes));
+                    let (ap0, bp) = (self.ptr(&w.buf), self.ptr(codes));
                     let algo = p.algo;
-                    let (asp, bsp) = (self.ptr(wscales), self.ptr(ascales));
-                    let biasp = bias.map(|b| self.ptr(b));
+                    let (asp0, bsp) = (self.ptr(wscales), self.ptr(ascales));
+                    let biasp0 = bias.map(|b| self.ptr(b));
                     let ws = lt.workspace_ptr();
                     let (alpha, beta) = (1.0f32, 0.0f32);
+                    // Part i: weight rows [i·np, (i+1)·np) (codes contiguous, scales
+                    // whole 128-row tiles), output columns i·np.. of the n-wide y.
+                    let slice = |i: usize| (ap0 + (i * np * k) as u64, asp0 + (i * mx_scale_len(np, k)) as u64, yp + (i * np * 2) as u64, biasp0.map(|b| b + (i * np * 2) as u64));
                     self.timed(
-                        || format!("gemm mxfp8{} n={n} k={k}{}", if epi == 2 { "+gelu" } else { "" }, if rows < 1024 { " (small)" } else { "" }),
+                        || format!("gemm mxfp8{} n={n} k={k}{}{}", if epi == 2 { "+gelu" } else { "" }, if parts > 1 { format!(" (×{parts})") } else { String::new() }, if rows < 1024 { " (small)" } else { "" }),
                         // SAFETY: the plan's layouts match these extents; the
                         // scale tensors are VEC32_UE8M0 of the two operands;
                         // bias holds n bf16 values; workspace is LT_WORKSPACE.
                         || unsafe {
                             use lt_sys::cublasLtMatmulDescAttributes_t as A;
-                            lt_result::set_matmul_desc_attribute(p.desc, A::CUBLASLT_MATMUL_DESC_A_SCALE_POINTER, (&asp) as *const u64 as *const _, 8).expect("lt a scale");
-                            lt_result::set_matmul_desc_attribute(p.desc, A::CUBLASLT_MATMUL_DESC_B_SCALE_POINTER, (&bsp) as *const u64 as *const _, 8).expect("lt b scale");
-                            if let Some(bp) = biasp {
-                                lt_result::set_matmul_desc_attribute(p.desc, A::CUBLASLT_MATMUL_DESC_BIAS_POINTER, (&bp) as *const u64 as *const _, 8).expect("lt bias pointer");
+                            for i in 0..parts {
+                                let (ap, asp, dp, bias_p) = slice(i);
+                                lt_result::set_matmul_desc_attribute(p.desc, A::CUBLASLT_MATMUL_DESC_A_SCALE_POINTER, (&asp) as *const u64 as *const _, 8).expect("lt a scale");
+                                lt_result::set_matmul_desc_attribute(p.desc, A::CUBLASLT_MATMUL_DESC_B_SCALE_POINTER, (&bsp) as *const u64 as *const _, 8).expect("lt b scale");
+                                if let Some(bp) = bias_p {
+                                    lt_result::set_matmul_desc_attribute(p.desc, A::CUBLASLT_MATMUL_DESC_BIAS_POINTER, (&bp) as *const u64 as *const _, 8).expect("lt bias pointer");
+                                }
+                                lt_result::matmul(
+                                    lt.handle,
+                                    p.desc,
+                                    (&alpha) as *const f32 as *const _,
+                                    (&beta) as *const f32 as *const _,
+                                    ap as *const _,
+                                    p.a,
+                                    bp as *const _,
+                                    p.b,
+                                    dp as *const _,
+                                    p.c,
+                                    dp as *mut _,
+                                    p.c,
+                                    &algo,
+                                    ws as *mut _,
+                                    LT_WORKSPACE,
+                                    self.stream.cu_stream() as *mut _,
+                                )
+                                .expect("cublasLt fp8 matmul");
                             }
-                            lt_result::matmul(
-                                lt.handle,
-                                p.desc,
-                                (&alpha) as *const f32 as *const _,
-                                (&beta) as *const f32 as *const _,
-                                ap as *const _,
-                                p.a,
-                                bp as *const _,
-                                p.b,
-                                yp as *const _,
-                                p.c,
-                                yp as *mut _,
-                                p.c,
-                                &algo,
-                                ws as *mut _,
-                                LT_WORKSPACE,
-                                self.stream.cu_stream() as *mut _,
-                            )
-                            .expect("cublasLt fp8 matmul");
                         },
                     );
                     self.count_flops(rows, n, k);
                     if !p.tuned {
-                        self.tune_mx(lt, p, ap, bp, yp);
+                        let (ap, asp, dp, bias_p) = slice(0);
+                        // SAFETY: the pointers of part 0, just used.
+                        unsafe {
+                            use lt_sys::cublasLtMatmulDescAttributes_t as A;
+                            lt_result::set_matmul_desc_attribute(p.desc, A::CUBLASLT_MATMUL_DESC_A_SCALE_POINTER, (&asp) as *const u64 as *const _, 8).expect("lt a scale");
+                            if let Some(bp) = bias_p {
+                                lt_result::set_matmul_desc_attribute(p.desc, A::CUBLASLT_MATMUL_DESC_BIAS_POINTER, (&bp) as *const u64 as *const _, 8).expect("lt bias pointer");
+                            }
+                        }
+                        self.tune_mx(lt, p, ap, bp, dp);
                     }
                     // The epilogue did the bias (and tanh-GELU when epi == 2); apply what is left.
                     let left = if act == Act::GeluTanh && epi == 2 { 0 } else { act_code };

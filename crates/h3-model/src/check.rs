@@ -458,6 +458,17 @@ fn ops<B: Backend>(p: &mut Pair<'_, B>, rng: &mut Rng) {
             }
         }
     }
+    // MXFP8 with n a multiple of 256: the CUDA backend splits such GEMMs along N
+    // when `H3_CUDA_MX_SPLIT_MIN` allows (the default threshold is 24576).
+    {
+        let (m, k, n) = (130, 64, 512);
+        let x = rng.normal((m + 3) * k);
+        let w = rng.uniform(n * k, 0.2);
+        let b = rng.normal(n);
+        let mx = Mxfp8::quantize(&w, n, k);
+        p.op(format!("linear mxfp8 {m}x{k}x{n} GeluTanh (split-able)"), |r| r.linear(&x, 3, m, &Mat::Mxfp8(&mx), Some(&b), Act::GeluTanh, m + 2, 2));
+        p.op(format!("linear mxfp8 no-bias {m}x{k}x{n} (split-able)"), |r| r.linear(&x, 1, m, &Mat::Mxfp8(&mx), None, Act::Silu, m + 1, 1));
+    }
     // swiglu
     {
         let x = rng.normal(19 * 2 * 48);
