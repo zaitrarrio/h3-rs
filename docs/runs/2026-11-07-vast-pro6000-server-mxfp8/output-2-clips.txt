@@ -1,0 +1,168 @@
++ grep -c FAILED /root/boot.log
+0
++ grep 'weights ' /root/boot.log
++ tail -1
+weights 138G in 336s
++ du -sh /w/h3
+138G	/w/h3
++ GEN='/w/h3-bin generate --backend cuda --variant fasth3-v2 --model-dir /w/h3 --tables /w/v2.tables --width 1344 --height 768 --frames 124 --seed 7'
++ echo '== adaln tables fasth3-v2'
+== adaln tables fasth3-v2
++ timeout 3000 /w/h3-bin adaln-tables --backend cuda --variant fasth3-v2 --model-dir /w/h3 --out /w/v2.tables
++ tail -3
+18 timesteps [0.0001001358, 0.0003336072, 0.014211655, 0.032424748, 0.04585159, 0.056831896, 0.090909064, 0.10048044, 0.14285713, 0.16725987, 0.23076922, 0.25, 0.35714287, 0.41176468, 0.5, 0.7, 0.999, 1.0] → /w/v2.tables (174.6 MB) in 263.3s
+
+real	4m31.491s
+user	2m3.100s
+sys	2m13.936s
++ echo '== generate V2 bf16, 1344x768x124 seed 7'
+== generate V2 bf16, 1344x768x124 seed 7
+++ clk /root/clocks-bf16.log
+++ echo 9795
+++ nvidia-smi --query-gpu=timestamp,clocks.sm,clocks.mem,power.draw,temperature.gpu,memory.used,clocks_throttle_reasons.active --format=csv,noheader -l 2
++ C=9795
++ kill 9795
++ sleep 1
++ grep -E '^run |^load|^step' /root/v2-bf16.log
+load 148.2s
+step 1/8 6.26s
+step 2/8 6.28s
+step 3/8 6.30s
+step 4/8 6.33s
+step 5/8 6.34s
+step 6/8 6.36s
+step 7/8 6.37s
+step 8/8 6.38s
+run 0: total 60.29s  prepare 0.47s  adaln 0.00s  denoise 50.62s (["6.26", "6.28", "6.30", "6.33", "6.34", "6.36", "6.37", "6.38"])  decode 8.91s  audio 0.19s
++ stats bf16 /root/clocks-bf16.log
++ echo 'clocks during bf16 (power > 200 W): sm MHz min/median/max, power W, throttle reasons'
+clocks during bf16 (power > 200 W): sm MHz min/median/max, power W, throttle reasons
++ awk '-F, ' '{gsub(/ MHz/,"",$2); gsub(/ W/,"",$4); if ($4+0 > 200) print $2, $4, $7}' /root/clocks-bf16.log
++ sort -n
++ awk '{a[NR]=$1; b[NR]=$2; r[$3]++} END {print "sm", a[1], a[int(NR/2)], a[NR], "samples", NR; for (k in r) print "  reason", k, r[k]}'
+sm 2197 2220 2385 samples 30
+  reason 0x0000000000000004 25
+  reason 0x0000000000000000 5
++ awk '-F, ' '{gsub(/ W/,"",$4); if ($4+0 > 200) print $4}' /root/clocks-bf16.log
++ sort -n
++ awk '{a[NR]=$1} END {print "power", a[1], a[int(NR/2)], a[NR]}'
+power 450.93 599.53 601.72
++ curl -s -X PUT --upload-file /root/v2-bf16.log 'https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/vast-20261107-1800/results/v2-bf16.log?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261107%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261107T210248Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=0f4191324cb834ff397aeedf48ce7f0fd0edc6f9060f9835a0959f174c7f2c1a'
++ curl -s -X PUT --upload-file /root/clocks-bf16.log 'https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/vast-20261107-1800/results/clocks-bf16.log?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261107%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261107T210249Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=d2b8981e4ff84a09a4ba236f1c91308f514b8d1854d22236304e1a2213fdac06'
++ echo '== generate V2 mxfp8 (blocks 2..46 W8A8), same seed'
+== generate V2 mxfp8 (blocks 2..46 W8A8), same seed
+++ clk /root/clocks-mxfp8.log
+++ echo 9885
+++ nvidia-smi --query-gpu=timestamp,clocks.sm,clocks.mem,power.draw,temperature.gpu,memory.used,clocks_throttle_reasons.active --format=csv,noheader -l 2
++ C=9885
++ kill 9885
++ sleep 1
++ grep -E '^run |^load|^step' /root/v2-mxfp8.log
+load 306.8s
+step 1/8 5.72s
+step 2/8 5.67s
+step 3/8 5.69s
+step 4/8 5.71s
+step 5/8 5.72s
+step 6/8 5.73s
+step 7/8 5.74s
+step 8/8 5.75s
+run 0: total 55.24s  prepare 0.46s  adaln 0.00s  denoise 45.74s (["5.72", "5.67", "5.69", "5.71", "5.72", "5.73", "5.74", "5.75"])  decode 8.75s  audio 0.19s
++ stats mxfp8 /root/clocks-mxfp8.log
++ echo 'clocks during mxfp8 (power > 200 W): sm MHz min/median/max, power W, throttle reasons'
+clocks during mxfp8 (power > 200 W): sm MHz min/median/max, power W, throttle reasons
++ awk '-F, ' '{gsub(/ MHz/,"",$2); gsub(/ W/,"",$4); if ($4+0 > 200) print $2, $4, $7}' /root/clocks-mxfp8.log
++ sort -n
++ awk '{a[NR]=$1; b[NR]=$2; r[$3]++} END {print "sm", a[1], a[int(NR/2)], a[NR], "samples", NR; for (k in r) print "  reason", k, r[k]}'
+sm 2220 2340 2377 samples 28
+  reason 0x0000000000000004 23
+  reason 0x0000000000000000 5
++ awk '-F, ' '{gsub(/ W/,"",$4); if ($4+0 > 200) print $4}' /root/clocks-mxfp8.log
++ sort -n
++ awk '{a[NR]=$1} END {print "power", a[1], a[int(NR/2)], a[NR]}'
+power 212.04 599.58 603.47
++ curl -s -X PUT --upload-file /root/v2-mxfp8.log 'https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/vast-20261107-1800/results/v2-mxfp8.log?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261107%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261107T210249Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=45742131b251a107241c6893a0beb51e7b67501b0e73cd1d0c4d67f5f0a50a2e'
++ curl -s -X PUT --upload-file /root/clocks-mxfp8.log 'https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/vast-20261107-1800/results/clocks-mxfp8.log?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261107%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261107T210249Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=3005366f34f61f2589dd31c9d0659e00a93f317c0889ad170d743ffc9e80a5e6'
++ echo '== generate V2 mxfp8, H3_PROFILE=1 (full output in results/v2-mxfp8-profiled.log)'
+== generate V2 mxfp8, H3_PROFILE=1 (full output in results/v2-mxfp8-profiled.log)
++ curl -s -X PUT --upload-file /root/v2-mxfp8-profiled.log 'https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/vast-20261107-1800/results/v2-mxfp8-profiled.log?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261107%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261107T210249Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=b59ba65320afed1779c0cfdaca2f932690de5bc2e41affbaebac6c4e04314b0b'
++ grep -E '^== profile|^profile \(|^run ' /root/v2-mxfp8-profiled.log
+== profile: prompt encoding (Qwen3-VL)
+profile (CUDA, synced per op): 151.0 ms in ops; GEMMs 143.7 ms at 11.2 TFLOP/s
+== profile: prepare (latent encode, AdaLN tables)
+profile (CUDA, synced per op): 1.9 ms in ops; GEMMs 1.6 ms at 33.0 TFLOP/s
+== profile: denoise
+profile (CUDA, synced per op): 45728.2 ms in ops; GEMMs 25131.4 ms at 509.3 TFLOP/s
+== profile: video decode
+profile (CUDA, synced per op): 1173.5 ms in ops; GEMMs 855.0 ms at 285.1 TFLOP/s
+== profile: video decode
+profile (CUDA, synced per op): 1173.0 ms in ops; GEMMs 855.1 ms at 285.1 TFLOP/s
+== profile: video decode
+profile (CUDA, synced per op): 1172.5 ms in ops; GEMMs 854.6 ms at 285.2 TFLOP/s
+== profile: video decode
+profile (CUDA, synced per op): 1173.3 ms in ops; GEMMs 854.8 ms at 285.2 TFLOP/s
+== profile: video decode
+profile (CUDA, synced per op): 1173.4 ms in ops; GEMMs 855.1 ms at 285.1 TFLOP/s
+== profile: video decode
+profile (CUDA, synced per op): 1173.4 ms in ops; GEMMs 855.0 ms at 285.1 TFLOP/s
+== profile: video decode
+profile (CUDA, synced per op): 1173.4 ms in ops; GEMMs 855.1 ms at 285.1 TFLOP/s
+== profile: video decode
+profile (CUDA, synced per op): -0.0 ms in ops; GEMMs -0.0 ms at 0.0 TFLOP/s
+== profile: audio decode
+profile (CUDA, synced per op): 198.1 ms in ops; GEMMs 0.1 ms at 0.5 TFLOP/s
+run 0: total 56.43s  prepare 0.44s  adaln 0.00s  denoise 45.83s (["5.70", "5.69", "5.71", "5.72", "5.74", "5.75", "5.76", "5.77"])  decode 9.85s  audio 0.22s
+== profile: remainder
+profile (CUDA, synced per op): -0.0 ms in ops; GEMMs -0.0 ms at 0.0 TFLOP/s
++ awk '/== profile: denoise/{p=1} /== profile: video decode/{p=0} p' /root/v2-mxfp8-profiled.log
++ head -30
+== profile: denoise
+profile (CUDA, synced per op): 45728.2 ms in ops; GEMMs 25131.4 ms at 509.3 TFLOP/s
+  vsa fine (3d, d128)                        13641.9 ms  29.8%     400 calls    34.105 ms/call
+  gemm mxfp8 n=28672 k=5376                  11792.3 ms  25.8%     360 calls    32.756 ms/call
+  gemm mxfp8 n=21504 k=5376                   4373.5 ms   9.6%     360 calls    12.149 ms/call
+  gemm mxfp8 n=5376 k=14336                   2903.4 ms   6.3%     360 calls     8.065 ms/call
+  kernel                                      2258.6 ms   4.9%    1800 calls     1.255 ms/call
+  gemm mxfp8 n=5376 k=7168                    1454.4 ms   3.2%     360 calls     4.040 ms/call
+  gemm mxfp8 n=7168 k=5376                    1439.2 ms   3.1%     360 calls     3.998 ms/call
+  head_split (qk-norm + rope)                 1220.4 ms   2.7%    1600 calls     0.763 ms/call
+  gemm n=28672 k=5376                         1143.3 ms   2.5%      40 calls    28.582 ms/call
+  swiglu                                       902.4 ms   2.0%     400 calls     2.256 ms/call
+  gemm n=21504 k=5376                          863.9 ms   1.9%      40 calls    21.596 ms/call
+  vsa coarse + top-k (4 query tiles)           816.7 ms   1.8%     400 calls     2.042 ms/call
+  rms_norm (+residual, modulation)             806.3 ms   1.8%     808 calls     0.998 ms/call
+  gemm n=5376 k=14336                          576.7 ms   1.3%      40 calls    14.418 ms/call
+  gate_residual                                478.9 ms   1.0%     400 calls     1.197 ms/call
+  vsa pool                                     471.2 ms   1.0%     400 calls     1.178 ms/call
+  gemm n=7168 k=5376                           289.9 ms   0.6%      40 calls     7.248 ms/call
+  gemm n=5376 k=7168                           288.9 ms   0.6%      40 calls     7.222 ms/call
+  gemm+bias n=96 k=5376                          2.8 ms   0.0%       8 calls     0.355 ms/call
+  gemm+bias n=5376 k=96                          2.7 ms   0.0%       8 calls     0.336 ms/call
+  gemm+bias n=32 k=5376 (small)                  0.3 ms   0.0%       8 calls     0.035 ms/call
+  flow_step                                      0.2 ms   0.0%      16 calls     0.015 ms/call
+  gemm+bias n=5376 k=32 (small)                  0.2 ms   0.0%       8 calls     0.025 ms/call
+  copy (dtod)                                    0.2 ms   0.0%       8 calls     0.020 ms/call
+
++ cmp /w/mx.y4m /w/mxp.y4m
++ echo 'profiled and unprofiled mxfp8 clips are identical'
+profiled and unprofiled mxfp8 clips are identical
++ echo '== PSNR mxfp8 vs bf16 (same seed)'
+== PSNR mxfp8 vs bf16 (same seed)
++ ffmpeg -loglevel info -y -i /w/mx.y4m -i /w/bf16.y4m -lavfi psnr -f null -
++ grep -i psnr
++ tail -1
+[Parsed_psnr_0 @ 0x5ef290eaa200] PSNR y:12.742339 u:27.040440 v:28.914343 average:17.255116 min:16.050584 max:17.807309
++ for n in bf16 mx
++ ffmpeg -loglevel error -y -i /w/bf16.y4m -i /w/bf16.wav -c:v libx264 -crf 18 -pix_fmt yuv420p -c:a aac -b:a 192k -shortest /w/bf16.mp4
++ ffmpeg -loglevel error -y -i /w/bf16.y4m -vf 'select='\''eq(n\,0)+eq(n\,40)+eq(n\,80)+eq(n\,120)'\'',scale=448:-1,tile=2x2' -vframes 1 /w/bf16-grid.png
++ for n in bf16 mx
++ ffmpeg -loglevel error -y -i /w/mx.y4m -i /w/mx.wav -c:v libx264 -crf 18 -pix_fmt yuv420p -c:a aac -b:a 192k -shortest /w/mx.mp4
++ ffmpeg -loglevel error -y -i /w/mx.y4m -vf 'select='\''eq(n\,0)+eq(n\,40)+eq(n\,80)+eq(n\,120)'\'',scale=448:-1,tile=2x2' -vframes 1 /w/mx-grid.png
++ curl -s -X PUT --upload-file /w/bf16.mp4 'https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/vast-20261107-1800/results/fox-v2-bf16.mp4?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261107%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261107T210250Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=a4bd614335291ecf9e417e5e5feda57424a8fc1805c54b51378c25a2a61cf518'
++ curl -s -X PUT --upload-file /w/mx.mp4 'https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/vast-20261107-1800/results/fox-v2-mxfp8.mp4?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261107%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261107T210251Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=393dc1016ef85a934d1eb3a515e50f0e16c6593538849bc072277c550cb658e4'
++ curl -s -X PUT --upload-file /w/bf16-grid.png 'https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/vast-20261107-1800/results/fox-v2-bf16-grid.png?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261107%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261107T210250Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=f1043386e552d674a69a088f21c9ca7ca3518f21966e5fccdc8c4a20abbe1352'
++ curl -s -X PUT --upload-file /w/mx-grid.png 'https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/vast-20261107-1800/results/fox-v2-mxfp8-grid.png?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261107%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261107T210250Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=44b8260d597a15db72c1955b2ccc513ceddcef927a4471229e6fbd813c5c527a'
++ echo uploaded
+uploaded
+exit 0
+
