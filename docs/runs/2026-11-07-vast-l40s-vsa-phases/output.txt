@@ -1,0 +1,135 @@
+### run vast-20261107-0440, cmd 1
+watchdog armed
+name, driver_version, power.limit [W]
+NVIDIA L40S, 575.57.08, 350.00 W
+== check: default (paired fine, coarse4)
+cuda NVIDIA L40S (sm_89)
+all 97 checks pass (tolerance 3e-2)
+== check: NOPAIR + COARSE1
+cuda NVIDIA L40S (sm_89)
+all 97 checks pass (tolerance 3e-2)
+== check: VSA_V2
+cuda NVIDIA L40S (sm_89)
+all 97 checks pass (tolerance 3e-2)
+== profile: default (pair + coarse4)
+forward 0: 1.002s (250.6 ms/block; ×50/4 blocks ≈ 12.53s)
+profile (CUDA, synced per op): 1002.0 ms in ops; GEMMs 567.7 ms at 226.9 TFLOP/s
+  vsa fine (paired tiles, d128)                339.2 ms  33.9%       4 calls    84.811 ms/call
+  head_split (qk-norm + rope)                   25.8 ms   2.6%      16 calls     1.616 ms/call
+  vsa coarse + top-k (4 query tiles)            13.9 ms   1.4%       4 calls     3.479 ms/call
+  vsa pool                                      11.1 ms   1.1%       4 calls     2.769 ms/call
+  vsa pair union                                 0.9 ms   0.1%       4 calls     0.221 ms/call
+== profile: NOPAIR (v1 fine) + coarse4
+forward 0: 1.020s (255.0 ms/block; ×50/4 blocks ≈ 12.75s)
+profile (CUDA, synced per op): 1019.7 ms in ops; GEMMs 591.6 ms at 217.8 TFLOP/s
+  vsa fine (mma, d128)                         332.5 ms  32.6%       4 calls    83.121 ms/call
+  vsa coarse + top-k (4 query tiles)            15.2 ms   1.5%       4 calls     3.802 ms/call
+  vsa pool                                      11.1 ms   1.1%       4 calls     2.782 ms/call
+== profile: NOPAIR + COARSE1 (the previous state)
+forward 0: 1.035s (258.7 ms/block; ×50/4 blocks ≈ 12.93s)
+profile (CUDA, synced per op): 1034.4 ms in ops; GEMMs 591.7 ms at 217.7 TFLOP/s
+  vsa fine (mma, d128)                         336.7 ms  32.5%       4 calls    84.163 ms/call
+  vsa coarse + top-k                            25.6 ms   2.5%       4 calls     6.412 ms/call
+  vsa pool                                      11.2 ms   1.1%       4 calls     2.790 ms/call
+== unprofiled, 2 steps: default vs previous
+forward 0: 1.018s (254.6 ms/block; ×50/4 blocks ≈ 12.73s)
+forward 1: 1.033s (258.3 ms/block; ×50/4 blocks ≈ 12.92s)
+forward 0: 1.037s (259.2 ms/block; ×50/4 blocks ≈ 12.96s)
+forward 1: 1.073s (268.2 ms/block; ×50/4 blocks ≈ 13.41s)
+== omni tile 128 (unpaired path), default
+forward 0: 0.902s (225.4 ms/block; ×50/4 blocks ≈ 11.27s)
+== other geometry: 832x480x124 (fewer tiles)
+forward 0: 0.323s (80.8 ms/block; ×50/4 blocks ≈ 4.04s)
+  vsa fine (paired tiles, d128)                 80.7 ms  25.0%       4 calls    20.175 ms/call
+  vsa pool                                       4.6 ms   1.4%       4 calls     1.138 ms/call
+  vsa coarse + top-k (4 query tiles)             3.0 ms   0.9%       4 calls     0.739 ms/call
+  vsa pair union                                 0.2 ms   0.1%       4 calls     0.056 ms/call
+forward 0: 0.339s (84.7 ms/block; ×50/4 blocks ≈ 4.23s)
+  vsa fine (mma, d128)                          75.4 ms  22.3%       4 calls    18.851 ms/call
+  vsa coarse + top-k                             4.7 ms   1.4%       4 calls     1.187 ms/call
+  vsa pool                                       4.6 ms   1.4%       4 calls     1.146 ms/call
+exit 0
+
+
+### run vast-20261107-0510, cmd 1
+watchdog armed
+name, driver_version, power.limit [W]
+NVIDIA L40S, 575.57.08, 350.00 W
+== check default (v1 fine + prefetch, coarse4)
+cuda NVIDIA L40S (sm_89)
+all 97 checks pass (tolerance 3e-2)
+== check pair
+cuda NVIDIA L40S (sm_89)
+all 97 checks pass (tolerance 3e-2)
+== fine-stage experiment dbg=0 (0 baseline w/ prefetch, 32 no prefetch, 1 sequential keys, 2 no QK mma, 4 no PV mma, 8 no exp, 16 no loads, 3 seq+noQK, 6 no mma at all, 7 seq + no mma)
+  vsa fine (mma, d128)                         353.0 ms  34.6%       4 calls    88.244 ms/call
+== fine-stage experiment dbg=32 (0 baseline w/ prefetch, 32 no prefetch, 1 sequential keys, 2 no QK mma, 4 no PV mma, 8 no exp, 16 no loads, 3 seq+noQK, 6 no mma at all, 7 seq + no mma)
+  vsa fine (mma, d128)                         359.4 ms  34.8%       4 calls    89.847 ms/call
+== fine-stage experiment dbg=1 (0 baseline w/ prefetch, 32 no prefetch, 1 sequential keys, 2 no QK mma, 4 no PV mma, 8 no exp, 16 no loads, 3 seq+noQK, 6 no mma at all, 7 seq + no mma)
+  vsa fine (mma, d128)                         357.5 ms  34.4%       4 calls    89.379 ms/call
+== fine-stage experiment dbg=2 (0 baseline w/ prefetch, 32 no prefetch, 1 sequential keys, 2 no QK mma, 4 no PV mma, 8 no exp, 16 no loads, 3 seq+noQK, 6 no mma at all, 7 seq + no mma)
+  vsa fine (mma, d128)                         268.8 ms  28.4%       4 calls    67.198 ms/call
+== fine-stage experiment dbg=4 (0 baseline w/ prefetch, 32 no prefetch, 1 sequential keys, 2 no QK mma, 4 no PV mma, 8 no exp, 16 no loads, 3 seq+noQK, 6 no mma at all, 7 seq + no mma)
+  vsa fine (mma, d128)                         285.5 ms  30.1%       4 calls    71.376 ms/call
+== fine-stage experiment dbg=8 (0 baseline w/ prefetch, 32 no prefetch, 1 sequential keys, 2 no QK mma, 4 no PV mma, 8 no exp, 16 no loads, 3 seq+noQK, 6 no mma at all, 7 seq + no mma)
+  vsa fine (mma, d128)                         334.7 ms  32.8%       4 calls    83.674 ms/call
+== fine-stage experiment dbg=16 (0 baseline w/ prefetch, 32 no prefetch, 1 sequential keys, 2 no QK mma, 4 no PV mma, 8 no exp, 16 no loads, 3 seq+noQK, 6 no mma at all, 7 seq + no mma)
+  vsa fine (mma, d128)                         279.8 ms  31.8%       4 calls    69.956 ms/call
+== fine-stage experiment dbg=3 (0 baseline w/ prefetch, 32 no prefetch, 1 sequential keys, 2 no QK mma, 4 no PV mma, 8 no exp, 16 no loads, 3 seq+noQK, 6 no mma at all, 7 seq + no mma)
+  vsa fine (mma, d128)                         279.8 ms  29.1%       4 calls    69.958 ms/call
+== fine-stage experiment dbg=6 (0 baseline w/ prefetch, 32 no prefetch, 1 sequential keys, 2 no QK mma, 4 no PV mma, 8 no exp, 16 no loads, 3 seq+noQK, 6 no mma at all, 7 seq + no mma)
+  vsa fine (mma, d128)                         237.9 ms  26.4%       4 calls    59.472 ms/call
+== fine-stage experiment dbg=7 (0 baseline w/ prefetch, 32 no prefetch, 1 sequential keys, 2 no QK mma, 4 no PV mma, 8 no exp, 16 no loads, 3 seq+noQK, 6 no mma at all, 7 seq + no mma)
+  vsa fine (mma, d128)                         239.5 ms  26.5%       4 calls    59.868 ms/call
+== pair + prefetch
+  vsa fine (paired tiles, d128)                368.9 ms  35.6%       4 calls    92.226 ms/call
+== dense attention v2 for reference
+  attention (mma2, d128)                       952.0 ms  61.3%       4 calls   237.998 ms/call
+== unprofiled default, 2 steps
+forward 0: 1.031s (257.7 ms/block; ×50/4 blocks ≈ 12.88s)
+forward 1: 1.069s (267.4 ms/block; ×50/4 blocks ≈ 13.37s)
+exit 0
+
+
+### run vast-20261107-0545, cmd 1
+watchdog armed
+name, driver_version, power.limit [W]
+NVIDIA L40S, 575.57.08, 350.00 W
+== check fine3a
+cuda NVIDIA L40S (sm_89)
+all 97 checks pass (tolerance 3e-2)
+== check fine3b
+cuda NVIDIA L40S (sm_89)
+all 97 checks pass (tolerance 3e-2)
+== check fine3c
+cuda NVIDIA L40S (sm_89)
+all 97 checks pass (tolerance 3e-2)
+== profile v1 (default)
+forward 0: 1.030s (257.6 ms/block; ×50/4 blocks ≈ 12.88s)
+  vsa fine (mma, d128)                         351.6 ms  34.1%       4 calls    87.888 ms/call
+== profile fine3a
+forward 0: 1.627s (406.6 ms/block; ×50/4 blocks ≈ 20.33s)
+  vsa fine (3a, d128)                          952.5 ms  58.6%       4 calls   238.113 ms/call
+== profile fine3b
+forward 0: 1.035s (258.8 ms/block; ×50/4 blocks ≈ 12.94s)
+  vsa fine (3b, d128)                          346.7 ms  33.5%       4 calls    86.663 ms/call
+== profile fine3c
+forward 0: 1.483s (370.7 ms/block; ×50/4 blocks ≈ 18.54s)
+  vsa fine (3c, d128)                          816.2 ms  55.1%       4 calls   204.059 ms/call
+== 832x480: v1 then a b c
+  vsa fine (mma, d128)                          90.1 ms  26.2%       4 calls    22.536 ms/call
+  vsa fine (3a, d128)                          210.0 ms  46.0%       4 calls    52.510 ms/call
+  vsa fine (3b, d128)                           79.9 ms  23.3%       4 calls    19.984 ms/call
+  vsa fine (3c, d128)                          195.9 ms  44.9%       4 calls    48.970 ms/call
+== omni tile 128: v1 then a b c
+forward 0: 0.926s (231.6 ms/block; ×50/4 blocks ≈ 11.58s)
+  vsa fine (mma, d128)                         258.5 ms  27.9%       4 calls    64.613 ms/call
+forward 0: 1.298s (324.4 ms/block; ×50/4 blocks ≈ 16.22s)
+  vsa fine (3a, d128)                          637.0 ms  49.1%       4 calls   159.251 ms/call
+forward 0: 0.913s (228.4 ms/block; ×50/4 blocks ≈ 11.42s)
+  vsa fine (3b, d128)                          241.5 ms  26.5%       4 calls    60.374 ms/call
+forward 0: 1.214s (303.6 ms/block; ×50/4 blocks ≈ 15.18s)
+  vsa fine (3c, d128)                          552.2 ms  45.5%       4 calls   138.053 ms/call
+exit 0
+
+
