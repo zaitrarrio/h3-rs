@@ -14,7 +14,7 @@ is a `--variant`:
 | `h3` | `MiniMaxAI/MiniMax-H3` (T2VA, FL2VA, Ref2VA) | 49 | dense |
 | `fasth3-v1` | `FastVideo/FastVideo-FastH3-4-step-Preview-v1-VSA-DataFree` | 4 | VSA 0.9 |
 | `fasth3-v2` | `FastVideo/FastVideo-FastH3-8-Step-V2` | 8 | VSA 0.8 |
-| `fasth3-trim` | `FastVideo/FastVideo-FastH3-Trim-8-Step-NVFP4` (42 blocks, NVFP4) | 8 | VSA 0.8 |
+| `fasth3-trim` | `FastVideo/FastVideo-FastH3-Trim-8-Step` (42 blocks; bf16 HF tree or the ComfyUI single-file NVFP4) | 8 | VSA 0.8 |
 | `fasth3-omni` | `FastVideo/FastVideo-FastH3-Omni-8-Step-V1` (Ref2VA, PDD) | 8 | VSA 0.9, tile 128 |
 | `pika-flex` | `Pika-Labs/Pika-H3-Flex` (FL2VA / Ref2VA LoRA, 480p / 768p) | 6 | dense |
 | `regen-2k` | `Efficient-Large-Model/Open-H3-Regenerate-2K` (`h3 regen2k`) | 3 | dense / VSA |
@@ -43,9 +43,7 @@ Per block at that geometry: 470 ms VSA / 815 ms dense; GEMMs at 121 TFLOP/s,
 the VSA fine stage is a third of the time and the next kernel to optimize.
 No PyTorch parity number yet (`scripts/reference/make_fixtures.py` needs a
 machine with torch); the clips themselves match their prompts
-(`docs/runs/2026-11-06-vast-a6000-first-gpu/*.png`). The ComfyUI single-file
-NVFP4 Trim checkpoint is not loadable yet (different layout from the
-FastVideo HF one).
+(`docs/runs/2026-11-06-vast-a6000-first-gpu/*.png`).
 
 ## Use
 
@@ -83,6 +81,10 @@ h3 adaln-tables --variant fasth3-v2 --model-dir h3 --variant-dir fasth3-v2 --out
 h3 quantize --variant fasth3-v2 --model-dir h3 --variant-dir fasth3-v2 \
     --weights int4-hqq-g64 --skip-adaln --out fasth3-v2-int4.safetensors
 ```
+
+ComfyUI single-file checkpoints (`fastvideo_fasth3_trim_8step_nvfp4.safetensors`
+and the like) are read directly: `--transformer <file>`; their NVFP4 linears
+are dequantized to bf16 on the device at load.
 
 `--weights int8 | int4[-hqq][-gN][-ffn] | nvfp4` quantizes at load as well;
 `--stream-blocks` keeps the block weights in host memory and uploads them per

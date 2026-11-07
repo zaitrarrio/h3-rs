@@ -15,18 +15,30 @@ State and invariants only; the reasoning is in `docs/design.md`.
 - No speed claim without a measurement on named hardware (card, driver,
   power limit) recorded under `docs/runs/`. RTX A6000, 1344×768×124, VSA 0.8:
   470 ms/block CUDA (25.1 s per real forward at int8; FastH3-V2 clip: denoise
-  201 s, decode 44 s), 7.6 s/block WebGPU. Profile with `H3_PROFILE=1`; the
-  VSA fine stage is 34 % of a CUDA block, GEMMs 56 % at ~80 % of peak.
+  201 s, decode 44 s), 7.6 s/block WebGPU. Profile with `H3_PROFILE=1`.
+- CUDA attention / VSA fine kernels: v2 (`attn_mma2_body`, 32 query rows per
+  warp, 32-key chunks) is the default; `H3_CUDA_ATTN_V1=1` runs the v1 body
+  (16 rows per warp, which is shared-memory-bandwidth bound). Both must pass
+  `h3 check`; keep both until v2 has been measured faster on every card
+  class that matters.
 - WebGPU binds any activation over `max_storage_buffer_binding_size` (2 GiB
   on NVIDIA; the fused QKV is 3.3 GB at 38k tokens) as aligned row
   sub-ranges in `linear` / `head_split`; the FFN chunk is capped by
   `Backend::max_buffer_elems`. Any new op that touches a `[tokens, ≥ 14k]`
   activation needs the same treatment.
-- Checkpoint formats: the FastVideo HF trees load (`transformer/` shards +
-  `fastvideo_inference.json`, which overrides the preset). The ComfyUI
-  single-file NVFP4 Trim (`blocks.N.attn.qkv_proj.weight` U8 + `weight_scale`
-  E4M3 [out, in/16] + `weight_scale_2`, `adaln_t_table [1025, 16]`) does not:
-  it needs a key map and an unswizzled-scale NVFP4 variant.
+- Checkpoint formats: the FastVideo HF trees (`transformer/` shards +
+  `fastvideo_inference.json`, which overrides the preset) and ComfyUI's
+  single-file H3 layout (`weights::ComfySource`, detected by
+  `video_patch_proj` + `blocks.0.attn.qkv_proj`): fused `qkv_proj` row
+  thirds, `mlp.fc1` is `[gate | value]` (Diffusers: `[value | gate]`),
+  `comfy_quant` NVFP4 = codes U8 with the **first code in the high nibble**
+  + E4M3 scales in the 128×4 block layout + `weight_scale_2`, and
+  `adaln_t_table [grid, rank]` instead of the time embedder (lerp at
+  `t·(grid−1)`, no SiLU). NVFP4 block scales (FlashInfer, Comfy) are torchao's
+  `to_blocked`: `Nvfp4::swizzled_index`; the old formula was the identity
+  and loaded garbage scales. FlashInfer / compressed-tensors put the first
+  code in the low nibble (`Nvfp4.first_high`). A stored format decides what
+  the device gets (`--weights` cannot re-quantize an NVFP4 file).
 - The reference is FastVideo's `pipelines/basic/minimax_h3` (+ `pika_h3_flex`,
   `open_h3_regenerate_2k`) and the released configs. Checkpoint contracts that
   are easy to get wrong: channel-major patch features (`patchify`), the
