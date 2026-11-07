@@ -11,10 +11,12 @@ numbered command scripts and uploads each one's output:
    text encoder and tokenizer, 138 GiB), `weights/h3-base/<sha>/` (MiniMax-H3),
    `weights/h3-ref2va/`, `weights/fasth3-trim-8step-nvfp4/<sha>/` (11 GiB
    single file), `weights/auxiliary/tae/eu-20261011/taeh3.safetensors`.
-2. Rent with `vast_api.py` (`PUT /asks/<offer>/`, image
+2. Rent with `rent.py OFFER "ONSTART"` (`PUT /asks/<offer>/`, image
    `nvidia/cuda:12.8.1-runtime-ubuntu24.04`, `runtype: ssh`, env
-   `NVIDIA_DRIVER_CAPABILITIES=all`, disk ≥ 250 GB: the base tree is 95 GB
-   with the text encoder). Arm a destroy timer immediately.
+   `NVIDIA_DRIVER_CAPABILITIES=all`, disk ≥ 250 GB: the V2 tree is 138 GiB
+   with the text encoder). It prints the instance API key: arm the destroy
+   timer on the box with it as the first command (`nohup setsid bash -c
+   "sleep N && curl -X DELETE …"`) and queue a self-destroy as the last.
 3. Queue work with `rr.py cmd N file.sh`; read it back with `rr.py out N`.
 4. Destroy (`DELETE /api/v0/instances/<id>/`; the v1 path answers "Not
    found" for a delete) and check the credit. Offers: `POST /api/v0/bundles/`
