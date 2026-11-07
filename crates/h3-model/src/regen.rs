@@ -4,6 +4,7 @@
 //! The released pipeline writes a silent video: the audio stream (encoded
 //! silence) only conditions the DiT.
 
+use rayon::prelude::*;
 use crate::{
     audio_vae::AudioVae,
     dit::{Attention, H3Dit, StepMods, Workspace},
@@ -191,13 +192,15 @@ impl<B: Backend> Regen<B> {
             (width, height) = (chunk.w, chunk.h);
             let start = rgb.len();
             let px = chunk.h * chunk.w;
-            for f in 0..keep {
-                for i in 0..px {
+            rgb.resize(start + keep * px * 3, 0);
+            rgb[start..].par_chunks_mut(px * 3).enumerate().for_each(|(f, out)| {
+                let planes: [&[f32]; 3] = std::array::from_fn(|ch| &chunk.data[(ch * chunk.t + f) * px..][..px]);
+                for (i, o) in out.chunks_exact_mut(3).enumerate() {
                     for ch in 0..3 {
-                        rgb.push((chunk.data[(ch * chunk.t + f) * px + i] * 255.0).clamp(0.0, 255.0) as u8);
+                        o[ch] = (planes[ch][i] * 255.0).clamp(0.0, 255.0) as u8;
                     }
                 }
-            }
+            });
             on(Event::Frames { first: frames, count: keep, width, height, rgb: &rgb[start..] });
             frames += keep;
         })?;

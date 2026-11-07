@@ -5,6 +5,7 @@
 //! f32, exactly as the reference does.
 
 use crate::linear::{Linear, load_plain};
+use rayon::prelude::*;
 use h3_core::{
     Error, Result,
     backend::{Act, Backend, Conv3dShape, ConvEpilogue, Gate, HeadNorm, Modulation, Pad, Rope},
@@ -36,22 +37,20 @@ impl Volume {
     pub fn at(&self, c: usize, t: usize, y: usize, x: usize) -> f32 {
         self.data[((c * self.t + t) * self.h + y) * self.w + x]
     }
-    #[inline]
-    fn set(&mut self, c: usize, t: usize, y: usize, x: usize, v: f32) {
-        self.data[((c * self.t + t) * self.h + y) * self.w + x] = v;
-    }
     /// Sub-volume `[t0..t0+nt, y0..y0+nh, x0..x0+nw]`.
     pub fn crop(&self, t0: usize, nt: usize, y0: usize, nh: usize, x0: usize, nw: usize) -> Volume {
-        let mut o = Volume::zeros(self.c, nt, nh, nw);
-        for c in 0..self.c {
-            for t in 0..nt {
-                for y in 0..nh {
-                    let src = ((c * self.t + t0 + t) * self.h + y0 + y) * self.w + x0;
-                    let dst = ((c * nt + t) * nh + y) * nw;
-                    o.data[dst..dst + nw].copy_from_slice(&self.data[src..src + nw]);
-                }
-            }
+        assert!(t0 + nt <= self.t && y0 + nh <= self.h && x0 + nw <= self.w, "crop out of range");
+        if (t0, nt, y0, nh, x0, nw) == (0, self.t, 0, self.h, 0, self.w) {
+            return self.clone();
         }
+        let mut o = Volume::zeros(self.c, nt, nh, nw);
+        let (st, sh, sw) = (self.t, self.h, self.w);
+        o.data.par_chunks_mut(nw).enumerate().for_each(|(r, row)| {
+            let (y, r) = (r % nh, r / nh);
+            let (t, c) = (r % nt, r / nt);
+            let src = ((c * st + t0 + t) * sh + y0 + y) * sw + x0;
+            row.copy_from_slice(&self.data[src..src + nw]);
+        });
         o
     }
     /// Concatenate along the time axis.
@@ -107,33 +106,44 @@ pub fn blend(a: &Volume, b: &Volume, extent: usize, axis: Axis) -> Volume {
         Axis::H => v.h,
         Axis::W => v.w,
     };
+    assert_eq!(a.c, b.c, "blend: channel counts differ");
     let extent = extent.min(len(a)).min(len(b));
     let mut out = b.clone();
+    if extent == 0 {
+        return out;
+    }
     let la = len(a);
-    for c in 0..b.c {
-        for t in 0..b.t {
-            for y in 0..b.h {
-                for x in 0..b.w {
-                    let p = match axis {
-                        Axis::T => t,
-                        Axis::H => y,
-                        Axis::W => x,
-                    };
-                    if p >= extent {
-                        continue;
-                    }
-                    let wb = p as f32 / extent as f32;
-                    let (ta, ya, xa) = match axis {
-                        Axis::T => (la - extent + p, y, x),
-                        Axis::H => (t, la - extent + p, x),
-                        Axis::W => (t, y, la - extent + p),
-                    };
-                    let v = a.at(c, ta, ya, xa) * (1.0 - wb) + b.at(c, t, y, x) * wb;
-                    out.set(c, t, y, x, v);
+    let (bt, bh, bw) = (b.t, b.h, b.w);
+    // One task per output row [c, t, y]; a row is untouched unless its position
+    // along `axis` lies in the crossfade.
+    out.data.par_chunks_mut(bw).enumerate().for_each(|(r, row)| {
+        let (y, r) = (r % bh, r / bh);
+        let (t, c) = (r % bt, r / bt);
+        match axis {
+            Axis::T if t < extent => {
+                let wb = t as f32 / extent as f32;
+                let src = ((c * a.t + la - extent + t) * a.h + y) * a.w;
+                for (o, &av) in row.iter_mut().zip(&a.data[src..src + bw]) {
+                    *o = av * (1.0 - wb) + *o * wb;
                 }
             }
+            Axis::H if y < extent => {
+                let wb = y as f32 / extent as f32;
+                let src = ((c * a.t + t) * a.h + la - extent + y) * a.w;
+                for (o, &av) in row.iter_mut().zip(&a.data[src..src + bw]) {
+                    *o = av * (1.0 - wb) + *o * wb;
+                }
+            }
+            Axis::W => {
+                let src = ((c * a.t + t) * a.h + y) * a.w + la - extent;
+                for (x, o) in row.iter_mut().enumerate().take(extent) {
+                    let wb = x as f32 / extent as f32;
+                    *o = a.data[src + x] * (1.0 - wb) + *o * wb;
+                }
+            }
+            _ => {}
         }
-    }
+    });
     out
 }
 
@@ -159,66 +169,67 @@ pub fn split_tiles(length: usize, tile: usize, min_overlap: usize, ratio: usize)
 }
 
 /// `_stitch_tiles`: blend overlaps and concatenate a grid of tiles.
+///
+/// Tile `(ri, ci)` is crossfaded along H with the raw tile above over
+/// `h_overlaps[ri − 1]` rows, then along W with the raw tile to its left over
+/// `w_overlaps[ci − 1]` columns, then loses its own trailing overlap (except
+/// on the last row / column). Computed in one row-parallel pass straight
+/// into the output; `stitch_tiles_reference` in the tests is the sequential
+/// form.
 pub fn stitch_tiles(tiles: &[Vec<Volume>], h_overlaps: &[usize], w_overlaps: &[usize]) -> Volume {
-    let mut rows_out = Vec::new();
-    for (ri, row) in tiles.iter().enumerate() {
-        let mut row_out: Vec<Volume> = Vec::new();
+    let (nr, nc) = (tiles.len(), tiles[0].len());
+    let (c, t) = (tiles[0][0].c, tiles[0][0].t);
+    assert!(tiles.iter().all(|r| r.len() == nc), "ragged tile grid");
+    assert!(h_overlaps.len() + 1 >= nr && w_overlaps.len() + 1 >= nc, "missing overlaps");
+    // Kept extent of each tile row / column and its start in the output.
+    let kept_h: Vec<usize> = (0..nr).map(|ri| tiles[ri][0].h - if ri + 1 < nr { h_overlaps[ri] } else { 0 }).collect();
+    let kept_w: Vec<usize> = (0..nc).map(|ci| tiles[0][ci].w - if ci + 1 < nc { w_overlaps[ci] } else { 0 }).collect();
+    let mut y_start = vec![0; nr + 1];
+    for ri in 0..nr {
+        y_start[ri + 1] = y_start[ri] + kept_h[ri];
+    }
+    let mut x_start = vec![0; nc + 1];
+    for ci in 0..nc {
+        x_start[ci + 1] = x_start[ci] + kept_w[ci];
+    }
+    let (h, w) = (y_start[nr], x_start[nc]);
+    for row in tiles {
         for (ci, tile) in row.iter().enumerate() {
-            let mut t = tile.clone();
-            if ri > 0 {
-                t = blend(&tiles[ri - 1][ci], &t, h_overlaps[ri - 1], Axis::H);
+            assert_eq!((tile.c, tile.t, tile.h, tile.w), (c, t, row[0].h, tiles[0][ci].w), "tile shapes disagree");
+        }
+    }
+    let mut o = Volume::zeros(c, t, h, w);
+    o.data.par_chunks_mut(w).enumerate().for_each(|(r, out_row)| {
+        let (y, r) = (r % h, r / h);
+        let (tt, cc) = (r % t, r / t);
+        let ri = y_start[1..].iter().position(|&s| y < s).unwrap();
+        let ly = y - y_start[ri];
+        let hov = if ri > 0 { h_overlaps[ri - 1].min(tiles[ri - 1][0].h).min(tiles[ri][0].h) } else { 0 };
+        let wy = if ly < hov { Some(ly as f32 / hov as f32) } else { None };
+        for ci in 0..nc {
+            let tile = &tiles[ri][ci];
+            let dst = &mut out_row[x_start[ci]..x_start[ci + 1]];
+            let n = dst.len();
+            let src = ((cc * t + tt) * tile.h + ly) * tile.w;
+            dst.copy_from_slice(&tile.data[src..src + n]);
+            if let Some(wy) = wy {
+                let above = &tiles[ri - 1][ci];
+                let asrc = ((cc * t + tt) * above.h + above.h - hov + ly) * above.w;
+                for (o, &av) in dst.iter_mut().zip(&above.data[asrc..asrc + n]) {
+                    *o = av * (1.0 - wy) + *o * wy;
+                }
             }
             if ci > 0 {
-                t = blend(&row[ci - 1], &t, w_overlaps[ci - 1], Axis::W);
-            }
-            if ri + 1 < tiles.len() {
-                t = t.crop(0, t.t, 0, t.h - h_overlaps[ri], 0, t.w);
-            }
-            if ci + 1 < row.len() {
-                t = t.crop(0, t.t, 0, t.h, 0, t.w - w_overlaps[ci]);
-            }
-            row_out.push(t);
-        }
-        rows_out.push(cat_w(&row_out));
-    }
-    cat_h(&rows_out)
-}
-
-fn cat_w(parts: &[Volume]) -> Volume {
-    let (c, t, h) = (parts[0].c, parts[0].t, parts[0].h);
-    let w: usize = parts.iter().map(|p| p.w).sum();
-    let mut o = Volume::zeros(c, t, h, w);
-    let mut x0 = 0;
-    for p in parts {
-        for cc in 0..c {
-            for tt in 0..t {
-                for y in 0..h {
-                    let src = ((cc * t + tt) * h + y) * p.w;
-                    let dst = ((cc * t + tt) * h + y) * w + x0;
-                    o.data[dst..dst + p.w].copy_from_slice(&p.data[src..src + p.w]);
+                let left = &tiles[ri][ci - 1];
+                let wov = w_overlaps[ci - 1].min(left.w).min(tile.w).min(n);
+                let lsrc = ((cc * t + tt) * left.h + ly) * left.w + left.w - wov;
+                for (x, o) in dst.iter_mut().enumerate().take(wov) {
+                    let wx = x as f32 / wov as f32;
+                    *o = left.data[lsrc + x] * (1.0 - wx) + *o * wx;
                 }
             }
         }
-        x0 += p.w;
-    }
-    o
-}
-
-fn cat_h(parts: &[Volume]) -> Volume {
-    let (c, t, w) = (parts[0].c, parts[0].t, parts[0].w);
-    let h: usize = parts.iter().map(|p| p.h).sum();
-    let mut o = Volume::zeros(c, t, h, w);
-    let mut y0 = 0;
-    for p in parts {
-        for cc in 0..c {
-            for tt in 0..t {
-                let src = (cc * t + tt) * p.h * w;
-                let dst = ((cc * t + tt) * h + y0) * w;
-                o.data[dst..dst + p.h * w].copy_from_slice(&p.data[src..src + p.h * w]);
-            }
-        }
-        y0 += p.h;
-    }
+    });
     o
 }
 
@@ -560,6 +571,13 @@ impl<B: Backend> VideoVae<B> {
     /// Decode one latent clip tile `[latent, Tc, h, w]` (denormalised) to
     /// ImageNet-normalised pixels `[3, 4·Tc, 16·h, 16·w]`.
     pub fn decode_clip_tile(&self, be: &B, z: &Volume) -> Result<Volume> {
+        let (pix, (c, t, h, w)) = self.decode_clip_tile_dev(be, z)?;
+        Ok(Volume::from_data(c, t, h, w, be.download(&pix)))
+    }
+
+    /// `decode_clip_tile` up to the device buffer: the caller downloads, so a
+    /// tiled decode can queue the next tile's kernels before reading this one.
+    fn decode_clip_tile_dev(&self, be: &B, z: &Volume) -> Result<(B::Buf, (usize, usize, usize, usize))> {
         let dec = self.decoder.as_ref().ok_or_else(|| Error::Msg("the video VAE decoder is not loaded".into()))?;
         let cfg = &self.cfg;
         let dev = Dev { be };
@@ -611,23 +629,32 @@ impl<B: Backend> VideoVae<B> {
         let (ot, oh, ow) = (t * pt, h * ps, w * ps);
         let pix = be.alloc(cfg.in_channels * ot * oh * ow);
         be.unpatchify(&proj, 0, out_dim, 0, cfg.in_channels, ot, oh, ow, (pt, ps, ps), &pix);
-        Ok(Volume::from_data(cfg.in_channels, ot, oh, ow, be.download(&pix)))
+        Ok((pix, (cfg.in_channels, ot, oh, ow)))
     }
 
     /// One latent clip, optionally spatially tiled (`_decode_clip`).
+    ///
+    /// Tiles are decoded one ahead of their download: the backends launch
+    /// asynchronously, so the GPU runs tile `i + 1` while the host converts
+    /// tile `i`; the stitch is one parallel pass at the end.
     pub fn decode_clip(&self, be: &B, z: &Volume, tiling: Option<Tiling>) -> Result<Volume> {
         let Some(tl) = tiling else { return self.decode_clip_tile(be, z) };
         let r = self.spatial_ratio();
         let (ys, yl, yo) = split_tiles(z.h * r, tl.tile, tl.overlap, r);
         let (xs, xl, xo) = split_tiles(z.w * r, tl.tile, tl.overlap, r);
-        let mut rows = Vec::new();
+        let mut tiles: Vec<Volume> = Vec::with_capacity(ys.len() * xs.len());
+        let mut pending: Option<(B::Buf, (usize, usize, usize, usize))> = None;
+        let download = |(pix, (c, t, h, w)): (B::Buf, (usize, usize, usize, usize))| Volume::from_data(c, t, h, w, be.download(&pix));
         for (y0, ny) in ys.iter().zip(&yl) {
-            let mut row = Vec::new();
             for (x0, nx) in xs.iter().zip(&xl) {
-                row.push(self.decode_clip_tile(be, &z.crop(0, z.t, y0 / r, ny / r, x0 / r, nx / r))?);
+                let dev = self.decode_clip_tile_dev(be, &z.crop(0, z.t, y0 / r, ny / r, x0 / r, nx / r))?;
+                tiles.extend(pending.take().map(download));
+                pending = Some(dev);
             }
-            rows.push(row);
         }
+        tiles.extend(pending.map(download));
+        let mut it = tiles.into_iter();
+        let rows: Vec<Vec<Volume>> = (0..ys.len()).map(|_| it.by_ref().take(xs.len()).collect()).collect();
         Ok(stitch_tiles(&rows, &yo, &xo))
     }
 
@@ -679,29 +706,24 @@ impl<B: Backend> VideoVae<B> {
             let start = ci * chunk_tok;
             let n = (chunk_tok + cfg.token_overlap()).min(z.t - start);
             let clip = self.decode_clip(be, &z.crop(start, n, 0, z.h, 0, z.w), tiling)?;
-            let mut chunk = clip.crop(pre, chunk_frames.min(clip.t) - pre, 0, clip.h, 0, clip.w);
-            if let Some(ov) = &overlap {
-                chunk = blend(ov, &chunk, cfg.frame_overlap(), Axis::T);
-            }
-            let keep = chunk.t.min(total - written);
-            let chunk = chunk.crop(0, keep, 0, chunk.h, 0, chunk.w);
-            overlap = if cfg.token_drop > 0 && clip.t > chunk_frames + pre {
+            let chunk_t = chunk_frames.min(clip.t) - pre;
+            let keep = chunk_t.min(total - written);
+            let next_overlap = if cfg.token_drop > 0 && clip.t > chunk_frames + pre {
                 Some(clip.crop(chunk_frames + pre, clip.t - chunk_frames - pre, 0, clip.h, 0, clip.w))
             } else {
                 None
             };
             if keep > 0 {
                 written += keep;
-                let mut px = chunk;
-                denormalize_pixels(&mut px);
+                let px = finish_chunk(&clip, pre, chunk_t, keep, overlap.as_ref(), cfg.frame_overlap());
                 on_chunk(&px);
             }
+            overlap = next_overlap;
         }
         if let Some(ov) = overlap {
             if written < total {
                 let keep = (total - written).min(ov.t);
-                let mut px = ov.crop(0, keep, 0, ov.h, 0, ov.w);
-                denormalize_pixels(&mut px);
+                let px = finish_chunk(&ov, 0, ov.t, keep, None, 0);
                 written += keep;
                 on_chunk(&px);
             }
@@ -720,15 +742,48 @@ pub fn normalize_pixels(x: &mut Volume) {
     x.channel_affine(&scale[..x.c], &shift[..x.c]);
 }
 
+/// One decoded chunk's host post-processing in a single parallel pass:
+/// frames `pre .. pre + keep` of `clip`, the first `extent` of them
+/// crossfaded with the last `extent` frames of `overlap` (as `blend` along
+/// T over the `chunk_t`-frame chunk), then ImageNet-denormalised and clamped
+/// (`denormalize_pixels`). Equal to `crop` → `blend` → `crop` → `denormalize_pixels`.
+fn finish_chunk(clip: &Volume, pre: usize, chunk_t: usize, keep: usize, overlap: Option<&Volume>, extent: usize) -> Volume {
+    assert!(pre + chunk_t <= clip.t && keep <= chunk_t);
+    let (c, h, w) = (clip.c, clip.h, clip.w);
+    let extent = overlap.map_or(0, |ov| extent.min(ov.t).min(chunk_t));
+    let mut out = Volume::zeros(c, keep, h, w);
+    out.data.par_chunks_mut(w).enumerate().for_each(|(r, row)| {
+        let (y, r) = (r % h, r / h);
+        let (f, ch) = (r % keep, r / keep);
+        let src = ((ch * clip.t + pre + f) * h + y) * w;
+        row.copy_from_slice(&clip.data[src..src + w]);
+        if f < extent {
+            let ov = overlap.unwrap();
+            let wb = f as f32 / extent as f32;
+            let osrc = ((ch * ov.t + ov.t - extent + f) * ov.h + y) * ov.w;
+            for (o, &av) in row.iter_mut().zip(&ov.data[osrc..osrc + w]) {
+                *o = av * (1.0 - wb) + *o * wb;
+            }
+        }
+        let (m, s) = (PIXEL_MEAN[ch.min(2)], PIXEL_STD[ch.min(2)]);
+        for v in row {
+            *v = (*v * s + m).clamp(0.0, 1.0);
+        }
+    });
+    out
+}
+
 /// `p · std + mean`, clamped to `[0, 1]`.
 pub fn denormalize_pixels(x: &mut Volume) {
     let inner = x.t * x.h * x.w;
-    for c in 0..x.c {
-        let (m, s) = (PIXEL_MEAN[c.min(2)], PIXEL_STD[c.min(2)]);
-        for v in &mut x.data[c * inner..(c + 1) * inner] {
+    let plane = (x.h * x.w).max(1);
+    x.data.par_chunks_mut(plane).enumerate().for_each(|(i, chunk)| {
+        let c = (i * plane / inner.max(1)).min(2);
+        let (m, s) = (PIXEL_MEAN[c], PIXEL_STD[c]);
+        for v in chunk {
             *v = (*v * s + m).clamp(0.0, 1.0);
         }
-    }
+    });
 }
 
 #[cfg(test)]
@@ -749,6 +804,146 @@ mod tests {
         let b = Volume::from_data(1, 1, 1, 4, vec![3.0; 4]);
         let bl = blend(&a, &b, 2, Axis::W);
         assert_eq!(bl.data, vec![1.0, 2.0, 3.0, 3.0]);
+    }
+
+    /// The sequential `_stitch_tiles` (blend H with the tile above, blend W
+    /// with the tile to the left, crop the trailing overlaps, concatenate).
+    fn stitch_tiles_reference(tiles: &[Vec<Volume>], h_overlaps: &[usize], w_overlaps: &[usize]) -> Volume {
+        let mut rows_out = Vec::new();
+        for (ri, row) in tiles.iter().enumerate() {
+            let mut row_out: Vec<Volume> = Vec::new();
+            for (ci, tile) in row.iter().enumerate() {
+                let mut t = tile.clone();
+                if ri > 0 {
+                    t = blend(&tiles[ri - 1][ci], &t, h_overlaps[ri - 1], Axis::H);
+                }
+                if ci > 0 {
+                    t = blend(&row[ci - 1], &t, w_overlaps[ci - 1], Axis::W);
+                }
+                if ri + 1 < tiles.len() {
+                    t = t.crop(0, t.t, 0, t.h - h_overlaps[ri], 0, t.w);
+                }
+                if ci + 1 < row.len() {
+                    t = t.crop(0, t.t, 0, t.h, 0, t.w - w_overlaps[ci]);
+                }
+                row_out.push(t);
+            }
+            let (c, t, h) = (row_out[0].c, row_out[0].t, row_out[0].h);
+            let w: usize = row_out.iter().map(|p| p.w).sum();
+            let mut o = Volume::zeros(c, t, h, w);
+            let mut x0 = 0;
+            for p in &row_out {
+                for cc in 0..c {
+                    for tt in 0..t {
+                        for y in 0..h {
+                            o.data[((cc * t + tt) * h + y) * w + x0..][..p.w].copy_from_slice(&p.data[((cc * t + tt) * h + y) * p.w..][..p.w]);
+                        }
+                    }
+                }
+                x0 += p.w;
+            }
+            rows_out.push(o);
+        }
+        let (c, t, w) = (rows_out[0].c, rows_out[0].t, rows_out[0].w);
+        let h: usize = rows_out.iter().map(|p| p.h).sum();
+        let mut o = Volume::zeros(c, t, h, w);
+        let mut y0 = 0;
+        for p in &rows_out {
+            for cc in 0..c {
+                for tt in 0..t {
+                    o.data[((cc * t + tt) * h + y0) * w..][..p.h * w].copy_from_slice(&p.data[(cc * t + tt) * p.h * w..][..p.h * w]);
+                }
+            }
+            y0 += p.h;
+        }
+        o
+    }
+
+    #[test]
+    fn stitch_matches_the_sequential_reference() {
+        let mut r = Rng::new(11);
+        // Ragged grid: row heights 7 / 9 / 6, column widths 5 / 8 / 4 / 6; overlaps 3 / 2 and 2 / 3 / 1.
+        let (hs, ws) = ([7usize, 9, 6], [5usize, 8, 4, 6]);
+        let tiles: Vec<Vec<Volume>> =
+            hs.iter().map(|&h| ws.iter().map(|&w| Volume::from_data(3, 2, h, w, r.uniform(3 * 2 * h * w, 1.0))).collect()).collect();
+        let (ho, wo) = ([3usize, 2], [2usize, 3, 1]);
+        let got = stitch_tiles(&tiles, &ho, &wo);
+        let want = stitch_tiles_reference(&tiles, &ho, &wo);
+        assert_eq!((got.c, got.t, got.h, got.w), (3, 2, 7 + 9 + 6 - 5, 5 + 8 + 4 + 6 - 6));
+        assert_eq!(got, want);
+        // One tile is the identity; one row and one column exercise each axis alone.
+        let one = vec![vec![tiles[0][0].clone()]];
+        assert_eq!(stitch_tiles(&one, &[], &[]), tiles[0][0]);
+        let row = vec![tiles[1].clone()];
+        assert_eq!(stitch_tiles(&row, &[], &wo), stitch_tiles_reference(&row, &[], &wo));
+        let col: Vec<Vec<Volume>> = tiles.iter().map(|r| vec![r[2].clone()]).collect();
+        assert_eq!(stitch_tiles(&col, &ho, &[]), stitch_tiles_reference(&col, &ho, &[]));
+        // Blend along T against the scalar definition, and a crop / denormalise round trip.
+        let a = Volume::from_data(2, 4, 3, 5, r.uniform(2 * 4 * 3 * 5, 1.0));
+        let b = Volume::from_data(2, 3, 3, 5, r.uniform(2 * 3 * 3 * 5, 1.0));
+        let bl = blend(&a, &b, 2, Axis::T);
+        for c in 0..2 {
+            for t in 0..3 {
+                for y in 0..3 {
+                    for x in 0..5 {
+                        let want = if t < 2 { a.at(c, 2 + t, y, x) * (1.0 - t as f32 / 2.0) + b.at(c, t, y, x) * (t as f32 / 2.0) } else { b.at(c, t, y, x) };
+                        assert_eq!(bl.at(c, t, y, x), want);
+                    }
+                }
+            }
+        }
+        // finish_chunk is crop → blend → crop → denormalise.
+        let clip = Volume::from_data(3, 9, 3, 5, r.uniform(3 * 9 * 3 * 5, 1.0));
+        let ov = Volume::from_data(3, 4, 3, 5, r.uniform(3 * 4 * 3 * 5, 1.0));
+        let mut want = blend(&ov, &clip.crop(2, 6, 0, 3, 0, 5), 3, Axis::T).crop(0, 4, 0, 3, 0, 5);
+        denormalize_pixels(&mut want);
+        assert_eq!(finish_chunk(&clip, 2, 6, 4, Some(&ov), 3), want);
+        let mut want = clip.crop(0, 5, 0, 3, 0, 5);
+        denormalize_pixels(&mut want);
+        assert_eq!(finish_chunk(&clip, 0, 9, 5, None, 3), want);
+        let cr = a.crop(1, 2, 1, 2, 2, 3);
+        assert_eq!((cr.t, cr.h, cr.w), (2, 2, 3));
+        assert_eq!(cr.at(1, 1, 1, 2), a.at(1, 2, 2, 4));
+        let mut px = Volume::from_data(3, 2, 3, 5, r.uniform(3 * 2 * 3 * 5, 1.0));
+        let src = px.clone();
+        denormalize_pixels(&mut px);
+        for c in 0..3 {
+            for i in 0..2 * 3 * 5 {
+                assert_eq!(px.data[c * 30 + i], (src.data[c * 30 + i] * PIXEL_STD[c] + PIXEL_MEAN[c]).clamp(0.0, 1.0));
+            }
+        }
+    }
+
+    /// Host cost of one 1344×768 decode chunk (28 tiles of [3, 20, 256, 256]):
+    /// `cargo test -p h3-model --release -- --ignored --nocapture host_decode_chunk_timing`.
+    #[test]
+    #[ignore]
+    fn host_decode_chunk_timing() {
+        let (ys, yl, yo) = split_tiles(768, 256, 64, 16);
+        let (xs, xl, xo) = split_tiles(1344, 256, 64, 16);
+        let mut r = Rng::new(5);
+        let tiles: Vec<Vec<Volume>> = yl.iter().map(|&h| xl.iter().map(|&w| Volume::from_data(3, 20, h, w, r.uniform(3 * 20 * h * w, 1.0))).collect()).collect();
+        let _ = (ys, xs);
+        let t0 = std::time::Instant::now();
+        let clip = stitch_tiles(&tiles, &yo, &xo);
+        let t_stitch = t0.elapsed();
+        let t0 = std::time::Instant::now();
+        let ov = clip.crop(17, 3, 0, clip.h, 0, clip.w);
+        let px = finish_chunk(&clip, 1, 16, 16, Some(&ov), 3);
+        let t_post = t0.elapsed();
+        let t0 = std::time::Instant::now();
+        let n = px.h * px.w;
+        let mut rgb = vec![0u8; px.t * n * 3];
+        rgb.par_chunks_mut(n * 3).enumerate().for_each(|(f, out)| {
+            let planes: [&[f32]; 3] = std::array::from_fn(|ch| &px.data[(ch * px.t + f) * n..][..n]);
+            for (i, o) in out.chunks_exact_mut(3).enumerate() {
+                for ch in 0..3 {
+                    o[ch] = (planes[ch][i] * 255.0).clamp(0.0, 255.0) as u8;
+                }
+            }
+        });
+        let t_u8 = t0.elapsed();
+        println!("host decode chunk on {} threads: stitch {:?}, crop/blend/denormalise {:?}, u8 {:?} (clip {}x{}x{}, {} bytes)", rayon::current_num_threads(), t_stitch, t_post, t_u8, clip.t, clip.h, clip.w, rgb.len());
     }
 
     #[test]

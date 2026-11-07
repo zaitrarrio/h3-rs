@@ -4,6 +4,7 @@
 //! Omni's Parallel Decoding Distillation blocks. Regen-2K is in
 //! [`crate::regen`].
 
+use rayon::prelude::*;
 use crate::{
     audio_vae::{AudioLatents, AudioVae},
     dit::{Attention, H3Dit, OutputHeads, StepMods, Workspace},
@@ -486,14 +487,16 @@ impl<B: Backend> Pipeline<B> {
                 (width, height) = (chunk.w, chunk.h);
                 let start = rgb.len();
                 let px = chunk.h * chunk.w;
-                for f in 0..chunk.t {
-                    for i in 0..px {
+                // Planar [3, T, H, W] in [0, 1] → interleaved 8-bit frames, one task per frame.
+                rgb.resize(start + chunk.t * px * 3, 0);
+                rgb[start..].par_chunks_mut(px * 3).enumerate().for_each(|(f, out)| {
+                    let planes: [&[f32]; 3] = std::array::from_fn(|ch| &chunk.data[(ch * chunk.t + f) * px..][..px]);
+                    for (i, o) in out.chunks_exact_mut(3).enumerate() {
                         for ch in 0..3 {
-                            let v = chunk.data[(ch * chunk.t + f) * px + i];
-                            rgb.push((v * 255.0).clamp(0.0, 255.0) as u8);
+                            o[ch] = (planes[ch][i] * 255.0).clamp(0.0, 255.0) as u8;
                         }
                     }
-                }
+                });
                 on(Event::Frames { first: frames, count: chunk.t, width, height, rgb: &rgb[start..] });
                 frames += chunk.t;
             })?;

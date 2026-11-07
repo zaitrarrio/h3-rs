@@ -678,6 +678,7 @@ dependencies = [
  "h3-cpu",
  "h3-model",
  "half",
+ "rayon",
 ]
 
 [[package]]
@@ -687,6 +688,7 @@ dependencies = [
  "h3-core",
  "h3-cpu",
  "half",
+ "rayon",
  "safetensors",
 ]
 

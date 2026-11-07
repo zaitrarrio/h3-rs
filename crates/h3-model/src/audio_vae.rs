@@ -341,7 +341,7 @@ impl<B: Backend> AudioVae<B> {
             Ok(Activation {
                 alpha: be.upload(&src.get(&format!("{p}.act.alpha"), &[c])?),
                 beta: be.upload(&src.get(&format!("{p}.act.beta"), &[c])?),
-                up: depthwise(be, &src.get(&format!("{p}.upsample.filter"), &[1, 1, AA_KERNEL])?, c),
+                up: depthwise(be, &src.get(&format!("{p}.upsample.filter"), &[1, 1, AA_KERNEL])?.iter().map(|v| v * AA_RATIO as f32).collect::<Vec<_>>(), c),
                 down: depthwise(be, &src.get(&format!("{p}.downsample.lowpass.filter"), &[1, 1, AA_KERNEL])?, c),
             })
         };
@@ -443,22 +443,21 @@ impl<B: Backend> AudioVae<B> {
 
     fn activation(&self, be: &B, x: &B::Buf, c: usize, len: usize, a: &Activation<B>) -> (B::Buf, usize) {
         // UpSample1d: replicate pad `pad`, transposed conv stride 2, ×ratio, crop.
+        // The crop is symmetric (`pl == pr`), so it is the transposed conv's own
+        // `pad`: the kernel writes the kept samples only, and the ×ratio lives in
+        // the filter (`depthwise`, exact in bf16). The earlier per-channel crop
+        // copies were 36 k launches and 46 % of the audio decode on an RTX PRO 6000.
         let k = AA_KERNEL;
         let pad = k / AA_RATIO - 1;
         let pl = pad * AA_RATIO + (k - AA_RATIO) / 2;
         let pr = pad * AA_RATIO + (k - AA_RATIO + 1) / 2;
+        debug_assert_eq!(pl, pr);
         let padded = be.alloc(c * (len + 2 * pad));
         be.replicate_pad1d(x, c, len, pad, pad, &padded);
-        let ts = ConvT1dShape { cin: c, cout: c, groups: c, len: len + 2 * pad, k, stride: AA_RATIO, pad: 0 };
-        let up_full = be.alloc(ts.out_len());
-        be.conv_transpose1d(&padded, &ts, &a.up, None, &up_full);
-        let ul = ts.out_len_1d();
-        let up_len = ul - pl - pr;
+        let ts = ConvT1dShape { cin: c, cout: c, groups: c, len: len + 2 * pad, k, stride: AA_RATIO, pad: pl };
+        let up_len = ts.out_len_1d();
         let up = be.alloc(c * up_len);
-        for ch in 0..c {
-            be.copy(&up_full, ch * ul + pl, &up, ch * up_len, up_len);
-        }
-        be.axpby(&up, 0, AA_RATIO as f32, &up, 0, 0.0, c * up_len); // × ratio
+        be.conv_transpose1d(&padded, &ts, &a.up, None, &up);
         be.snake(&up, c, up_len, Snake::AlphaBeta { alpha: &a.alpha, beta: &a.beta });
         // DownSample1d: replicate pad (k/2 − 1, k/2), depthwise conv stride 2.
         let (dl, dr) = (k / 2 - 1, k / 2);

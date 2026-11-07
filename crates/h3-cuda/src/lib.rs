@@ -24,6 +24,7 @@ use h3_core::backend::{
 use h3_core::quant::{Nvfp4, Q4, Q8};
 use h3_core::vsa::VsaSpec;
 use half::bf16;
+use rayon::prelude::*;
 use std::sync::Arc;
 
 const KERNELS: &str = include_str!("kernels.cu");
@@ -679,9 +680,9 @@ impl Backend for Cuda {
     fn download(&self, buf: &CuBuf) -> Vec<f32> {
         let h = self.stream.clone_dtoh(&*buf.s).expect("download");
         if buf.f32 {
-            h.chunks_exact(2).take(buf.len).map(|p| f32::from_bits(p[0] as u32 | (p[1] as u32) << 16)).collect()
+            h[..2 * buf.len].par_chunks_exact(2).map(|p| f32::from_bits(p[0] as u32 | (p[1] as u32) << 16)).collect()
         } else {
-            h[..buf.len].iter().map(|&b| bf16::from_bits(b).to_f32()).collect()
+            h[..buf.len].par_iter().map(|&b| bf16::from_bits(b).to_f32()).collect()
         }
     }
 
