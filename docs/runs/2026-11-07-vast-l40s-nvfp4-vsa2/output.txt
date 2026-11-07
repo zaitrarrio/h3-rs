@@ -1,0 +1,78 @@
+### cmd 1: conformance + kernel A/B
+watchdog armed
+name, driver_version, power.limit [W], memory.total [MiB]
+NVIDIA L40S, 595.91.07, 350.00 W, 46068 MiB
+== check cuda v2 kernels (default)
+cuda NVIDIA L40S (sm_89)
+all 95 checks pass (tolerance 3e-2)
+== check cuda v1 kernels
+cuda NVIDIA L40S (sm_89)
+all 95 checks pass (tolerance 3e-2)
+== bench cuda v2, VSA 4 layers 2 steps
+load (synthetic) 18.65s
+adaln tables 7.94s (96768 per block)
+forward 0: 1.092s (272.9 ms/block; ×50/4 blocks ≈ 13.65s)
+forward 1: 1.113s (278.2 ms/block; ×50/4 blocks ≈ 13.91s)
+== bench cuda v2 profile
+cuda NVIDIA L40S (sm_89)  |  fasth3-v2 1344x768x124  37966 tokens  4 blocks  weights native
+load (synthetic) 18.36s
+adaln tables 7.86s (96768 per block)
+forward 0: 1.095s (273.7 ms/block; ×50/4 blocks ≈ 13.68s)
+profile (CUDA, synced per op): 1093.9 ms in ops; GEMMs 566.5 ms at 227.4 TFLOP/s
+  vsa fine (mma2, d128)                        422.2 ms  38.6%       4 calls   105.539 ms/call
+  gemm n=28672 k=5376                          194.9 ms  17.8%       4 calls    48.730 ms/call
+  gemm n=21504 k=5376                          159.0 ms  14.5%       4 calls    39.742 ms/call
+  gemm n=5376 k=14336                          110.6 ms  10.1%       4 calls    27.643 ms/call
+  gemm n=7168 k=5376                            55.3 ms   5.1%       4 calls    13.831 ms/call
+  gemm n=5376 k=7168                            45.1 ms   4.1%       4 calls    11.283 ms/call
+  head_split (qk-norm + rope)                   25.5 ms   2.3%      16 calls     1.592 ms/call
+  vsa coarse + top-k                            25.1 ms   2.3%       4 calls     6.279 ms/call
+  swiglu                                        18.8 ms   1.7%       4 calls     4.704 ms/call
+  rms_norm (+residual, modulation)              17.4 ms   1.6%       9 calls     1.928 ms/call
+  vsa pool                                      11.2 ms   1.0%       4 calls     2.788 ms/call
+  gate_residual                                  7.3 ms   0.7%       4 calls     1.833 ms/call
+  gemm+bias n=96 k=5376                          0.8 ms   0.1%       1 calls     0.847 ms/call
+  gemm+bias n=5376 k=96                          0.5 ms   0.1%       1 calls     0.547 ms/call
+  gemm+bias n=32 k=5376 (small)                  0.1 ms   0.0%       1 calls     0.116 ms/call
+  gemm+bias n=5376 k=32 (small)                  0.1 ms   0.0%       1 calls     0.052 ms/call
+  copy (dtod)                                    0.0 ms   0.0%       1 calls     0.035 ms/call
+== bench cuda v1 profile
+cuda NVIDIA L40S (sm_89)  |  fasth3-v2 1344x768x124  37966 tokens  4 blocks  weights native
+load (synthetic) 18.72s
+adaln tables 7.89s (96768 per block)
+forward 0: 1.015s (253.8 ms/block; ×50/4 blocks ≈ 12.69s)
+profile (CUDA, synced per op): 1014.6 ms in ops; GEMMs 583.0 ms at 221.0 TFLOP/s
+  vsa fine (mma, d128)                         326.5 ms  32.2%       4 calls    81.628 ms/call
+  gemm n=28672 k=5376                          211.1 ms  20.8%       4 calls    52.787 ms/call
+  gemm n=21504 k=5376                          157.4 ms  15.5%       4 calls    39.362 ms/call
+  gemm n=5376 k=14336                          110.7 ms  10.9%       4 calls    27.665 ms/call
+  gemm n=7168 k=5376                            54.2 ms   5.3%       4 calls    13.551 ms/call
+  gemm n=5376 k=7168                            48.0 ms   4.7%       4 calls    11.989 ms/call
+  head_split (qk-norm + rope)                   25.4 ms   2.5%      16 calls     1.586 ms/call
+  vsa coarse + top-k                            25.0 ms   2.5%       4 calls     6.251 ms/call
+  swiglu                                        18.9 ms   1.9%       4 calls     4.720 ms/call
+  rms_norm (+residual, modulation)              17.3 ms   1.7%       9 calls     1.926 ms/call
+  vsa pool                                      11.2 ms   1.1%       4 calls     2.793 ms/call
+  gate_residual                                  7.3 ms   0.7%       4 calls     1.835 ms/call
+  gemm+bias n=96 k=5376                          0.9 ms   0.1%       1 calls     0.853 ms/call
+  gemm+bias n=5376 k=96                          0.5 ms   0.1%       1 calls     0.547 ms/call
+  gemm+bias n=32 k=5376 (small)                  0.1 ms   0.0%       1 calls     0.115 ms/call
+  gemm+bias n=5376 k=32 (small)                  0.0 ms   0.0%       1 calls     0.050 ms/call
+  copy (dtod)                                    0.0 ms   0.0%       1 calls     0.035 ms/call
+== bench cuda v2 dense
+adaln tables 7.72s (96768 per block)
+forward 0: 1.538s (384.6 ms/block; ×50/4 blocks ≈ 19.23s)
+forward 1: 1.576s (393.9 ms/block; ×50/4 blocks ≈ 19.70s)
+== bench cuda v1 dense
+adaln tables 7.58s (96768 per block)
+forward 0: 1.728s (432.0 ms/block; ×50/4 blocks ≈ 21.60s)
+forward 1: 1.784s (446.1 ms/block; ×50/4 blocks ≈ 22.30s)
+== bench cuda v2 omni (tile 128) 4 layers
+load (synthetic) 17.86s
+adaln tables 7.75s (96768 per block)
+forward 0: 0.896s (224.0 ms/block; ×50/4 blocks ≈ 11.20s)
+load (synthetic) 18.71s
+adaln tables 7.57s (96768 per block)
+forward 0: 0.899s (224.8 ms/block; ×50/4 blocks ≈ 11.24s)
+exit 0
+

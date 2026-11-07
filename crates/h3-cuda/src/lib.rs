@@ -92,9 +92,15 @@ pub struct Cuda {
     q8_scratch: std::sync::Mutex<Option<CuBuf>>,
     scalar_conv: bool,
     scalar_attn: bool,
-    /// `H3_CUDA_ATTN_V1=1`: the 16-rows-per-warp attention / VSA fine kernels
-    /// (the v2 kernels, 32 rows per warp, are the default).
+    /// `H3_CUDA_ATTN_V1=1`: the 16-rows-per-warp kernels for dense attention
+    /// too (v2, 32 rows per warp and 128-row blocks, is the dense default:
+    /// 11 % faster on an L40S).
     attn_v1: bool,
+    /// `H3_CUDA_VSA_V2=1`: the v2 body for the VSA fine stage. Measured on an
+    /// L40S (`docs/runs/2026-11-07-vast-l40s-nvfp4-vsa2`): 29 % slower than v1
+    /// on 64-token tiles (2 warps per block), equal on 128-token tiles, so v1
+    /// stays the VSA default.
+    vsa_v2: bool,
     prof: Option<std::sync::Mutex<std::collections::HashMap<String, (f64, usize)>>>,
 }
 
@@ -340,6 +346,7 @@ impl Cuda {
             scalar_conv: env1("H3_CUDA_SCALAR_CONV"),
             scalar_attn: env1("H3_CUDA_SCALAR_ATTN"),
             attn_v1: env1("H3_CUDA_ATTN_V1"),
+            vsa_v2: env1("H3_CUDA_VSA_V2"),
             prof: env1("H3_PROFILE").then(Default::default),
         })
     }
@@ -1115,7 +1122,7 @@ impl Backend for Cuda {
         // v1: 64 query rows per block (te/64 blocks per tile), 128 threads.
         // v2: 64 rows (2 warps) for 64-token tiles, 128 rows (4 warps) and
         // te/128 blocks per tile otherwise.
-        let mma = match (s.d, self.attn_v1, s.te >= 128) {
+        let mma = match (s.d, !self.vsa_v2, s.te >= 128) {
             (128, true, _) => Some((&self.f.vsa_fine_mma128, (s.te / 64) as u32, 128)),
             (64, true, _) => Some((&self.f.vsa_fine_mma64, (s.te / 64) as u32, 128)),
             (128, false, false) => Some((&self.f.vsa_fine_mma2_128_w2, 1, 64)),
