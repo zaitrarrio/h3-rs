@@ -71,19 +71,30 @@ time); when the tables do not fit, they are uploaded per step.
   VSA = attention, GQA = repeated heads, patchify round trips, chunked TAEH3 =
   whole decode); tiny-model shape and finiteness runs; the conformance suite on
   itself and on WebGPU (lavapipe).
-- CUDA: kernels compile under NVRTC; nothing has run on a GPU.
+- CUDA and WebGPU on an RTX A6000: 90 / 90 checks each; real clips from
+  FastH3-8-Step-V2 and FastH3-Trim at 1344×768×124 with sound, matching
+  their prompt (`docs/runs/2026-11-06-vast-a6000-first-gpu`).
 - Parity with PyTorch: `scripts/reference/make_fixtures.py` specifies the
   fixtures; it has not been run (no PyTorch in the authoring environment), so
-  the parity tests currently skip. The first thing to do on a machine with
-  PyTorch and FastVideo is to generate them and run `cargo test --test parity`.
-- Speed: nothing measured. `h3 bench` reports per-forward time; record card,
-  driver and power limit under `docs/runs/`.
+  the parity tests currently skip. The clips show the pipeline is right; the
+  fixtures would show how right (a PSNR against the reference sample).
+- Speed: A6000 numbers in that run directory; nothing on a 4090 / 5090 /
+  AMD / Apple yet.
 
 ## Next
 
-1. Generate the parity fixtures; fix what they find.
-2. Run `h3 check --backend cuda` and `--backend wgpu` on a real card; then
-   `bench` and a 1344×768×124 clip at int4 on a 24 GB card and int8 on 48 GB.
-3. Blackwell FP4 tensor-core path for the Trim NVFP4 linears (now dequantized
-   at load to bf16).
-4. Block streaming with overlapped uploads (now serial).
+1. The VSA fine stage (34 % of a CUDA block at 53 TFLOP/s effective vs the
+   GEMMs' 121): larger key chunks, warp-specialised loads, or the fastwan
+   structure with 128-wide Q tiles.
+2. `h3 quantize` the trees once (load was 280 s with int8 quantization at
+   load) and the prompt gallery for demos (290 s cold prompt encode).
+3. Decode: 44 s for 124 frames on the ViT decoder is host-bound per chunk
+   (as fastwan's was); overlap chunk decode with the download / conversion.
+4. The ComfyUI single-file NVFP4 Trim layout (key map + plain-scale NVFP4),
+   then a Blackwell FP4 tensor-core GEMM for it.
+5. Generate the parity fixtures; fix what they find.
+6. WebGPU: 16× behind CUDA on the same card; f16 activations and a
+   tensor-core-friendly GEMM tiling are the two levers (the 4 GiB buffer /
+   2 GiB binding limits also cap clips above ~38k tokens until activations
+   are chunked more widely).
+7. Block streaming with overlapped uploads (now serial); a 24 GB card run.

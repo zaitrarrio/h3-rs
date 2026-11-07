@@ -6,12 +6,27 @@ State and invariants only; the reasoning is in `docs/design.md`.
   means: CPU reference, WGSL kernel, CUDA kernel, and a case in
   `h3-model/src/check.rs`, all in the same change.
 - The CPU backend is ground truth. GPU code is trusted only after
-  `h3 check --backend <b>` passes on that hardware. The WebGPU suite runs in
-  CI on lavapipe (`cargo test -p h3-wgpu`); CUDA kernels are NVRTC-compiled
-  in `cargo test -p h3-cuda` but **no CUDA conformance run on a GPU has been
-  made yet** (this repository was written in a container without one).
+  `h3 check --backend <b>` passes on that hardware. Both pass on an RTX
+  A6000 (driver 570.195.03): CUDA 90/90 at 3e-2, WebGPU 90/90 at 1e-2
+  (`docs/runs/2026-11-06-vast-a6000-first-gpu`). The WebGPU suite also runs
+  on lavapipe in CI, including a forced-64-KiB-binding pass that exercises
+  the row-chunked GEMM / head_split paths; CUDA kernels are NVRTC-compiled
+  in `cargo test -p h3-cuda`. Neither has run on AMD / Apple.
 - No speed claim without a measurement on named hardware (card, driver,
-  power limit) recorded under `docs/runs/`. There are no measurements yet.
+  power limit) recorded under `docs/runs/`. RTX A6000, 1344×768×124, VSA 0.8:
+  470 ms/block CUDA (25.1 s per real forward at int8; FastH3-V2 clip: denoise
+  201 s, decode 44 s), 7.6 s/block WebGPU. Profile with `H3_PROFILE=1`; the
+  VSA fine stage is 34 % of a CUDA block, GEMMs 56 % at ~80 % of peak.
+- WebGPU binds any activation over `max_storage_buffer_binding_size` (2 GiB
+  on NVIDIA; the fused QKV is 3.3 GB at 38k tokens) as aligned row
+  sub-ranges in `linear` / `head_split`; the FFN chunk is capped by
+  `Backend::max_buffer_elems`. Any new op that touches a `[tokens, ≥ 14k]`
+  activation needs the same treatment.
+- Checkpoint formats: the FastVideo HF trees load (`transformer/` shards +
+  `fastvideo_inference.json`, which overrides the preset). The ComfyUI
+  single-file NVFP4 Trim (`blocks.N.attn.qkv_proj.weight` U8 + `weight_scale`
+  E4M3 [out, in/16] + `weight_scale_2`, `adaln_t_table [1025, 16]`) does not:
+  it needs a key map and an unswizzled-scale NVFP4 variant.
 - The reference is FastVideo's `pipelines/basic/minimax_h3` (+ `pika_h3_flex`,
   `open_h3_regenerate_2k`) and the released configs. Checkpoint contracts that
   are easy to get wrong: channel-major patch features (`patchify`), the

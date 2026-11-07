@@ -16,7 +16,9 @@ numbered command scripts and uploads each one's output:
    `NVIDIA_DRIVER_CAPABILITIES=all`, disk ≥ 250 GB: the base tree is 95 GB
    with the text encoder). Arm a destroy timer immediately.
 3. Queue work with `rr.py cmd N file.sh`; read it back with `rr.py out N`.
-4. Destroy (`DELETE /instances/<id>/`) and check the credit.
+4. Destroy (`DELETE /api/v0/instances/<id>/`; the v1 path answers "Not
+   found" for a delete) and check the credit. Offers: `POST /api/v0/bundles/`
+   with the query as the body; instances: `GET /api/v1/instances/`.
 
 Watchdog: `sleep N && <destroy>`, never `sleep N; <destroy>`.
 
@@ -33,4 +35,4 @@ timeout 7200 /w/h3-bin generate --variant fasth3-v2 --model-dir /w/h3 --variant-
 ```
 
 Record the card, driver and power limit with every number (`docs/runs/`).
-No run has been made yet: this directory is the plan, not a result.
+First run: `docs/runs/2026-11-06-vast-a6000-first-gpu`.

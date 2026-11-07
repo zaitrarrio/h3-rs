@@ -1,68 +1,61 @@
-### cmd 1: conformance
-+ nvidia-smi --query-gpu=name,driver_version,power.limit,memory.total,clocks.max.sm --format=csv
+### cmd 1
+set -x
+nvidia-smi --query-gpu=name,driver_version,power.limit,memory.total,clocks.max.sm --format=csv
+nproc; free -g | head -2
+/w/h3-bin --help | head -1
+echo "== check cuda (scalar attention / conv)"
+H3_CUDA_SCALAR_ATTN=1 H3_CUDA_SCALAR_CONV=1 timeout 1500 /w/h3-bin check --backend cuda 2>&1 | grep -v " ok$" | tail -40
+echo "== check cuda (mma)"
+timeout 1500 /w/h3-bin check --backend cuda 2>&1 | grep -v " ok$" | tail -40
+echo "== vulkan"
+vulkaninfo --summary 2>&1 | grep -iE "deviceName|driverName|driverInfo" | head -6
+echo "== check wgpu"
+timeout 1500 /w/h3-bin check --backend wgpu 2>&1 | grep -v " ok$" | tail -40
+--- output
 name, driver_version, power.limit [W], memory.total [MiB], clocks.max.sm [MHz]
 NVIDIA RTX A6000, 570.195.03, 300.00 W, 46068 MiB, 2100 MHz
-+ nproc
 48
-+ free -g
-+ head -2
                total        used        free      shared  buff/cache   available
 Mem:             282          56          40           0         190         226
-+ /w/h3-bin --help
-+ head -1
 MiniMax H3 video + audio generation on CPU, WebGPU or CUDA
-+ echo '== check cuda (scalar attention / conv)'
 == check cuda (scalar attention / conv)
-+ H3_CUDA_SCALAR_ATTN=1
-+ H3_CUDA_SCALAR_CONV=1
-+ timeout 1500 /w/h3-bin check --backend cuda
-+ grep -v ' ok$'
-+ tail -40
 cuda NVIDIA RTX A6000 (sm_86)
 all 90 checks pass (tolerance 3e-2)
-+ echo '== check cuda (mma)'
 == check cuda (mma)
-+ timeout 1500 /w/h3-bin check --backend cuda
-+ grep -v ' ok$'
-+ tail -40
 cuda NVIDIA RTX A6000 (sm_86)
 all 90 checks pass (tolerance 3e-2)
-+ echo '== vulkan'
 == vulkan
-+ vulkaninfo --summary
-+ grep -iE 'deviceName|driverName|driverInfo'
-+ head -6
 	deviceName         = NVIDIA RTX A6000
 	driverName         = NVIDIA
 	driverInfo         = 570.195.03
 	deviceName         = llvmpipe (LLVM 20.1.2, 256 bits)
 	driverName         = llvmpipe
 	driverInfo         = Mesa 25.2.8-0ubuntu0.24.04.4 (LLVM 20.1.2)
-+ echo '== check wgpu'
 == check wgpu
-+ timeout 1500 /w/h3-bin check --backend wgpu
-+ grep -v ' ok$'
-+ tail -40
 wgpu Vulkan: NVIDIA RTX A6000 (NVIDIA 570.195.03)
 all 90 checks pass (tolerance 1e-2)
 exit 0
 
 
-### cmd 2: bench
-+ echo '== bench cuda fasth3-v2 1344x768x124, 4 layers, 2 steps'
+### cmd 2
+set -x
+echo "== bench cuda fasth3-v2 1344x768x124, 4 layers, 2 steps"
+timeout 1500 /w/h3-bin bench --backend cuda --variant fasth3-v2 --layers 4 --steps 2 2>&1 | tail -15
+echo "== bench cuda with profile"
+H3_PROFILE=1 timeout 1500 /w/h3-bin bench --backend cuda --variant fasth3-v2 --layers 4 --steps 1 2>&1 | tail -60
+echo "== bench cuda dense"
+timeout 1500 /w/h3-bin bench --backend cuda --variant fasth3-v2 --attention dense --layers 4 --steps 2 2>&1 | tail -8
+echo "== bench wgpu"
+timeout 2400 /w/h3-bin bench --backend wgpu --variant fasth3-v2 --layers 2 --steps 1 2>&1 | tail -15
+nvidia-smi --query-gpu=memory.used --format=csv
+--- output
 == bench cuda fasth3-v2 1344x768x124, 4 layers, 2 steps
-+ tail -15
-+ timeout 1500 /w/h3-bin bench --backend cuda --variant fasth3-v2 --layers 4 --steps 2
 cuda NVIDIA RTX A6000 (sm_86)  |  fasth3-v2 1344x768x124  37966 tokens  4 blocks  weights native
 load (synthetic) 22.28s
 adaln tables 9.53s (96768 per block)
 forward 0: 1.892s (472.9 ms/block; ×50/4 blocks ≈ 23.65s)
 forward 1: 1.901s (475.2 ms/block; ×50/4 blocks ≈ 23.76s)
-+ echo '== bench cuda with profile'
 == bench cuda with profile
-+ H3_PROFILE=1
-+ timeout 1500 /w/h3-bin bench --backend cuda --variant fasth3-v2 --layers 4 --steps 1
-+ tail -60
 cuda NVIDIA RTX A6000 (sm_86)  |  fasth3-v2 1344x768x124  37966 tokens  4 blocks  weights native
 load (synthetic) 22.82s
 adaln tables 9.62s (96768 per block)
@@ -85,19 +78,13 @@ profile (CUDA, synced per op): 1916.5 ms in ops; GEMMs 1032.7 ms at 124.7 TFLOP/
   gemm+bias n=96 k=5376                          0.8 ms   0.0%       1 calls     0.756 ms/call
   copy (dtod)                                    0.0 ms   0.0%       1 calls     0.035 ms/call
   gemm+bias n=5376 k=32 (small)                  0.0 ms   0.0%       1 calls     0.024 ms/call
-+ echo '== bench cuda dense'
 == bench cuda dense
-+ tail -8
-+ timeout 1500 /w/h3-bin bench --backend cuda --variant fasth3-v2 --attention dense --layers 4 --steps 2
 cuda NVIDIA RTX A6000 (sm_86)  |  fasth3-v2 1344x768x124  37966 tokens  4 blocks  weights native
 load (synthetic) 23.42s
 adaln tables 11.19s (96768 per block)
 forward 0: 3.258s (814.6 ms/block; ×50/4 blocks ≈ 40.73s)
 forward 1: 3.280s (820.0 ms/block; ×50/4 blocks ≈ 41.00s)
-+ echo '== bench wgpu'
 == bench wgpu
-+ timeout 2400 /w/h3-bin bench --backend wgpu --variant fasth3-v2 --layers 2 --steps 1
-+ tail -15
 wgpu Vulkan: NVIDIA RTX A6000 (NVIDIA 570.195.03)  |  fasth3-v2 1344x768x124  37966 tokens  2 blocks  weights native
 load (synthetic) 26.34s
 
@@ -110,63 +97,24 @@ Caused by:
 
 
 note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
-+ nvidia-smi --query-gpu=memory.used --format=csv
 memory.used [MiB]
 1 MiB
 exit 0
 
 
-### cmd 3: adaln tables
-+ '[' '!' -f /w/weights.done ']'
-+ sleep 15
-+ '[' '!' -f /w/weights.done ']'
-+ sleep 15
-+ '[' '!' -f /w/weights.done ']'
-+ sleep 15
-+ '[' '!' -f /w/weights.done ']'
-+ sleep 15
-+ '[' '!' -f /w/weights.done ']'
-+ sleep 15
-+ '[' '!' -f /w/weights.done ']'
-+ sleep 15
-+ '[' '!' -f /w/weights.done ']'
-+ sleep 15
-+ '[' '!' -f /w/weights.done ']'
-+ sleep 15
-+ '[' '!' -f /w/weights.done ']'
-+ sleep 15
-+ '[' '!' -f /w/weights.done ']'
-+ sleep 15
-+ '[' '!' -f /w/weights.done ']'
-+ sleep 15
-+ '[' '!' -f /w/weights.done ']'
-+ sleep 15
-+ '[' '!' -f /w/weights.done ']'
-+ sleep 15
-+ '[' '!' -f /w/weights.done ']'
-+ sleep 15
-+ '[' '!' -f /w/weights.done ']'
-+ sleep 15
-+ '[' '!' -f /w/weights.done ']'
-+ sleep 15
-+ '[' '!' -f /w/weights.done ']'
-+ sleep 15
-+ '[' '!' -f /w/weights.done ']'
-+ sleep 15
-+ '[' '!' -f /w/weights.done ']'
-+ sleep 15
-+ '[' '!' -f /w/weights.done ']'
-+ grep -c FAILED /root/boot.log
+### cmd 3
+set -x
+while [ ! -f /w/weights.done ]; do sleep 15; done
+grep -c FAILED /root/boot.log; grep "weights " /root/boot.log | tail -1
+du -sh /w/h3 /w/trim /w/tae; ls /w/h3 /w/h3/transformer | head -30
+echo "== adaln tables fasth3-v2"
+time timeout 3600 /w/h3-bin adaln-tables --backend cuda --variant fasth3-v2 --model-dir /w/h3 --out /w/v2.tables 2>&1 | tail -20
+--- output
 0
-+ grep 'weights ' /root/boot.log
-+ tail -1
 weights 149G in 468s
-+ du -sh /w/h3 /w/trim /w/tae
 138G	/w/h3
 12G	/w/trim
 123M	/w/tae
-+ ls /w/h3 /w/h3/transformer
-+ head -30
 /w/h3:
 audio_vae
 text_encoder
@@ -191,19 +139,398 @@ diffusion_pytorch_model-00012-of-00014.safetensors
 diffusion_pytorch_model-00013-of-00014.safetensors
 diffusion_pytorch_model-00014-of-00014.safetensors
 diffusion_pytorch_model.safetensors.index.json
-+ echo '== adaln tables fasth3-v2'
 == adaln tables fasth3-v2
-+ timeout 3600 /w/h3-bin adaln-tables --backend cuda --variant fasth3-v2 --model-dir /w/h3 --out /w/v2.tables
-+ tail -20
 18 timesteps [0.0001001358, 0.0003336072, 0.014211655, 0.032424748, 0.04585159, 0.056831896, 0.090909064, 0.10048044, 0.14285713, 0.16725987, 0.23076922, 0.25, 0.35714287, 0.41176468, 0.5, 0.7, 0.999, 1.0] → /w/v2.tables (174.6 MB) in 432.7s
 
 real	7m21.284s
 user	3m19.476s
 sys	2m53.347s
-+ ls -la /w/v2.tables
 -rw------- 1 root root 174573856 Nov  6 23:51 /w/v2.tables
-+ curl -s -X PUT --upload-file /w/v2.tables 'https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/vast-20261106-2335/results/v2.tables?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261106%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261106T233753Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=d7fe3d6471b8266d5576a95305a378b6af5469818f87cd1c270b10b6045722b6'
-+ echo 'tables uploaded'
 tables uploaded
 exit 0
+
+
+### cmd 4
+set -x
+echo "== generate fasth3-v2 int8 1344x768x124 seed 7"
+time timeout 5000 /w/h3-bin generate --backend cuda --variant fasth3-v2 --model-dir /w/h3 --tables /w/v2.tables --weights int8 \
+  --prompt "A red fox trots through fresh snow at dawn in a quiet pine forest; snow crunches softly under its paws and a light wind moves through the branches." \
+  --width 1344 --height 768 --frames 124 --seed 7 --out /w/fox.y4m 2>&1 | tail -40
+ls -la /w/fox.* ; nvidia-smi --query-gpu=memory.used --format=csv
+ffmpeg -loglevel error -y -i /w/fox.y4m -i /w/fox.wav -c:v libx264 -crf 18 -pix_fmt yuv420p -c:a aac -b:a 192k -shortest /w/fox.mp4 && ls -la /w/fox.mp4
+ffmpeg -loglevel error -y -i /w/fox.y4m -vf "select=eq(n\,60)" -vframes 1 /w/fox60.png
+--- output
+== generate fasth3-v2 int8 1344x768x124 seed 7
+cuda NVIDIA RTX A6000 (sm_86)
+load 280.2s
+prompt: 33 rows in 290.3s
+step 1/8 24.72s
+step 2/8 25.11s
+step 3/8 25.22s
+step 4/8 25.26s
+step 5/8 25.17s
+step 6/8 25.17s
+step 7/8 25.27s
+step 8/8 25.30s
+run 0: total 246.68s  prepare 0.45s  adaln 0.00s  denoise 201.21s (["24.72", "25.11", "25.22", "25.26", "25.17", "25.17", "25.27", "25.30"])  decode 44.42s  audio 0.43s
+wrote /w/fox.y4m (124 frames 1344x768) and /w/fox.wav
+mux: ffmpeg -i /w/fox.y4m -i /w/fox.wav -c:v libx264 -pix_fmt yuv420p -c:a aac /w/fox.mp4
+
+real	13m47.215s
+user	8m8.283s
+sys	4m13.521s
+-rw-r--r-- 1 root root    662444 Nov  7 00:05 /w/fox.wav
+-rw-r--r-- 1 root root 383976225 Nov  7 00:05 /w/fox.y4m
+memory.used [MiB]
+1 MiB
+-rw-r--r-- 1 root root 5494135 Nov  7 00:05 /w/fox.mp4
+uploaded
+exit 0
+
+
+### cmd 5
+set -x
+echo "== wgpu bench with the buffer cap (2 layers, 1 step)"
+timeout 2400 /w/h3-bin2 bench --backend wgpu --variant fasth3-v2 --layers 2 --steps 1 2>&1 | tail -12
+echo "== wgpu bench profile"
+H3_PROFILE=1 timeout 2400 /w/h3-bin2 bench --backend wgpu --variant fasth3-v2 --layers 2 --steps 1 2>&1 | tail -40
+--- output
+bin2 ok
+== wgpu bench with the buffer cap (2 layers, 1 step)
+load (synthetic) 20.61s
+adaln tables 8.10s (96768 per block)
+
+thread 'main' (9731) panicked at /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wgpu-30.0.1/src/backend/wgpu_core.rs:1280:26:
+wgpu error: Validation Error
+
+Caused by:
+  In Device::create_bind_group
+    Buffer binding 4 range 3265683456 exceeds `max_*_buffer_binding_size` limit 2147483644
+
+
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+== wgpu bench profile
+wgpu Vulkan: NVIDIA RTX A6000 (NVIDIA 570.195.03)  |  fasth3-v2 1344x768x124  37966 tokens  2 blocks  weights native
+load (synthetic) 20.66s
+adaln tables 8.23s (96768 per block)
+
+thread 'main' (9742) panicked at /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wgpu-30.0.1/src/backend/wgpu_core.rs:1280:26:
+wgpu error: Validation Error
+
+Caused by:
+  In Device::create_bind_group
+    Buffer binding 4 range 3265683456 exceeds `max_*_buffer_binding_size` limit 2147483644
+
+
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+exit 0
+
+
+### cmd 6
+set -x
+TR=/w/trim/diffusion_models/fastvideo_fasth3_trim_8step_nvfp4.safetensors
+python3 - <<'PY'
+import json,struct
+f=open("/w/trim/diffusion_models/fastvideo_fasth3_trim_8step_nvfp4.safetensors","rb"); n=struct.unpack("<Q",f.read(8))[0]; h=json.loads(f.read(n))
+ks=sorted(k for k in h if k!="__metadata__"); print(len(ks),"tensors"); print("meta",h.get("__metadata__"))
+import re
+pat=set(re.sub(r"\.\d+\.",".N.",k) for k in ks); print(len(pat),"patterns")
+for k in sorted(pat)[:80]: print(" ",k)
+for k in ks[:3]+[k for k in ks if "adaln" in k][:6]+[k for k in ks if "blocks.0." in k][:20]: print("   ",k,h[k]["dtype"],h[k]["shape"])
+PY
+echo "== adaln tables fasth3-trim"
+time timeout 3000 /w/h3-bin2 adaln-tables --backend cuda --variant fasth3-trim --model-dir /w/h3 --transformer $TR --out /w/trim.tables 2>&1 | tail -20
+echo "== generate fasth3-trim nvfp4 1344x768x124 seed 7"
+time timeout 4000 /w/h3-bin2 generate --backend cuda --variant fasth3-trim --model-dir /w/h3 --transformer $TR --tables /w/trim.tables --weights nvfp4 \
+  --prompt "A red fox trots through fresh snow at dawn in a quiet pine forest; snow crunches softly under its paws and a light wind moves through the branches." \
+  --width 1344 --height 768 --frames 124 --seed 7 --out /w/trim.y4m 2>&1 | tail -40
+ls -la /w/trim.*; nvidia-smi --query-gpu=memory.used --format=csv
+--- output
+1124 tensors
+meta {'format': 'pt'}
+50 patterns
+  adaln_t_table
+  audio_patch_proj.bias
+  audio_patch_proj.weight
+  blocks.N.adaln_proj.linear.bias
+  blocks.N.adaln_proj.linear.weight
+  blocks.N.attn.k_norm.weight
+  blocks.N.attn.out_proj.comfy_quant
+  blocks.N.attn.out_proj.weight
+  blocks.N.attn.out_proj.weight_scale
+  blocks.N.attn.out_proj.weight_scale_2
+  blocks.N.attn.q_norm.weight
+  blocks.N.attn.qkv_proj.comfy_quant
+  blocks.N.attn.qkv_proj.weight
+  blocks.N.attn.qkv_proj.weight_scale
+  blocks.N.attn.qkv_proj.weight_scale_2
+  blocks.N.attn.to_gate_compress.comfy_quant
+  blocks.N.attn.to_gate_compress.weight
+  blocks.N.attn.to_gate_compress.weight_scale
+  blocks.N.attn.to_gate_compress.weight_scale_2
+  blocks.N.mlp.fc1.comfy_quant
+  blocks.N.mlp.fc1.weight
+  blocks.N.mlp.fc1.weight_scale
+  blocks.N.mlp.fc1.weight_scale_2
+  blocks.N.mlp.fc2.comfy_quant
+  blocks.N.mlp.fc2.weight
+  blocks.N.mlp.fc2.weight_scale
+  blocks.N.mlp.fc2.weight_scale_2
+  blocks.N.norm1.weight
+  blocks.N.norm2.weight
+  condition_proj.bias
+  condition_proj.weight
+  final_layer.adaln_proj.linear.bias
+  final_layer.adaln_proj.linear.weight
+  final_layer.audio_out.bias
+  final_layer.audio_out.weight
+  final_layer.norm.weight
+  final_layer.video_out.bias
+  final_layer.video_out.weight
+  rope.inv_freq
+  token_refiner.blocks.N.attn.k_norm.weight
+  token_refiner.blocks.N.attn.out_proj.weight
+  token_refiner.blocks.N.attn.q_norm.weight
+  token_refiner.blocks.N.attn.qkv_proj.weight
+  token_refiner.blocks.N.mlp.fc1.weight
+  token_refiner.blocks.N.mlp.fc2.weight
+  token_refiner.blocks.N.norm1.weight
+  token_refiner.blocks.N.norm2.weight
+  token_refiner.final_norm.weight
+  video_patch_proj.bias
+  video_patch_proj.weight
+    adaln_t_table F32 [1025, 16]
+    audio_patch_proj.bias F32 [5376]
+    audio_patch_proj.weight F32 [5376, 32]
+    adaln_t_table F32 [1025, 16]
+    blocks.0.adaln_proj.linear.bias F32 [96768]
+    blocks.0.adaln_proj.linear.weight F32 [96768, 16]
+    blocks.1.adaln_proj.linear.bias F32 [96768]
+    blocks.1.adaln_proj.linear.weight F32 [96768, 16]
+    blocks.10.adaln_proj.linear.bias F32 [96768]
+    blocks.0.adaln_proj.linear.bias F32 [96768]
+    blocks.0.adaln_proj.linear.weight F32 [96768, 16]
+    blocks.0.attn.k_norm.weight BF16 [128]
+    blocks.0.attn.out_proj.comfy_quant U8 [19]
+    blocks.0.attn.out_proj.weight U8 [5376, 3584]
+    blocks.0.attn.out_proj.weight_scale F8_E4M3 [5376, 448]
+    blocks.0.attn.out_proj.weight_scale_2 F32 []
+    blocks.0.attn.q_norm.weight BF16 [128]
+    blocks.0.attn.qkv_proj.comfy_quant U8 [19]
+    blocks.0.attn.qkv_proj.weight U8 [21504, 2688]
+    blocks.0.attn.qkv_proj.weight_scale F8_E4M3 [21504, 336]
+    blocks.0.attn.qkv_proj.weight_scale_2 F32 []
+    blocks.0.attn.to_gate_compress.comfy_quant U8 [19]
+    blocks.0.attn.to_gate_compress.weight U8 [7168, 2688]
+    blocks.0.attn.to_gate_compress.weight_scale F8_E4M3 [7168, 336]
+    blocks.0.attn.to_gate_compress.weight_scale_2 F32 []
+    blocks.0.mlp.fc1.comfy_quant U8 [19]
+    blocks.0.mlp.fc1.weight U8 [28672, 2688]
+    blocks.0.mlp.fc1.weight_scale F8_E4M3 [28672, 336]
+    blocks.0.mlp.fc1.weight_scale_2 F32 []
+== adaln tables fasth3-trim
+Error: 542 DiT tensors missing from /w/trim/diffusion_models/fastvideo_fasth3_trim_8step_nvfp4.safetensors, e.g. ["proj_in.weight", "proj_in.bias", "audio_proj_in.weight"]
+
+real	0m0.008s
+user	0m0.004s
+sys	0m0.005s
+ls: cannot access '/w/trim.tables': No such file or directory
+== generate fasth3-trim nvfp4 1344x768x124 seed 7
+cuda NVIDIA RTX A6000 (sm_86)
+Error: 458 DiT tensors missing from /w/trim/diffusion_models/fastvideo_fasth3_trim_8step_nvfp4.safetensors, e.g. ["proj_in.weight", "proj_in.bias", "audio_proj_in.weight"]
+
+real	0m5.741s
+user	0m5.373s
+sys	0m0.370s
+ls: cannot access '/w/trim.*': No such file or directory
+memory.used [MiB]
+1 MiB
+[in#0 @ 0x64bf163bf480] Error opening input: No such file or directory
+Error opening input file /w/trim.y4m.
+Error opening input files: No such file or directory
+[in#0 @ 0x56d78489b340] Error opening input: No such file or directory
+Error opening input file /w/trim.y4m.
+Error opening input files: No such file or directory
+uploaded
+exit 0
+
+
+### cmd 7
+set -x
+echo "== check cuda (bin3: f32 rms, warp head_split)"
+timeout 1500 /w/h3-bin3 check --backend cuda 2>&1 | grep -v " ok$" | tail -30
+echo "== bench cuda profile (bin3)"
+H3_PROFILE=1 timeout 1500 /w/h3-bin3 bench --backend cuda --variant fasth3-v2 --layers 4 --steps 1 2>&1 | tail -30
+echo "== bench cuda (bin3)"
+timeout 1500 /w/h3-bin3 bench --backend cuda --variant fasth3-v2 --layers 4 --steps 2 2>&1 | tail -6
+--- output
+bin3 ok
+== check cuda (bin3: f32 rms, warp head_split)
+cuda NVIDIA RTX A6000 (sm_86)
+all 90 checks pass (tolerance 3e-2)
+== bench cuda profile (bin3)
+cuda NVIDIA RTX A6000 (sm_86)  |  fasth3-v2 1344x768x124  37966 tokens  4 blocks  weights native
+load (synthetic) 22.09s
+adaln tables 12.79s (96768 per block)
+forward 0: 1.879s (469.7 ms/block; ×50/4 blocks ≈ 23.48s)
+profile (CUDA, synced per op): 1877.5 ms in ops; GEMMs 1060.4 ms at 121.5 TFLOP/s
+  vsa fine (mma, d128)                         635.4 ms  33.8%       4 calls   158.845 ms/call
+  gemm n=28672 k=5376                          379.3 ms  20.2%       4 calls    94.829 ms/call
+  gemm n=21504 k=5376                          282.3 ms  15.0%       4 calls    70.579 ms/call
+  gemm n=5376 k=14336                          188.7 ms  10.1%       4 calls    47.186 ms/call
+  gemm n=7168 k=5376                            97.5 ms   5.2%       4 calls    24.364 ms/call
+  gemm n=5376 k=7168                            93.2 ms   5.0%       4 calls    23.312 ms/call
+  vsa coarse + top-k                            53.7 ms   2.9%       4 calls    13.417 ms/call
+  rms_norm (+residual, modulation)              46.1 ms   2.5%       9 calls     5.117 ms/call
+  head_split (qk-norm + rope)                   39.2 ms   2.1%      16 calls     2.450 ms/call
+  swiglu                                        21.5 ms   1.1%       4 calls     5.375 ms/call
+  gemm+bias n=32 k=5376 (small)                 17.6 ms   0.9%       1 calls    17.633 ms/call
+  vsa pool                                      11.8 ms   0.6%       4 calls     2.946 ms/call
+  gate_residual                                  9.5 ms   0.5%       4 calls     2.371 ms/call
+  gemm+bias n=5376 k=96                          0.9 ms   0.0%       1 calls     0.899 ms/call
+  gemm+bias n=96 k=5376                          0.8 ms   0.0%       1 calls     0.758 ms/call
+  copy (dtod)                                    0.0 ms   0.0%       1 calls     0.045 ms/call
+  gemm+bias n=5376 k=32 (small)                  0.0 ms   0.0%       1 calls     0.029 ms/call
+== bench cuda (bin3)
+cuda NVIDIA RTX A6000 (sm_86)  |  fasth3-v2 1344x768x124  37966 tokens  4 blocks  weights native
+load (synthetic) 22.04s
+adaln tables 9.38s (96768 per block)
+forward 0: 1.873s (468.3 ms/block; ×50/4 blocks ≈ 23.41s)
+forward 1: 1.883s (470.7 ms/block; ×50/4 blocks ≈ 23.53s)
+exit 0
+
+
+### cmd 8
+set -x
+mkdir -p /w/trimhf
+T0=$(date +%s)
+cat > /root/trim.txt <<'EOF2'
+EOF2
+xargs -P 8 -n 2 sh -c 'mkdir -p "$(dirname "$1")" && curl -sf --retry 5 -o "$1" "$0" || echo "FAILED $1"' < /root/trim.txt
+echo "trim tree $(du -sh /w/trimhf | cut -f1) in $(( $(date +%s) - T0 ))s"; ls -R /w/trimhf | head -30
+echo "== adaln tables fasth3-trim (bf16 HF tree)"
+time timeout 3000 /w/h3-bin3 adaln-tables --backend cuda --variant fasth3-trim --model-dir /w/h3 --variant-dir /w/trimhf --out /w/trim.tables 2>&1 | tail -20
+echo "== generate fasth3-trim int8 1344x768x124 seed 7"
+time timeout 4500 /w/h3-bin3 generate --backend cuda --variant fasth3-trim --model-dir /w/h3 --variant-dir /w/trimhf --tables /w/trim.tables --weights int8 \
+  --prompt "A red fox trots through fresh snow at dawn in a quiet pine forest; snow crunches softly under its paws and a light wind moves through the branches." \
+  --width 1344 --height 768 --frames 124 --seed 7 --out /w/trim.y4m 2>&1 | tail -40
+ls -la /w/trim.*; nvidia-smi --query-gpu=memory.used --format=csv
+--- output
+trim tree 41G in 428s
+/w/trimhf:
+README.md
+audio_scheduler
+fastvideo_inference.json
+metadata.json
+model_index.json
+scheduler
+transformer
+vae
+
+/w/trimhf/audio_scheduler:
+scheduler_config.json
+
+/w/trimhf/scheduler:
+scheduler_config.json
+
+/w/trimhf/transformer:
+config.json
+diffusion_pytorch_model-00001-of-00008.safetensors
+diffusion_pytorch_model-00002-of-00008.safetensors
+diffusion_pytorch_model-00003-of-00008.safetensors
+diffusion_pytorch_model-00004-of-00008.safetensors
+diffusion_pytorch_model-00005-of-00008.safetensors
+diffusion_pytorch_model-00006-of-00008.safetensors
+diffusion_pytorch_model-00007-of-00008.safetensors
+diffusion_pytorch_model-00008-of-00008.safetensors
+diffusion_pytorch_model.safetensors.index.json
+
+/w/trimhf/vae:
+config.json
+== adaln tables fasth3-trim (bf16 HF tree)
+contract: /w/trimhf/fastvideo_inference.json
+18 timesteps [0.0001001358, 0.0003336072, 0.014211655, 0.032424748, 0.04585159, 0.056831896, 0.090909064, 0.10048044, 0.14285713, 0.16725987, 0.23076922, 0.25, 0.35714287, 0.41176468, 0.5, 0.7, 0.999, 1.0] → /w/trim.tables (146.7 MB) in 298.3s
+
+real	5m6.234s
+user	2m14.848s
+sys	1m39.158s
+-rw------- 1 root root 146704008 Nov  7 00:21 /w/trim.tables
+== generate fasth3-trim int8 1344x768x124 seed 7
+contract: /w/trimhf/fastvideo_inference.json
+cuda NVIDIA RTX A6000 (sm_86)
+load 240.6s
+prompt: 33 rows in 159.0s
+step 1/8 19.64s
+step 2/8 20.07s
+step 3/8 20.32s
+step 4/8 20.45s
+step 5/8 20.49s
+step 6/8 20.46s
+step 7/8 20.42s
+step 8/8 20.39s
+run 0: total 199.71s  prepare 0.46s  adaln 0.00s  denoise 162.26s (["19.64", "20.07", "20.32", "20.45", "20.49", "20.46", "20.42", "20.39"])  decode 36.41s  audio 0.43s
+wrote /w/trim.y4m (124 frames 1344x768) and /w/trim.wav
+mux: ffmpeg -i /w/trim.y4m -i /w/trim.wav -c:v libx264 -pix_fmt yuv420p -c:a aac /w/trim.mp4
+
+real	10m9.164s
+user	6m47.645s
+sys	3m19.332s
+-rw------- 1 root root 146704008 Nov  7 00:21 /w/trim.tables
+-rw-r--r-- 1 root root    662444 Nov  7 00:32 /w/trim.wav
+-rw-r--r-- 1 root root 383976225 Nov  7 00:32 /w/trim.y4m
+memory.used [MiB]
+1 MiB
+uploaded
+exit 0
+
+
+### cmd 9
+set -x
+echo "== check wgpu (bin4, chunked bindings)"
+timeout 1500 /w/h3-bin4 check --backend wgpu 2>&1 | grep -v " ok$" | tail -8
+echo "== wgpu bench 1344x768x124, 2 layers, 1 step (bin4)"
+timeout 2400 /w/h3-bin4 bench --backend wgpu --variant fasth3-v2 --layers 2 --steps 1 2>&1 | tail -12
+echo "== wgpu bench profile"
+H3_PROFILE=1 timeout 2400 /w/h3-bin4 bench --backend wgpu --variant fasth3-v2 --layers 2 --steps 1 2>&1 | tail -40
+echo "== wgpu bench f16 math"
+H3_WGPU_F16=1 timeout 2400 /w/h3-bin4 bench --backend wgpu --variant fasth3-v2 --layers 2 --steps 1 2>&1 | tail -6
+--- output
+bin4 ok
+== check wgpu (bin4, chunked bindings)
+wgpu Vulkan: NVIDIA RTX A6000 (NVIDIA 570.195.03)
+all 90 checks pass (tolerance 1e-2)
+== wgpu bench 1344x768x124, 2 layers, 1 step (bin4)
+wgpu Vulkan: NVIDIA RTX A6000 (NVIDIA 570.195.03)  |  fasth3-v2 1344x768x124  37966 tokens  2 blocks  weights native
+load (synthetic) 21.17s
+adaln tables 8.41s (96768 per block)
+forward 0: 15.204s (7602.0 ms/block; ×50/2 blocks ≈ 380.10s)
+== wgpu bench profile
+wgpu Vulkan: NVIDIA RTX A6000 (NVIDIA 570.195.03)  |  fasth3-v2 1344x768x124  37966 tokens  2 blocks  weights native
+load (synthetic) 20.85s
+adaln tables 8.29s (96768 per block)
+forward 0: 15.190s (7595.0 ms/block; ×50/2 blocks ≈ 379.75s)
+GPU time by kernel (15159.4 ms total, timestamp queries):
+     4283.7 ms  28.3%       2 calls  2141.847 ms/call  flash
+     3894.9 ms  25.7%       6 calls   649.153 ms/call  linear3_f16 28672x5376 None
+     1954.8 ms  12.9%       6 calls   325.800 ms/call  linear3_f16 5376x14336 None
+     1889.3 ms  12.5%       2 calls   944.670 ms/call  linear3_f16 21504x5376 None
+      987.6 ms   6.5%       2 calls   493.796 ms/call  linear3_f16
+      965.1 ms   6.4%       2 calls   482.573 ms/call  linear3_f16 5376x7168 None
+      958.5 ms   6.3%       2 calls   479.234 ms/call  linear3_f16 7168x5376 None
+      103.6 ms   0.7%       2 calls    51.800 ms/call  vsa_coarse
+       39.5 ms   0.3%      14 calls     2.819 ms/call  head_split
+       29.3 ms   0.2%       8 calls     3.657 ms/call  elementwise
+       26.0 ms   0.2%       5 calls     5.198 ms/call  norm
+       11.1 ms   0.1%       2 calls     5.540 ms/call  vsa_pool
+        8.8 ms   0.1%       1 calls     8.783 ms/call  linear3_f16 96x5376 None
+        6.1 ms   0.0%       1 calls     6.099 ms/call  linear3_f16 5376x96 None
+        1.1 ms   0.0%       1 calls     1.145 ms/call  linear3_f16 32x5376 None
+        0.0 ms   0.0%       1 calls     0.036 ms/call  linear3_f16 5376x32 None
+== wgpu bench f16 math
+wgpu Vulkan: NVIDIA RTX A6000 (NVIDIA 570.195.03) +f16  |  fasth3-v2 1344x768x124  37966 tokens  2 blocks  weights native
+load (synthetic) 20.94s
+adaln tables 8.19s (96768 per block)
+forward 0: 15.435s (7717.7 ms/block; ×50/2 blocks ≈ 385.89s)
+exit 0
+
 

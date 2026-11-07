@@ -25,13 +25,27 @@ WebGPU backend runs them through Metal.
 | backend | runs on | precision | status |
 |---|---|---|---|
 | `cpu` | anywhere | f32 | the reference every backend is checked against (`cargo test --workspace`) |
-| `wgpu` | NVIDIA, AMD, Intel, Apple (Vulkan / DX12 / Metal) | f32 activations, f16 weights (int8 / int4 weight-only) | conformance suite passes on lavapipe in CI; **not yet run on a real GPU** |
-| `cuda` | NVIDIA sm_80+ | bf16, cuBLASLt GEMMs, tensor-core attention and VSA | kernels compile (NVRTC); **not yet run on a GPU** |
+| `wgpu` | NVIDIA, AMD, Intel, Apple (Vulkan / DX12 / Metal) | f32 activations, f16 weights (int8 / int4 weight-only) | 90 / 90 checks on an RTX A6000 (NVIDIA Vulkan) and on lavapipe in CI; runs the full 1344×768×124 geometry at 7.6 s per block on the A6000, 16× slower than CUDA |
+| `cuda` | NVIDIA sm_80+ | bf16, cuBLASLt GEMMs, tensor-core attention and VSA | 90 / 90 checks on an RTX A6000; real clips from FastH3-V2 and FastH3-Trim |
 
-**There are no speed or quality measurements yet.** This repository was
-written in a container without a GPU or PyTorch; see
-[docs/design.md](docs/design.md) for exactly what is verified. The first runs
-to make, on a card: `h3 check --backend cuda`, then `h3 bench`, then a clip.
+Measured on a vast.ai **RTX A6000** (48 GB, 300 W, driver 570.195.03),
+1344×768×124 (5.2 s), VSA 0.8, int8 weights, precomputed AdaLN tables
+(`docs/runs/2026-11-06-vast-a6000-first-gpu`):
+
+| | FastH3-8-Step-V2 | FastH3-Trim-8-Step |
+|---|---|---|
+| denoise, 8 forwards | 201 s (25.1 s / forward) | 162 s (20.3 s / forward) |
+| decode | 44 s | 36 s |
+| prompt (Qwen3-VL, streamed from disk) | 290 s cold / 159 s warm | |
+| load with int8 quantization at load | 280 s | 241 s |
+
+Per block at that geometry: 470 ms VSA / 815 ms dense; GEMMs at 121 TFLOP/s,
+the VSA fine stage is a third of the time and the next kernel to optimize.
+No PyTorch parity number yet (`scripts/reference/make_fixtures.py` needs a
+machine with torch); the clips themselves match their prompts
+(`docs/runs/2026-11-06-vast-a6000-first-gpu/*.png`). The ComfyUI single-file
+NVFP4 Trim checkpoint is not loadable yet (different layout from the
+FastVideo HF one).
 
 ## Use
 
