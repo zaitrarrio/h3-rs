@@ -41,8 +41,21 @@ Measured on a vast.ai **RTX A6000** (48 GB, 300 W, driver 570.195.03),
 
 (`docs/runs/2026-11-07-vast-pro6000-clips`, decode and audio from
 `…-pro6000-decode`; the Max-Q is the 300 W card and runs the denoise
-power-capped at ~1.4 GHz, not its 3.09 GHz boost. fastvideo-rs on the 600 W
-Server Edition: V2 denoise 45.8 s with MXFP8 linears, decode 4.7–6.3 s.)
+power-capped at ~1.4 GHz, not its 3.09 GHz boost.)
+
+On the **RTX PRO 6000 Server Edition (600 W)**, fastvideo-rs's gold GPU
+(`docs/runs/2026-11-07-vast-pro6000-server-mxfp8`), the same V2 clip:
+
+| | h3-rs bf16 | h3-rs `--weights mxfp8` | fastvideo-rs (MXFP8) |
+|---|---|---|---|
+| denoise | 50.6 s | **45.0 s** | 45.8 s |
+| video decode | 8.9 s | 8.8 s | 4.7–6.3 s |
+| peak device memory | 56.2 GB | **41.0 GB** | 61.0 GiB |
+
+`--weights mxfp8` runs blocks 2–46 as W8A8 on the FP8 tensor cores
+(cuBLASLt `VEC32_UE8M0`, sm_100+; emulated in bf16 elsewhere); the clip
+keeps the scene (17 dB PSNR against bf16, as int8's 18.5 dB: the DMD
+sampler turns weight rounding into texture).
 
 Per block at that geometry: 470 ms VSA / 815 ms dense on the A6000, 230 /
 354 ms on the L40S. The VSA phases on the L40S after the kernel work in

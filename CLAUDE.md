@@ -24,6 +24,23 @@ State and invariants only; the reasoning is in `docs/design.md`.
   without that caveat. WebGPU 7.6 s/block on the A6000. `H3_PROFILE=1`
   prints a kernel table per stage of `generate`
   (`docs/runs/2026-11-07-vast-pro6000-clips`, `…-pro6000-decode`).
+  **RTX PRO 6000 Server Edition (600 W, 2.2–2.4 GHz under load, the card
+  class fastvideo-rs measures on)**: bf16 126 ms / block, 6.3 s per forward,
+  V2 clip denoise 50.6 s, decode 8.9 s, audio 0.19 s; `--weights mxfp8`
+  110 ms / block, denoise **45.0 s** (fastvideo-rs's MXFP8 recipe: 45.8 s),
+  peak 41 GB (`docs/runs/2026-11-07-vast-pro6000-server-mxfp8`).
+- MXFP8 (`--weights mxfp8`, `quant::Mxfp8`): W8A8, E4M3 codes with one E8M0
+  scale per 32 input columns in cuBLASLt's `VEC32_UE8M0` swizzle
+  (`mx_scale_offset`, rows padded to 128, groups to 4), the E4M3 / E8M0
+  twins bit-exact with Sol-H3 / fastvideo-rs. `WeightQuant::for_block`
+  keeps blocks 0–1 and the last three in bf16. The CPU reference rounds the
+  bf16 activations the same way (`Mxfp8::round_rows`) before its f32 GEMM;
+  WebGPU (`mx_act.wgsl`) and pre-Blackwell CUDA (`H3_CUDA_NO_FP8=1` too)
+  emulate exactly, sm_100+ runs cuBLASLt FP8 with the bias (+ tanh-GELU)
+  epilogue. The first call on each shape times cuBLASLt's candidates
+  (`H3_CUDA_LT_NTH=i` forces one); the `n=28672` FFN-up shape runs at 355
+  TFLOP/s with every candidate (the others at ~750): splitting it along N
+  is the open lever. No stored MXFP8 form yet (`h3 quantize` refuses it).
 - Decode host path: tiles are decoded one ahead of their download, the
   stitch / chunk finish / 8-bit conversion are row-parallel (rayon) and
   tested against the sequential reference; the audio upsampler's crop is

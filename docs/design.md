@@ -96,8 +96,15 @@ time); when the tables do not fit, they are uploaded per step.
    decoder's GEMM efficiency on ~1.3 k-row tile batches (208 TFLOP/s vs
    fastvideo-rs's 397) and bf16 vs MXFP8 block linears. Audio decode is
    0.24 s (the 36 k copies are gone).
-4. A Blackwell FP4 tensor-core GEMM for the NVFP4 linears (now 4-bit
-   resident, expanded to bf16 per GEMM); NVFP4 kept 4-bit on WebGPU too.
+4. MXFP8 is in (`--weights mxfp8`: denoise at parity with fastvideo-rs on
+   the 600 W PRO 6000, `docs/runs/2026-11-07-vast-pro6000-server-mxfp8`).
+   Next on that path: split the FFN-up FP8 GEMM along N (cuBLASLt runs
+   `n=28672` at 355 TFLOP/s, the other shapes at ~750: ~6 s of a 45 s
+   denoise), MXFP8 for the decoder's block linears (their 36 × 28-tile
+   GEMMs are 73 % of the decode), a stored MXFP8 checkpoint (`h3 quantize`;
+   quantizing at load costs 140 s of host time), and a Blackwell FP4
+   tensor-core GEMM for the NVFP4 linears (now 4-bit resident, expanded to
+   bf16 per GEMM; fastvideo-rs's FP4 VSA fine stage is its last 1.3×).
 5. Generate the parity fixtures; fix what they find.
 6. WebGPU: 16× behind CUDA on the same card; f16 activations and a
    tensor-core-friendly GEMM tiling are the two levers (the 4 GiB buffer /
