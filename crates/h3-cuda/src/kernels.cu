@@ -863,6 +863,246 @@ extern "C" __global__ void __launch_bounds__(256) fw_vsa_fine_pair_mma##D(u64 q_
 ATTN_MMA_KERNELS(64)
 ATTN_MMA_KERNELS(128)
 
+// VSA fine stage, third body: the occupancy experiment. The v1 body spends
+// two thirds of its time outside the mma work (docs/runs/2026-11-07-vast-l40s-
+// vsa-phases): 35 KB of staging and ~170 registers allow two 4-warp blocks
+// per SM, so loads, barriers and softmax bookkeeping never overlap with
+// another block's tensor work. Here: 32-key chunks (17 KB staging, S tile 16
+// registers), optionally K/V double-buffered with the next chunk's loads
+// issued a whole chunk ahead and two barriers per chunk (DB), optionally Q
+// fragments re-read from global each chunk instead of 32 resident
+// registers (QREG = false). 64 query rows, 4 warps, mode 1 only.
+template <int D, bool DB, bool QREG>
+__device__ __forceinline__ void vsa_fine3_body(const bf16_t* q, const bf16_t* k, const bf16_t* v, bf16_t* out,
+        int heads, int seq, float scale, const unsigned* slot, const unsigned* sel, const unsigned* nsel,
+        const float* pooled, const bf16_t* gate, int has_gate, int nb, int np, int dense_all, int te, int maxsel,
+        bf16_t* ks, bf16_t* vs, unsigned char* kvalid) {
+    constexpr int F3BK = 32;
+    constexpr int KS_STRIDE = D + 8;
+    constexpr int KK = D / 16, DT = D / 8, CH = D / 8, RP = 128 / CH, NJ = F3BK / RP, NT = F3BK / 8;
+    constexpr int NBUF = DB ? 2 : 1;
+    const int h = blockIdx.y, tid = threadIdx.x, warp = tid >> 5, lane = tid & 31;
+    const int g = lane >> 2, t = lane & 3;
+    const int sub = te / 64;                     // 64-key halves of a tile, as v1
+    const int csub = te / F3BK;                    // 32-key chunks per tile
+    const int qt = blockIdx.x / sub, qsub = blockIdx.x % sub;
+    const int lr0 = warp * 16 + g, lr1 = lr0 + 8;
+    const unsigned a = slot[(long)qt * te + qsub * 64 + lr0], b = slot[(long)qt * te + qsub * 64 + lr1];
+    const int tok0 = a == 0xffffffffu ? -1 : (int)a, tok1 = b == 0xffffffffu ? -1 : (int)b;
+    const float sl2 = scale * 1.4426950408889634f;
+    const unsigned* q0 = (const unsigned*)(q + ((long)h * seq + (tok0 < 0 ? 0 : tok0)) * D);
+    const unsigned* q1 = (const unsigned*)(q + ((long)h * seq + (tok1 < 0 ? 0 : tok1)) * D);
+    unsigned qa[QREG ? KK : 1][4];
+    if (QREG) {
+        #pragma unroll
+        for (int kk = 0; kk < KK; ++kk) {
+            const int c = (kk * 16 + t * 2) >> 1;
+            qa[kk][0] = tok0 >= 0 ? q0[c] : 0u;
+            qa[kk][1] = tok1 >= 0 ? q1[c] : 0u;
+            qa[kk][2] = tok0 >= 0 ? q0[c + 4] : 0u;
+            qa[kk][3] = tok1 >= 0 ? q1[c + 4] : 0u;
+        }
+    }
+    float o[DT][4];
+    #pragma unroll
+    for (int i = 0; i < DT; ++i) o[i][0] = o[i][1] = o[i][2] = o[i][3] = 0.0f;
+    float m0 = -1e30f, m1 = -1e30f, l0 = 0.0f, l1 = 0.0f;
+    const bool all_tiles = qt < np || dense_all;
+    const int nchunks = (int)(all_tiles ? (unsigned)nb : nsel[(long)h * nb + qt]) * csub;
+    const bf16_t* kbase = k + (long)h * seq * D;
+    const bf16_t* vbase = v + (long)h * seq * D;
+    const int ch = tid % CH, krow = tid / CH;
+    auto key_tok = [&](int c, int key) -> int {
+        const unsigned tile = all_tiles ? (unsigned)(c / csub) : sel[((long)h * nb + qt) * maxsel + c / csub];
+        const unsigned s2 = slot[(long)tile * te + (c % csub) * F3BK + key];
+        return s2 == 0xffffffffu ? -1 : (int)s2;
+    };
+    int ntk[NJ];
+    auto resolve = [&](int c) {
+        #pragma unroll
+        for (int j = 0; j < NJ; ++j) ntk[j] = key_tok(c, krow + RP * j);
+    };
+    auto load = [&](bf16_t* dst, const bf16_t* src, unsigned char* valid) {
+        #pragma unroll
+        for (int j = 0; j < NJ; ++j) {
+            const int key = krow + RP * j, tk = ntk[j];
+            cp_async16(dst + key * KS_STRIDE + ch * 8, src + (long)(tk < 0 ? 0 : tk) * D + ch * 8, tk >= 0);
+            if (valid && ch == 0) valid[key] = tk >= 0;
+        }
+    };
+    auto kbuf = [&](int c) { return ks + (c % NBUF) * F3BK * KS_STRIDE; };
+    auto vbuf = [&](int c) { return vs + (c % NBUF) * F3BK * KS_STRIDE; };
+    auto valid_of = [&](int c) { return kvalid + (c % NBUF) * F3BK; };
+    if (nchunks > 0) {
+        resolve(0);
+        load(kbuf(0), kbase, valid_of(0));
+        cp_async_commit();
+        load(vbuf(0), vbase, 0);
+        cp_async_commit();
+    }
+    for (int c = 0; c < nchunks; ++c) {
+        const unsigned char* kv = valid_of(c);
+        if (c + 1 < nchunks) resolve(c + 1);
+        if (DB) {
+            // K_c landed (V_c, K_{c+1}, V_{c+1} may be in flight: at most 3 newer groups
+            // once the next chunk's loads are issued below; here at most 1).
+            asm volatile("cp.async.wait_group 1;\n" ::);
+            __syncthreads();
+            if (c + 1 < nchunks) {
+                load(kbuf(c + 1), kbase, valid_of(c + 1));
+                cp_async_commit();
+                load(vbuf(c + 1), vbase, 0);
+                cp_async_commit();
+            }
+        } else {
+            cp_async_wait1();
+            __syncthreads();
+        }
+        const bf16_t* kcur = kbuf(c);
+        float s[NT][4];
+        #pragma unroll
+        for (int nt = 0; nt < NT; ++nt) {
+            s[nt][0] = s[nt][1] = s[nt][2] = s[nt][3] = 0.0f;
+            const bf16_t* kr = kcur + (nt * 8 + g) * KS_STRIDE;
+            #pragma unroll
+            for (int kk = 0; kk < KK; ++kk) {
+                const unsigned b0 = *(const unsigned*)(kr + kk * 16 + t * 2);
+                const unsigned b1 = *(const unsigned*)(kr + kk * 16 + 8 + t * 2);
+                unsigned a0, a1, a2, a3;
+                if (QREG) { a0 = qa[kk][0]; a1 = qa[kk][1]; a2 = qa[kk][2]; a3 = qa[kk][3]; }
+                else {
+                    const int cc = (kk * 16 + t * 2) >> 1;
+                    a0 = tok0 >= 0 ? __ldg(q0 + cc) : 0u;
+                    a1 = tok1 >= 0 ? __ldg(q1 + cc) : 0u;
+                    a2 = tok0 >= 0 ? __ldg(q0 + cc + 4) : 0u;
+                    a3 = tok1 >= 0 ? __ldg(q1 + cc + 4) : 0u;
+                }
+                mma_bf16(s[nt], a0, a1, a2, a3, b0, b1);
+            }
+        }
+        float mx0 = m0, mx1 = m1;
+        #pragma unroll
+        for (int nt = 0; nt < NT; ++nt) {
+            #pragma unroll
+            for (int cc = 0; cc < 2; ++cc) {
+                const int key = nt * 8 + t * 2 + cc;
+                const bool ok = kv[key];
+                s[nt][cc] = ok ? s[nt][cc] * sl2 : -1e30f;
+                s[nt][2 + cc] = ok ? s[nt][2 + cc] * sl2 : -1e30f;
+                mx0 = fmaxf(mx0, s[nt][cc]);
+                mx1 = fmaxf(mx1, s[nt][2 + cc]);
+            }
+        }
+        if (!DB) {
+            __syncthreads();           // every warp is done with ks
+            if (c + 1 < nchunks) load(kbuf(c + 1), kbase, valid_of(c + 1));
+            cp_async_commit();
+        }
+        #pragma unroll
+        for (int off = 1; off < 4; off <<= 1) {
+            mx0 = fmaxf(mx0, __shfl_xor_sync(0xffffffffu, mx0, off));
+            mx1 = fmaxf(mx1, __shfl_xor_sync(0xffffffffu, mx1, off));
+        }
+        const float c0 = exp2f(m0 - mx0), c1 = exp2f(m1 - mx1);
+        m0 = mx0; m1 = mx1;
+        l0 *= c0; l1 *= c1;
+        #pragma unroll
+        for (int i = 0; i < DT; ++i) { o[i][0] *= c0; o[i][1] *= c0; o[i][2] *= c1; o[i][3] *= c1; }
+        if (DB) {
+            // V_c landed (K_{c+1}, V_{c+1} may be in flight).
+            if (c + 1 < nchunks) asm volatile("cp.async.wait_group 2;\n" ::);
+            else asm volatile("cp.async.wait_group 0;\n" ::);
+        } else {
+            cp_async_wait1();
+        }
+        __syncthreads();
+        const bf16_t* vcur = vbuf(c);
+        #pragma unroll
+        for (int kk = 0; kk < F3BK / 16; ++kk) {
+            float p[8];
+            #pragma unroll
+            for (int cc = 0; cc < 4; ++cc) {
+                p[cc] = exp2f(s[2 * kk][cc] - (cc < 2 ? m0 : m1));
+                p[4 + cc] = exp2f(s[2 * kk + 1][cc] - (cc < 2 ? m0 : m1));
+            }
+            l0 += p[0] + p[1] + p[4] + p[5];
+            l1 += p[2] + p[3] + p[6] + p[7];
+            const unsigned a0 = pack_bf16(p[0], p[1]), a1 = pack_bf16(p[2], p[3]);
+            const unsigned a2 = pack_bf16(p[4], p[5]), a3 = pack_bf16(p[6], p[7]);
+            const int vkey = kk * 16 + (lane & 7) + ((lane >> 3) & 1) * 8;
+            #pragma unroll
+            for (int dt = 0; dt < DT; dt += 2) {
+                const unsigned addr = (unsigned)__cvta_generic_to_shared(vcur + vkey * KS_STRIDE + dt * 8 + (lane >> 4) * 8);
+                unsigned b0, b1, b2, b3;
+                asm volatile("ldmatrix.sync.aligned.m8n8.x4.trans.shared.b16 {%0,%1,%2,%3}, [%4];\n"
+                             : "=r"(b0), "=r"(b1), "=r"(b2), "=r"(b3) : "r"(addr));
+                mma_bf16(o[dt], a0, a1, a2, a3, b0, b1);
+                mma_bf16(o[dt + 1], a0, a1, a2, a3, b2, b3);
+            }
+        }
+        if (!DB) {
+            __syncthreads();           // every warp is done with vs
+            if (c + 1 < nchunks) load(vbuf(c + 1), vbase, 0);
+            cp_async_commit();
+        }
+    }
+    #pragma unroll
+    for (int off = 1; off < 4; off <<= 1) {
+        l0 += __shfl_xor_sync(0xffffffffu, l0, off);
+        l1 += __shfl_xor_sync(0xffffffffu, l1, off);
+    }
+    const float i0 = l0 > 0.0f ? 1.0f / l0 : 0.0f, i1 = l1 > 0.0f ? 1.0f / l1 : 0.0f;
+    #pragma unroll
+    for (int dt = 0; dt < DT; ++dt) {
+        const int c = dt * 8 + t * 2;
+        float a0 = o[dt][0] * i0, a1 = o[dt][1] * i0, b0 = o[dt][2] * i1, b1 = o[dt][3] * i1;
+        if (has_gate) {
+            const float* cr = pooled + ((long)h * nb + qt) * D + c;
+            if (tok0 >= 0) { const bf16_t* gr = gate + ((long)h * seq + tok0) * D + c; a0 += cr[0] * ld(gr, 0); a1 += cr[1] * ld(gr, 1); }
+            if (tok1 >= 0) { const bf16_t* gr = gate + ((long)h * seq + tok1) * D + c; b0 += cr[0] * ld(gr, 0); b1 += cr[1] * ld(gr, 1); }
+        }
+        if (tok0 >= 0) *(unsigned*)(out + ((long)tok0 * heads + h) * D + c) = pack_bf16(a0, a1);
+        if (tok1 >= 0) *(unsigned*)(out + ((long)tok1 * heads + h) * D + c) = pack_bf16(b0, b1);
+    }
+}
+
+// a: single-buffered, Q re-read, four blocks per SM asked for (regs ≤ 128).
+// b: double-buffered, Q resident, two blocks per SM.
+// c: double-buffered, Q re-read, three blocks per SM asked for.
+#define VSA_FINE3_KERNELS(D)                                                                                         \
+extern "C" __global__ void __launch_bounds__(128, 4) fw_vsa_fine3a_mma##D(u64 q_, u64 k_, u64 v_, u64 out_,         \
+        int heads, int seq, float scale, u64 slot_, u64 sel_, u64 nsel_, u64 pooled_, u64 gate_, int has_gate,       \
+        int nb, int np, int dense_all, int te, int maxsel) {                                                         \
+    __shared__ __align__(16) bf16_t ks[32 * (D + 8)];                                                                \
+    __shared__ __align__(16) bf16_t vs[32 * (D + 8)];                                                                \
+    __shared__ unsigned char kvalid[32];                                                                             \
+    vsa_fine3_body<D, false, false>((const bf16_t*)q_, (const bf16_t*)k_, (const bf16_t*)v_, (bf16_t*)out_, heads,   \
+        seq, scale, (const unsigned*)slot_, (const unsigned*)sel_, (const unsigned*)nsel_, (const float*)pooled_,    \
+        (const bf16_t*)gate_, has_gate, nb, np, dense_all, te, maxsel, ks, vs, kvalid);                               \
+}                                                                                                                    \
+extern "C" __global__ void __launch_bounds__(128, 2) fw_vsa_fine3b_mma##D(u64 q_, u64 k_, u64 v_, u64 out_,         \
+        int heads, int seq, float scale, u64 slot_, u64 sel_, u64 nsel_, u64 pooled_, u64 gate_, int has_gate,       \
+        int nb, int np, int dense_all, int te, int maxsel) {                                                         \
+    __shared__ __align__(16) bf16_t ks[2 * 32 * (D + 8)];                                                            \
+    __shared__ __align__(16) bf16_t vs[2 * 32 * (D + 8)];                                                            \
+    __shared__ unsigned char kvalid[64];                                                                             \
+    vsa_fine3_body<D, true, true>((const bf16_t*)q_, (const bf16_t*)k_, (const bf16_t*)v_, (bf16_t*)out_, heads,     \
+        seq, scale, (const unsigned*)slot_, (const unsigned*)sel_, (const unsigned*)nsel_, (const float*)pooled_,    \
+        (const bf16_t*)gate_, has_gate, nb, np, dense_all, te, maxsel, ks, vs, kvalid);                               \
+}                                                                                                                    \
+extern "C" __global__ void __launch_bounds__(128, 3) fw_vsa_fine3c_mma##D(u64 q_, u64 k_, u64 v_, u64 out_,         \
+        int heads, int seq, float scale, u64 slot_, u64 sel_, u64 nsel_, u64 pooled_, u64 gate_, int has_gate,       \
+        int nb, int np, int dense_all, int te, int maxsel) {                                                         \
+    __shared__ __align__(16) bf16_t ks[2 * 32 * (D + 8)];                                                            \
+    __shared__ __align__(16) bf16_t vs[2 * 32 * (D + 8)];                                                            \
+    __shared__ unsigned char kvalid[64];                                                                             \
+    vsa_fine3_body<D, true, false>((const bf16_t*)q_, (const bf16_t*)k_, (const bf16_t*)v_, (bf16_t*)out_, heads,    \
+        seq, scale, (const unsigned*)slot_, (const unsigned*)sel_, (const unsigned*)nsel_, (const float*)pooled_,    \
+        (const bf16_t*)gate_, has_gate, nb, np, dense_all, te, maxsel, ks, vs, kvalid);                               \
+}
+VSA_FINE3_KERNELS(64)
+VSA_FINE3_KERNELS(128)
+
 // The union of two consecutive query tiles' selections (sorted, deduplicated),
 // entry = tile | flags << 30. One warp per (pair, head); lane 0 merges (the
 // lists are ≤ maxsel long, a few hundred steps). Prefix / dense queries

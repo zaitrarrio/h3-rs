@@ -117,6 +117,9 @@ pub struct Cuda {
     /// `H3_CUDA_VSA_DBG=<bits>`: timing experiments in the fine kernel (see
     /// `attn_mma_body`); the output is wrong, only `bench` should use it.
     vsa_dbg: i32,
+    /// `H3_CUDA_VSA_FINE=a|b|c`: the third fine body's variants (32-key
+    /// chunks; a: Q re-read + 4 blocks/SM, b: double-buffered, c: both).
+    vsa_fine3: Option<usize>,
     prof: Option<std::sync::Mutex<std::collections::HashMap<String, (f64, usize)>>>,
 }
 
@@ -161,6 +164,7 @@ struct Kernels {
     vsa_fine_pair_mma128: CudaFunction,
     vsa_pair: CudaFunction,
     vsa_coarse4: CudaFunction,
+    vsa_fine3: [[CudaFunction; 3]; 2],
     dequant_q8: CudaFunction,
     dequant_q4: CudaFunction,
     dequant_nvfp4: CudaFunction,
@@ -345,6 +349,10 @@ impl Cuda {
             vsa_fine_pair_mma128: get("fw_vsa_fine_pair_mma128")?,
             vsa_pair: get("fw_vsa_pair")?,
             vsa_coarse4: get("fw_vsa_coarse4")?,
+            vsa_fine3: [
+                [get("fw_vsa_fine3a_mma64")?, get("fw_vsa_fine3b_mma64")?, get("fw_vsa_fine3c_mma64")?],
+                [get("fw_vsa_fine3a_mma128")?, get("fw_vsa_fine3b_mma128")?, get("fw_vsa_fine3c_mma128")?],
+            ],
             dequant_q8: get("fw_dequant_q8")?,
             dequant_q4: get("fw_dequant_q4")?,
             dequant_nvfp4: get("fw_dequant_nvfp4")?,
@@ -374,6 +382,12 @@ impl Cuda {
             vsa_pair: env1("H3_CUDA_VSA_PAIR"),
             vsa_coarse1: env1("H3_CUDA_VSA_COARSE1"),
             vsa_dbg: std::env::var("H3_CUDA_VSA_DBG").ok().and_then(|v| v.parse().ok()).unwrap_or(0),
+            vsa_fine3: match std::env::var("H3_CUDA_VSA_FINE").as_deref() {
+                Ok("a") => Some(0),
+                Ok("b") => Some(1),
+                Ok("c") => Some(2),
+                _ => None,
+            },
             prof: env1("H3_PROFILE").then(Default::default),
         })
     }
@@ -428,7 +442,7 @@ impl Cuda {
 
     fn kernel_name(&self, f: &CudaFunction) -> &'static str {
         let k = &self.f;
-        let all: [(&CudaFunction, &'static str); 47] = [
+        let all: [(&CudaFunction, &'static str); 53] = [
             (&k.bias_act, "bias_act"),
             (&k.swiglu, "swiglu"),
             (&k.gate_residual, "gate_residual"),
@@ -469,6 +483,12 @@ impl Cuda {
             (&k.vsa_fine_pair_mma128, "vsa fine (paired tiles, d128)"),
             (&k.vsa_pair, "vsa pair union"),
             (&k.vsa_coarse4, "vsa coarse + top-k (4 query tiles)"),
+            (&k.vsa_fine3[0][0], "vsa fine (3a, d64)"),
+            (&k.vsa_fine3[0][1], "vsa fine (3b, d64)"),
+            (&k.vsa_fine3[0][2], "vsa fine (3c, d64)"),
+            (&k.vsa_fine3[1][0], "vsa fine (3a, d128)"),
+            (&k.vsa_fine3[1][1], "vsa fine (3b, d128)"),
+            (&k.vsa_fine3[1][2], "vsa fine (3c, d128)"),
             (&k.dequant_q8, "dequant int8"),
             (&k.dequant_q4, "dequant int4"),
             (&k.dequant_nvfp4, "dequant nvfp4"),
@@ -1186,6 +1206,13 @@ impl Backend for Cuda {
             tail(&mut args);
             args.extend([Arg::P(self.ptr(&s.usel)), Arg::P(self.ptr(&s.nusel)), Arg::I(s.npairs as i32), Arg::I(s.ustride as i32), Arg::I(self.vsa_dbg)]);
             self.launch(f, (s.npairs as u32, s.heads as u32, 1), (256, 1, 1), &args);
+            return;
+        }
+        if let (Some(var), true, false, true) = (self.vsa_fine3, self.ampere, self.scalar_attn, s.d == 64 || s.d == 128) {
+            args.push(Arg::F(s.scale));
+            tail(&mut args);
+            let f = &self.f.vsa_fine3[if s.d == 128 { 1 } else { 0 }][var];
+            self.launch(f, (s.nb as u32 * (s.te / 64) as u32, s.heads as u32, 1), (128, 1, 1), &args);
             return;
         }
         // v1: 64 query rows per block (te/64 blocks per tile), 128 threads.
