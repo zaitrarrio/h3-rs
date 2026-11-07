@@ -32,15 +32,19 @@ Measured on a vast.ai **RTX A6000** (48 GB, 300 W, driver 570.195.03),
 1344×768×124 (5.2 s), VSA 0.8, int8 weights, precomputed AdaLN tables
 (`docs/runs/2026-11-06-vast-a6000-first-gpu`):
 
-| | FastH3-8-Step-V2 | FastH3-Trim-8-Step |
-|---|---|---|
-| denoise, 8 forwards | 201 s (25.1 s / forward) | 162 s (20.3 s / forward) |
-| decode | 44 s | 36 s |
-| prompt (Qwen3-VL, streamed from disk) | 290 s cold / 159 s warm | |
-| load with int8 quantization at load | 280 s | 241 s |
+| | FastH3-8-Step-V2 | FastH3-Trim-8-Step (bf16 tree, int8) | FastH3-Trim, ComfyUI NVFP4 file, **L40S** |
+|---|---|---|---|
+| denoise, 8 forwards | 201 s (25.1 s / forward) | 162 s (20.3 s / forward) | 95 s (11.9 s / forward) |
+| decode | 44 s | 36 s | 22 s |
+| prompt (Qwen3-VL, streamed from disk) | 290 s cold / 159 s warm | | 128 s |
+| load | 280 s (int8 quantization at load) | 241 s | 49 s (4-bit upload) |
+| peak device memory | | | 24.3 GB |
 
-Per block at that geometry: 470 ms VSA / 815 ms dense; GEMMs at 121 TFLOP/s,
-the VSA fine stage is a third of the time and the next kernel to optimize.
+Per block at that geometry: 470 ms VSA / 815 ms dense on the A6000, 254 /
+385 ms on the L40S. The VSA fine stage is a third of the time; a
+32-rows-per-warp rewrite did not move it (it is bound by the gathered K/V
+loads), so that stays the next kernel to work on
+(`docs/runs/2026-11-07-vast-l40s-nvfp4-vsa2`).
 No PyTorch parity number yet (`scripts/reference/make_fixtures.py` needs a
 machine with torch); the clips themselves match their prompts
 (`docs/runs/2026-11-06-vast-a6000-first-gpu/*.png`).

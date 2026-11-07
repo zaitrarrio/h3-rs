@@ -13,14 +13,26 @@ State and invariants only; the reasoning is in `docs/design.md`.
   the row-chunked GEMM / head_split paths; CUDA kernels are NVRTC-compiled
   in `cargo test -p h3-cuda`. Neither has run on AMD / Apple.
 - No speed claim without a measurement on named hardware (card, driver,
-  power limit) recorded under `docs/runs/`. RTX A6000, 1344×768×124, VSA 0.8:
+  power limit) recorded under `docs/runs/`. 1344×768×124, VSA 0.8: RTX A6000
   470 ms/block CUDA (25.1 s per real forward at int8; FastH3-V2 clip: denoise
-  201 s, decode 44 s), 7.6 s/block WebGPU. Profile with `H3_PROFILE=1`.
-- CUDA attention / VSA fine kernels: v2 (`attn_mma2_body`, 32 query rows per
-  warp, 32-key chunks) is the default; `H3_CUDA_ATTN_V1=1` runs the v1 body
-  (16 rows per warp, which is shared-memory-bandwidth bound). Both must pass
-  `h3 check`; keep both until v2 has been measured faster on every card
-  class that matters.
+  201 s, decode 44 s), 7.6 s/block WebGPU; L40S 254 ms/block (Trim NVFP4
+  clip: 11.9 s per forward, denoise 95 s, decode 22 s). `H3_PROFILE=1`.
+- CUDA attention kernels: two bodies, both 95/95 on an L40S. v2
+  (`attn_mma2_body`, 32 query rows per warp, 128-row blocks) is the default
+  for dense attention (11 % faster on the L40S); v1 (16 rows per warp) stays
+  the VSA fine default because v2 was 29 % slower on 64-token tiles and
+  equal on 128-token ones: the fine stage is bound by the gathered K/V
+  loads, not shared memory (`docs/runs/2026-11-07-vast-l40s-nvfp4-vsa2`).
+  `H3_CUDA_ATTN_V1=1` / `H3_CUDA_VSA_V2=1` flip them. The next VSA
+  experiments are a deeper cp.async pipeline and two query tiles per block.
+- NVFP4 on CUDA stays 4-bit on the device (codes + E4M3 scales, expanded
+  into the bf16 scratch per GEMM like int8 / int4): the 42-block Trim runs in
+  24.3 GB peak on an L40S; expanding at load needs 36 GB and OOMs a 48 GB
+  card. WebGPU still expands NVFP4 to f16 pairs at load.
+- Rentals: filter offers on `compute_cap ≥ 800` (a V100 was rented once by
+  mistake) and arm the destroy timer on the box (`nohup setsid … sleep …
+  DELETE /api/v0/instances/<id>/` with the instance key) plus a final
+  self-destroy command: a timer in the controlling session dies with it.
 - WebGPU binds any activation over `max_storage_buffer_binding_size` (2 GiB
   on NVIDIA; the fused QKV is 3.3 GB at 38k tokens) as aligned row
   sub-ranges in `linear` / `head_split`; the FFN chunk is capped by

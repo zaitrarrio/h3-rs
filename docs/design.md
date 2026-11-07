@@ -83,15 +83,17 @@ time); when the tables do not fit, they are uploaded per step.
 
 ## Next
 
-1. The VSA fine stage (34 % of a CUDA block at 53 TFLOP/s effective vs the
-   GEMMs' 121): larger key chunks, warp-specialised loads, or the fastwan
-   structure with 128-wide Q tiles.
+1. The VSA fine stage (34 % of a CUDA block). Measured on an L40S: 32 rows
+   per warp (v2) gains nothing on VSA tiles and 11 % on dense attention, so
+   the stage is bound by the gathered K/V loads, not by shared memory. Next:
+   a deeper `cp.async` pipeline (two chunks in flight) and two adjacent
+   query tiles per block where their selections overlap.
 2. `h3 quantize` the trees once (load was 280 s with int8 quantization at
    load) and the prompt gallery for demos (290 s cold prompt encode).
 3. Decode: 44 s for 124 frames on the ViT decoder is host-bound per chunk
    (as fastwan's was); overlap chunk decode with the download / conversion.
-4. The ComfyUI single-file NVFP4 Trim layout (key map + plain-scale NVFP4),
-   then a Blackwell FP4 tensor-core GEMM for it.
+4. A Blackwell FP4 tensor-core GEMM for the NVFP4 linears (now 4-bit
+   resident, expanded to bf16 per GEMM); NVFP4 kept 4-bit on WebGPU too.
 5. Generate the parity fixtures; fix what they find.
 6. WebGPU: 16× behind CUDA on the same card; f16 activations and a
    tensor-core-friendly GEMM tiling are the two levers (the 4 GiB buffer /

@@ -61,3 +61,36 @@ attention, v1 for VSA (`H3_CUDA_VSA_V2=1` / `H3_CUDA_ATTN_V1=1` to flip).
 
 The L40S itself: 254 ms per block at VSA 0.8 vs 470 ms on the RTX A6000
 (1.85×; the GEMMs run at 221 vs 121 TFLOP/s).
+
+## The ComfyUI single-file NVFP4 Trim, end to end
+
+Two rentals (the first L40S, 59505873, then 59507253 on the same host class
+after the first destroyed itself on schedule; $0.47/h each).
+
+First attempt: `ComfySource` loaded the file (AdaLN tables from
+`adaln_t_table` in 30 s instead of 300 s from the bf16 tree, since the
+rank-16 projections are 16-wide; DiT load 49 s) and the generation died
+with `CUDA_ERROR_OUT_OF_MEMORY` after the prompt: the CUDA backend expanded
+NVFP4 to bf16 at load, 36 GB for the 42 blocks.
+
+Second attempt, with NVFP4 kept 4-bit on the device and expanded into the
+shared bf16 scratch before each GEMM (`fw_dequant_nvfp4`, the int8 / int4
+path): `h3 check` 95 / 95, `h3 plan` 20.1 GB predicted, and the clip:
+
+| | FastH3-Trim, ComfyUI NVFP4 file, L40S |
+|---|---|
+| load (mmap, 4-bit upload) | 48.8 s |
+| prompt (Qwen3-VL, 33 rows) | 127.5 s |
+| denoise, 8 forwards | **94.9 s** (11.4–12.1 s each; v1 VSA kernels) |
+| decode (Trim fast decoder) | 21.7 s |
+| peak device memory (`nvidia-smi`, 5 s samples) | **24.3 GB** |
+
+`fox-trim-nvfp4-frames.png` (frames 0 / 40 / 80 / 120) is the same scene
+as the bf16-tree Trim clip of the A6000 run at the same seed: the loader's
+nibble order, scale layout, `[gate | value]` swap and table convention are
+all right, since any one of them wrong would not produce a fox. Per step
+the L40S is 1.7× the A6000 (20.3 s, int8 from the bf16 tree).
+
+Not yet: the ComfyUI file on WebGPU (the default `weight_nvfp4` expands to
+f16 pairs, 2 B per weight), and a PSNR between the NVFP4 and bf16 Trim
+clips (both exist in R2 under `h3-runs/`, not yet compared).
