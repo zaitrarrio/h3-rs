@@ -284,8 +284,8 @@ impl<B: Backend> H3Dit<B> {
             }
             Ok(v)
         };
-        let unit_host = |p: &str, gate: bool| -> Result<HostAttnFf> {
-            let lin = |keys: &[&str], bias: bool| linear::load_host(src, &shapes, keys, bias, opts.quant, adapters);
+        let unit_host = |p: &str, gate: bool, quant: WeightQuant| -> Result<HostAttnFf> {
+            let lin = |keys: &[&str], bias: bool| linear::load_host(src, &shapes, keys, bias, quant, adapters);
             Ok(HostAttnFf {
                 qkv: lin(&[&format!("{p}.attn.to_q"), &format!("{p}.attn.to_k"), &format!("{p}.attn.to_v")], false)?,
                 out: lin(&[&format!("{p}.attn.to_out.0")], false)?,
@@ -300,11 +300,12 @@ impl<B: Backend> H3Dit<B> {
         };
         let mut refiner = Vec::with_capacity(cfg.refiner_layers);
         for l in 0..cfg.refiner_layers {
-            refiner.push(unit_host(&format!("token_refiner.refiner_blocks.{l}"), false)?.upload(be));
+            refiner.push(unit_host(&format!("token_refiner.refiner_blocks.{l}"), false, WeightQuant::Native)?.upload(be));
         }
         let mut blocks = Vec::with_capacity(cfg.layers);
         for l in 0..cfg.layers {
-            let h = unit_host(&format!("transformer_blocks.{l}"), has_gate)?;
+            // MXFP8 leaves the first two and last three blocks in bf16 (`for_block`).
+            let h = unit_host(&format!("transformer_blocks.{l}"), has_gate, opts.quant.for_block(l, cfg.layers))?;
             blocks.push(if opts.stream_blocks { Residency::Host(h) } else { Residency::Device(h.upload(be)) });
         }
         let plain = |k: &str| -> Result<Linear<B>> {

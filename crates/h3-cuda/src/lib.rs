@@ -21,7 +21,7 @@ use h3_core::backend::{
     Act, Backend, Conv1dShape, Conv3dShape, ConvEpilogue, ConvShape, ConvT1dShape, FlowStep, Gate, HeadNorm, Modulation, Pad,
     Rope, Snake,
 };
-use h3_core::quant::{Nvfp4, Q4, Q8};
+use h3_core::quant::{Mxfp8, Nvfp4, Q4, Q8, mx_scale_len};
 use h3_core::vsa::VsaSpec;
 use half::bf16;
 use rayon::prelude::*;
@@ -81,6 +81,10 @@ enum Quant {
     Q4,
     /// E2M1 codes (2 per byte) with E4M3 per-16 scales in the table buffer.
     Nvfp4 { alpha: f32, first_high: bool },
+    /// E4M3 codes (1 per byte) with E8M0 per-32 scales in cuBLASLt's
+    /// `VEC32_UE8M0` swizzle in the table buffer: the FP8 tensor-core GEMM on
+    /// sm_100+ (activations quantized per call), expanded to bf16 elsewhere.
+    Mxfp8,
 }
 
 pub struct Cuda {
@@ -98,6 +102,13 @@ pub struct Cuda {
     /// Compute capability major ≥ 8: bf16 mma.sync is available.
     ampere: bool,
     q8_scratch: std::sync::Mutex<Option<CuBuf>>,
+    /// MXFP8 activations per GEMM: (E4M3 codes, swizzled E8M0 scales, bf16
+    /// rounded copy for the emulation path), grown on demand.
+    mx_scratch: std::sync::Mutex<Option<(CuBuf, CuBuf, CuBuf)>>,
+    /// Compute capability major; block-scaled FP8 GEMMs need 10+.
+    sm_major: u32,
+    /// `H3_CUDA_NO_FP8=1`: emulate MXFP8 in bf16 even on sm_100+.
+    no_fp8: bool,
     scalar_conv: bool,
     scalar_attn: bool,
     /// `H3_CUDA_ATTN_V1=1`: the 16-rows-per-warp kernels for dense attention
@@ -173,6 +184,8 @@ struct Kernels {
     dequant_q8: CudaFunction,
     dequant_q4: CudaFunction,
     dequant_nvfp4: CudaFunction,
+    mx_quant: CudaFunction,
+    dequant_mxfp8: CudaFunction,
     conv2d: CudaFunction,
     conv2d_mma: CudaFunction,
     conv3d: CudaFunction,
@@ -218,6 +231,8 @@ struct Lt {
     handle: lt_sys::cublasLtHandle_t,
     workspace: CudaSlice<u8>,
     plans: std::sync::Mutex<PlanCache>,
+    /// MXFP8 plans: (n, k, rows, epilogue 0 none / 1 bias / 2 bias + tanh-GELU).
+    mx_plans: std::sync::Mutex<PlanCache>,
 }
 
 // SAFETY: the handles are only used from the thread that owns the backend,
@@ -231,7 +246,7 @@ impl Lt {
     fn new(stream: &Arc<CudaStream>) -> Result<Self, CudaError> {
         let handle = lt_result::create_handle().map_err(err)?;
         let workspace = stream.alloc_zeros::<u8>(LT_WORKSPACE).map_err(err)?;
-        Ok(Self { handle, workspace, plans: Default::default() })
+        Ok(Self { handle, workspace, plans: Default::default(), mx_plans: Default::default() })
     }
 
     /// Column-major yᵀ[n, rows] = Wᵀ…: A = W (op T, stored k × n), B = x
@@ -279,6 +294,55 @@ impl Lt {
                 desc,
                 lt_sys::cublasLtMatmulDescAttributes_t::CUBLASLT_MATMUL_DESC_BIAS_POINTER,
                 (&dummy) as *const u64 as *const _,
+                8,
+            )
+            .ok()?;
+            let h = lt_result::get_matmul_algo_heuristic(self.handle, desc, a, b, c, c, pref);
+            let _ = lt_result::destroy_matmul_pref(pref);
+            Some(LtPlan { desc, a, b, c, algo: h.ok()?.algo })
+        }
+    }
+
+    /// The MXFP8 twin of [`Lt::plan`]: A = weight codes (E4M3, `k × n`, op T),
+    /// B = activation codes (E4M3, `k × rows`), both with one E8M0 scale per
+    /// 32 of K in cuBLASLt's `VEC32_UE8M0` layout; C = D = y (bf16, `n ×
+    /// rows`). `epi` 0 = none, 1 = bias, 2 = bias + tanh-GELU. `None` when
+    /// cuBLASLt has no kernel (pre-Blackwell, or a shape it declines).
+    fn plan_mx(&self, n: usize, k: usize, rows: usize, epi: u8) -> Option<LtPlan> {
+        use lt_sys::cudaDataType_t::{CUDA_R_8F_E4M3, CUDA_R_16BF, CUDA_R_32F};
+        let a = lt_result::create_matrix_layout(CUDA_R_8F_E4M3, k as u64, n as u64, k as i64).ok()?;
+        let b = lt_result::create_matrix_layout(CUDA_R_8F_E4M3, k as u64, rows as u64, k as i64).ok()?;
+        let c = lt_result::create_matrix_layout(CUDA_R_16BF, n as u64, rows as u64, n as i64).ok()?;
+        let desc = lt_result::create_matmul_desc(lt_sys::cublasComputeType_t::CUBLAS_COMPUTE_32F, CUDA_R_32F).ok()?;
+        let t: i32 = 1;
+        let epilogue = match epi {
+            0 => lt_sys::cublasLtEpilogue_t::CUBLASLT_EPILOGUE_DEFAULT,
+            1 => lt_sys::cublasLtEpilogue_t::CUBLASLT_EPILOGUE_BIAS,
+            _ => lt_sys::cublasLtEpilogue_t::CUBLASLT_EPILOGUE_GELU_BIAS,
+        };
+        let mode = lt_sys::cublasLtMatmulMatrixScale_t::CUBLASLT_MATMUL_MATRIX_SCALE_VEC32_UE8M0;
+        let bias_ty = CUDA_R_16BF;
+        let pref = lt_result::create_matmul_pref().ok()?;
+        let ws = LT_WORKSPACE as u64;
+        use lt_sys::cublasLtMatmulDescAttributes_t as A;
+        // SAFETY: freshly created descriptors; attribute buffers outlive the calls.
+        unsafe {
+            let set = |attr: A, p: *const std::ffi::c_void, sz: usize| lt_result::set_matmul_desc_attribute(desc, attr, p, sz).ok();
+            set(A::CUBLASLT_MATMUL_DESC_TRANSA, (&t) as *const i32 as *const _, 4)?;
+            set(A::CUBLASLT_MATMUL_DESC_A_SCALE_MODE, (&mode) as *const _ as *const _, std::mem::size_of_val(&mode))?;
+            set(A::CUBLASLT_MATMUL_DESC_B_SCALE_MODE, (&mode) as *const _ as *const _, std::mem::size_of_val(&mode))?;
+            let dummy: u64 = self.workspace_ptr();
+            set(A::CUBLASLT_MATMUL_DESC_A_SCALE_POINTER, (&dummy) as *const u64 as *const _, 8)?;
+            set(A::CUBLASLT_MATMUL_DESC_B_SCALE_POINTER, (&dummy) as *const u64 as *const _, 8)?;
+            if epi > 0 {
+                set(A::CUBLASLT_MATMUL_DESC_EPILOGUE, (&epilogue) as *const _ as *const _, std::mem::size_of_val(&epilogue))?;
+                set(A::CUBLASLT_MATMUL_DESC_BIAS_DATA_TYPE, (&bias_ty) as *const _ as *const _, std::mem::size_of_val(&bias_ty))?;
+                set(A::CUBLASLT_MATMUL_DESC_BIAS_POINTER, (&dummy) as *const u64 as *const _, 8)?;
+            }
+            lt_result::set_matmul_pref_attribute(
+                pref,
+                lt_sys::cublasLtMatmulPreferenceAttributes_t::CUBLASLT_MATMUL_PREF_MAX_WORKSPACE_BYTES,
+                (&ws) as *const u64 as *const _,
                 8,
             )
             .ok()?;
@@ -362,6 +426,8 @@ impl Cuda {
             dequant_q8: get("fw_dequant_q8")?,
             dequant_q4: get("fw_dequant_q4")?,
             dequant_nvfp4: get("fw_dequant_nvfp4")?,
+            mx_quant: get("fw_mx_quant")?,
+            dequant_mxfp8: get("fw_dequant_mxfp8")?,
             conv2d: get("fw_conv2d")?,
             conv2d_mma: get("fw_conv2d_mma")?,
             conv3d: get("fw_conv3d")?,
@@ -381,6 +447,9 @@ impl Cuda {
             name,
             ampere: maj >= 8,
             q8_scratch: std::sync::Mutex::new(None),
+            mx_scratch: std::sync::Mutex::new(None),
+            sm_major: maj as u32,
+            no_fp8: env1("H3_CUDA_NO_FP8"),
             scalar_conv: env1("H3_CUDA_SCALAR_CONV"),
             scalar_attn: env1("H3_CUDA_SCALAR_ATTN"),
             attn_v1: env1("H3_CUDA_ATTN_V1"),
@@ -771,6 +840,17 @@ impl Backend for Cuda {
         CuWeight { buf: gc, rows: q.rows, cols: q.cols, quant: Some((Quant::Nvfp4 { alpha: q.alpha, first_high: q.first_high }, gs, 16)) }
     }
 
+    fn weight_mxfp8(&self, q: &Mxfp8) -> CuWeight {
+        let words = |bytes: &[u8]| -> CuBuf {
+            let mut w: Vec<u16> = bytes.chunks(2).map(|c| c[0] as u16 | (c.get(1).map_or(0, |&v| v as u16) << 8)).collect();
+            if w.is_empty() {
+                w.push(0);
+            }
+            CuBuf { s: Arc::new(self.stream.clone_htod(&w).expect("upload")), len: w.len(), f32: false }
+        };
+        CuWeight { buf: words(&q.codes), rows: q.rows, cols: q.cols, quant: Some((Quant::Mxfp8, words(&q.scales), 32)) }
+    }
+
     fn weight_bytes(&self, w: &CuWeight) -> usize {
         w.buf.len * 2 + w.quant.as_ref().map_or(0, |(_, s, _)| s.len * if s.f32 { 4 } else { 2 })
     }
@@ -796,7 +876,108 @@ impl Backend for Cuda {
         if rows == 0 {
             return;
         }
+        let act_code = match act {
+            Act::None => 0,
+            Act::GeluTanh => 1,
+            Act::GeluErf => 2,
+            Act::Silu => 3,
+        };
+        let yp = self.ptr_at(y, y_row * n);
+        let mut xp = self.ptr_at(x, x_row * k);
         let mut scratch = self.q8_scratch.lock().unwrap();
+        let mut mx_scratch = self.mx_scratch.lock().unwrap();
+        if let Some((Quant::Mxfp8, wscales, _)) = &w.quant {
+            // W8A8 on the FP8 tensor cores (sm_100+): quantize the activation
+            // rows to E4M3 codes + swizzled E8M0 scales, then cuBLASLt with
+            // VEC32_UE8M0 block scaling. Anything else emulates in bf16 below.
+            let blocks = rows * k / 32;
+            if mx_scratch.as_ref().is_none_or(|(c, s, a)| c.len < (rows * k).div_ceil(2) || s.len < mx_scale_len(rows, k).div_ceil(2) || a.len < rows * k) {
+                *mx_scratch = Some((self.alloc((rows * k).div_ceil(2)), self.alloc(mx_scale_len(rows, k).div_ceil(2)), self.alloc(rows * k)));
+            }
+            let (codes, ascales, xround) = mx_scratch.as_ref().unwrap();
+            let aligned = (y_row * n) % 8 == 0 && (x_row * k) % 8 == 0 && n % 8 == 0;
+            if let (Some(lt), true, true) = (&self.lt, self.sm_major >= 10 && !self.no_fp8 && aligned, k % 32 == 0) {
+                let epi: u8 = match (bias.is_some(), act) {
+                    (false, _) => 0,
+                    (true, Act::GeluTanh) => 2,
+                    (true, _) => 1,
+                };
+                let mut plans = lt.mx_plans.lock().unwrap();
+                // A GELU epilogue cuBLASLt declines falls back to bias-only + a pass.
+                let (plan, epi) = match plans.entry((n, k, rows, epi)).or_insert_with(|| lt.plan_mx(n, k, rows, epi)) {
+                    Some(p) => (Some(p as &LtPlan), epi),
+                    None if epi == 2 => (plans.entry((n, k, rows, 1)).or_insert_with(|| lt.plan_mx(n, k, rows, 1)).as_ref(), 1u8),
+                    None => (None, epi),
+                };
+                if let Some(p) = plan {
+                    self.launch(
+                        &self.f.mx_quant,
+                        Self::elems(blocks * 32),
+                        (256, 1, 1),
+                        &[Arg::P(xp), Arg::L(blocks as i64), Arg::I(k as i32), Arg::P(self.ptr(codes)), Arg::P(self.ptr(ascales)), Arg::P(0), Arg::I(0)],
+                    );
+                    let (ap, bp) = (self.ptr(&w.buf), self.ptr(codes));
+                    let (asp, bsp) = (self.ptr(wscales), self.ptr(ascales));
+                    let biasp = bias.map(|b| self.ptr(b));
+                    let ws = lt.workspace_ptr();
+                    let (alpha, beta) = (1.0f32, 0.0f32);
+                    self.timed(
+                        || format!("gemm mxfp8{} n={n} k={k}{}", if epi == 2 { "+gelu" } else { "" }, if rows < 1024 { " (small)" } else { "" }),
+                        // SAFETY: the plan's layouts match these extents; the
+                        // scale tensors are VEC32_UE8M0 of the two operands;
+                        // bias holds n bf16 values; workspace is LT_WORKSPACE.
+                        || unsafe {
+                            use lt_sys::cublasLtMatmulDescAttributes_t as A;
+                            lt_result::set_matmul_desc_attribute(p.desc, A::CUBLASLT_MATMUL_DESC_A_SCALE_POINTER, (&asp) as *const u64 as *const _, 8).expect("lt a scale");
+                            lt_result::set_matmul_desc_attribute(p.desc, A::CUBLASLT_MATMUL_DESC_B_SCALE_POINTER, (&bsp) as *const u64 as *const _, 8).expect("lt b scale");
+                            if let Some(bp) = biasp {
+                                lt_result::set_matmul_desc_attribute(p.desc, A::CUBLASLT_MATMUL_DESC_BIAS_POINTER, (&bp) as *const u64 as *const _, 8).expect("lt bias pointer");
+                            }
+                            lt_result::matmul(
+                                lt.handle,
+                                p.desc,
+                                (&alpha) as *const f32 as *const _,
+                                (&beta) as *const f32 as *const _,
+                                ap as *const _,
+                                p.a,
+                                bp as *const _,
+                                p.b,
+                                yp as *const _,
+                                p.c,
+                                yp as *mut _,
+                                p.c,
+                                &p.algo,
+                                ws as *mut _,
+                                LT_WORKSPACE,
+                                self.stream.cu_stream() as *mut _,
+                            )
+                            .expect("cublasLt fp8 matmul");
+                        },
+                    );
+                    self.count_flops(rows, n, k);
+                    // The epilogue did the bias (and tanh-GELU when epi == 2); apply what is left.
+                    let left = if act == Act::GeluTanh && epi == 2 { 0 } else { act_code };
+                    if left != 0 || bias.is_some() && epi == 0 {
+                        let total = rows * n;
+                        self.launch(
+                            &self.f.bias_act,
+                            Self::elems(total),
+                            (256, 1, 1),
+                            &[Arg::P(yp), Arg::P(0), Arg::L(total as i64), Arg::I(n as i32), Arg::I(0), Arg::I(left)],
+                        );
+                    }
+                    return;
+                }
+            }
+            // Emulation: round the activations through E4M3 / E8M0 into bf16 (exact), then the bf16 GEMM below.
+            self.launch(
+                &self.f.mx_quant,
+                Self::elems(blocks * 32),
+                (256, 1, 1),
+                &[Arg::P(xp), Arg::L(blocks as i64), Arg::I(k as i32), Arg::P(0), Arg::P(0), Arg::P(self.ptr(xround)), Arg::I(1)],
+            );
+            xp = self.ptr(xround);
+        }
         let wp = match &w.quant {
             None => self.ptr(&w.buf),
             Some((kind, scales, group)) => {
@@ -817,19 +998,17 @@ impl Backend for Cuda {
                         (256, 1, 1),
                         &[Arg::P(self.ptr(dst)), Arg::P(self.ptr(&w.buf)), Arg::P(self.ptr(scales)), Arg::L((n * k) as i64), Arg::I(k as i32), Arg::F(*alpha), Arg::I(*first_high as i32)],
                     ),
+                    Quant::Mxfp8 => self.launch(
+                        &self.f.dequant_mxfp8,
+                        Self::elems(n * k),
+                        (256, 1, 1),
+                        &[Arg::P(self.ptr(dst)), Arg::P(self.ptr(&w.buf)), Arg::P(self.ptr(scales)), Arg::L((n * k) as i64), Arg::I(k as i32)],
+                    ),
                 }
                 self.ptr(dst)
             }
         };
-        let act_code = match act {
-            Act::None => 0,
-            Act::GeluTanh => 1,
-            Act::GeluErf => 2,
-            Act::Silu => 3,
-        };
         let (alpha, beta) = (1.0f32, 0.0f32);
-        let yp = self.ptr_at(y, y_row * n);
-        let xp = self.ptr_at(x, x_row * k);
         // cuBLASLt with the bias (+ tanh-GELU) in the epilogue: no second pass.
         if let (Some(lt), Some(b)) = (&self.lt, bias) {
             let epi = (act == Act::GeluTanh) as u8;

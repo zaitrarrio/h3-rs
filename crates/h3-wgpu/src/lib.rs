@@ -16,7 +16,7 @@ use h3_core::backend::{
     Act, Backend, Conv1dShape, Conv3dShape, ConvEpilogue, ConvShape, ConvT1dShape, FlowStep, Gate, HeadNorm, Modulation,
     Pad, Rope, Snake,
 };
-use h3_core::quant::{Q4, Q8};
+use h3_core::quant::{Mxfp8, Q4, Q8};
 use h3_core::vsa::VsaSpec;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -32,6 +32,7 @@ const FLASH: &str = include_str!("shaders/flash.wgsl");
 const VSA_POOL: &str = include_str!("shaders/vsa_pool.wgsl");
 const VSA_COARSE: &str = include_str!("shaders/vsa_coarse.wgsl");
 const ELEM: &str = include_str!("shaders/elementwise.wgsl");
+const MX_ACT: &str = include_str!("shaders/mx_act.wgsl");
 const GROUP_NORM: &str = include_str!("shaders/group_norm.wgsl");
 const CONV: &str = include_str!("shaders/conv.wgsl");
 const CONV3D: &str = include_str!("shaders/conv3d.wgsl");
@@ -116,6 +117,10 @@ pub struct GWeight {
     /// per-group scales (Q8) or interleaved scale / zero pairs (Q4), then the
     /// group size.
     quant: Option<(Quant, GBuf, usize)>,
+    /// MXFP8 W8A8: the weight is stored dequantized (no FP8 tensor cores
+    /// here) and `linear` rounds its activations through E4M3 / E8M0 blocks
+    /// first (`mx_act.wgsl`), so the result equals the CPU reference.
+    mx: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -583,6 +588,89 @@ impl Ep {
 }
 
 impl Wgpu {
+    /// [`Backend::linear`] without the MXFP8 activation rounding.
+    #[allow(clippy::too_many_arguments)]
+    fn linear_plain(&self, x: &GBuf, x_row: usize, rows: usize, w: &GWeight, bias: Option<&GBuf>, act: Act, y: &GBuf, y_row: usize) {
+        if rows == 0 {
+            return;
+        }
+        if self.prof.is_some() {
+            *self.tag.lock().unwrap() = Some(format!("{}x{} {act:?}", w.rows, w.cols));
+        }
+        let act_code = match act {
+            Act::None => 0,
+            Act::GeluTanh => 1,
+            Act::GeluErf => 2,
+            Act::Silu => 3,
+        };
+        let half = self.f16 && w.f16 && rows >= F16_MIN_ROWS;
+        let pipe = if let Some((kind, ..)) = &w.quant {
+            match kind {
+                Quant::Q8 => self.pipeline("linear3_q8", || Self::q8_src(LINEAR3)),
+                Quant::Q4 => self.pipeline("linear3_q4", || Self::q4_src(LINEAR3)),
+            }
+        } else if half {
+            self.pipeline("linear3h", || LINEAR3H.to_string())
+        } else {
+            self.pipeline(if w.f16 { "linear3_f16" } else { "linear3_f32" }, || Self::weight_src(LINEAR3, w.f16))
+        };
+        let p = [
+            rows as u32,
+            w.rows as u32,
+            w.cols as u32,
+            (x_row * w.cols) as u32,
+            (y_row * w.rows) as u32,
+            bias.is_some() as u32,
+            act_code,
+            w.quant.as_ref().map_or(0, |q| q.2) as u32,
+        ];
+        let b = bias.unwrap_or(&self.dummy);
+        let lim = self.max_binding_bytes();
+        if (x.len as u64) * 4 <= lim && (y.len as u64) * 4 <= lim {
+            let groups = (w.rows.div_ceil(64) as u32, rows.div_ceil(64) as u32, 1);
+            return match &w.quant {
+                Some((_, scales, _)) => self.dispatch(&pipe, &p, &[x, &w.buf, b, y, scales], groups),
+                None => self.dispatch(&pipe, &p, &[x, &w.buf, b, y], groups),
+            };
+        }
+        // An activation larger than one binding (the DiT's fused QKV at
+        // 38k tokens is 3.3 GB): run the GEMM over row chunks, binding each
+        // chunk's rows of x and y as sub-ranges; the binding offset is
+        // aligned down and the remainder rides in the element offsets.
+        let chunk = self.row_chunk(&[w.cols, w.rows]);
+        let mut r0 = 0;
+        while r0 < rows {
+            let n = chunk.min(rows - r0);
+            let mut pc = p;
+            pc[0] = n as u32;
+            let (xr, xo) = self.sub_range((x_row + r0) * w.cols, n * w.cols);
+            let (yr, yo) = self.sub_range((y_row + r0) * w.rows, n * w.rows);
+            pc[3] = xo as u32;
+            pc[4] = yo as u32;
+            let (xr, yr) = (Some(xr), Some(yr));
+            let groups = (w.rows.div_ceil(64) as u32, n.div_ceil(64) as u32, 1);
+            match &w.quant {
+                Some((_, scales, _)) => self.dispatch_ranges(&pipe, &pc, &[(x, xr), (&w.buf, None), (b, None), (y, yr), (scales, None)], groups),
+                None => self.dispatch_ranges(&pipe, &pc, &[(x, xr), (&w.buf, None), (b, None), (y, yr)], groups),
+            }
+            r0 += n;
+        }
+    }
+
+
+    /// `Mxfp8::round_rows` of `rows` rows of `x` from `x_row` into a fresh
+    /// `[rows, k]` buffer (`mx_act.wgsl`); the slice must fit one binding.
+    fn mx_round(&self, x: &GBuf, x_row: usize, rows: usize, k: usize) -> GBuf {
+        assert!(k.is_multiple_of(32), "MXFP8 needs k % 32 == 0");
+        let out = self.alloc(rows * k);
+        let blocks = rows * k / 32;
+        let (xr, xo) = self.sub_range(x_row * k, rows * k);
+        let pipe = self.pipeline("mx_act", || MX_ACT.to_string());
+        let p = [blocks as u32, xo as u32, 0, 0];
+        self.dispatch_ranges(&pipe, &p, &[(x, Some(xr)), (&out, None)], Self::grid(blocks.div_ceil(256)));
+        out
+    }
+
     fn elementwise(&self, p: &Ep, x: &GBuf, y: Option<&GBuf>, aux: Option<&GBuf>, z: Option<&GBuf>, ui: Option<&GBuf>) {
         let pipe = self.pipeline("elementwise", || ELEM.to_string());
         let d = &self.dummy;
@@ -853,16 +941,20 @@ impl Backend for Wgpu {
                 })),
                 len: packed.len(),
             };
-            GWeight { buf, rows, cols, f16: true, quant: None }
+            GWeight { buf, rows, cols, f16: true, quant: None, mx: false }
         } else {
-            GWeight { buf: self.upload(data), rows, cols, f16: false, quant: None }
+            GWeight { buf: self.upload(data), rows, cols, f16: false, quant: None, mx: false }
         }
+    }
+
+    fn weight_mxfp8(&self, q: &Mxfp8) -> GWeight {
+        GWeight { mx: true, ..self.weight(&q.dequantize(), q.rows, q.cols) }
     }
 
     fn weight_q8(&self, q: &Q8) -> GWeight {
         let packed: Vec<u32> =
             q.q.chunks(4).map(|c| c.iter().enumerate().fold(0u32, |a, (j, &v)| a | ((v as u8 as u32) << (8 * j)))).collect();
-        GWeight { buf: self.upload_u32_buf(&packed), rows: q.rows, cols: q.cols, f16: false, quant: Some((Quant::Q8, self.upload(&q.scales), q.group)) }
+        GWeight { buf: self.upload_u32_buf(&packed), rows: q.rows, cols: q.cols, f16: false, quant: Some((Quant::Q8, self.upload(&q.scales), q.group)), mx: false }
     }
 
     fn weight_q4(&self, q: &Q4) -> GWeight {
@@ -870,7 +962,7 @@ impl Backend for Wgpu {
         bytes.resize(bytes.len().div_ceil(4) * 4, 0);
         let words: Vec<u32> = bytes.chunks_exact(4).map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect();
         let sz: Vec<f32> = q.scales.iter().zip(&q.zeros).flat_map(|(&s, &z)| [s, z]).collect();
-        GWeight { buf: self.upload_u32_buf(&words), rows: q.rows, cols: q.cols, f16: false, quant: Some((Quant::Q4, self.upload(&sz), q.group)) }
+        GWeight { buf: self.upload_u32_buf(&words), rows: q.rows, cols: q.cols, f16: false, quant: Some((Quant::Q4, self.upload(&sz), q.group)), mx: false }
     }
 
     fn weight_bytes(&self, w: &GWeight) -> usize {
@@ -894,67 +986,20 @@ impl Backend for Wgpu {
         if rows == 0 {
             return;
         }
-        if self.prof.is_some() {
-            *self.tag.lock().unwrap() = Some(format!("{}x{} {act:?}", w.rows, w.cols));
-        }
-        let act_code = match act {
-            Act::None => 0,
-            Act::GeluTanh => 1,
-            Act::GeluErf => 2,
-            Act::Silu => 3,
-        };
-        let half = self.f16 && w.f16 && rows >= F16_MIN_ROWS;
-        let pipe = if let Some((kind, ..)) = &w.quant {
-            match kind {
-                Quant::Q8 => self.pipeline("linear3_q8", || Self::q8_src(LINEAR3)),
-                Quant::Q4 => self.pipeline("linear3_q4", || Self::q4_src(LINEAR3)),
+        if w.mx {
+            // MXFP8 W8A8: round the activations per 32-column block into a
+            // scratch copy first, in row chunks that fit one binding.
+            let chunk = self.row_chunk(&[w.cols, w.rows]);
+            let mut r0 = 0;
+            while r0 < rows {
+                let n = chunk.min(rows - r0);
+                let xq = self.mx_round(x, x_row + r0, n, w.cols);
+                self.linear_plain(&xq, 0, n, w, bias, act, y, y_row + r0);
+                r0 += n;
             }
-        } else if half {
-            self.pipeline("linear3h", || LINEAR3H.to_string())
-        } else {
-            self.pipeline(if w.f16 { "linear3_f16" } else { "linear3_f32" }, || Self::weight_src(LINEAR3, w.f16))
-        };
-        let p = [
-            rows as u32,
-            w.rows as u32,
-            w.cols as u32,
-            (x_row * w.cols) as u32,
-            (y_row * w.rows) as u32,
-            bias.is_some() as u32,
-            act_code,
-            w.quant.as_ref().map_or(0, |q| q.2) as u32,
-        ];
-        let b = bias.unwrap_or(&self.dummy);
-        let lim = self.max_binding_bytes();
-        if (x.len as u64) * 4 <= lim && (y.len as u64) * 4 <= lim {
-            let groups = (w.rows.div_ceil(64) as u32, rows.div_ceil(64) as u32, 1);
-            return match &w.quant {
-                Some((_, scales, _)) => self.dispatch(&pipe, &p, &[x, &w.buf, b, y, scales], groups),
-                None => self.dispatch(&pipe, &p, &[x, &w.buf, b, y], groups),
-            };
+            return;
         }
-        // An activation larger than one binding (the DiT's fused QKV at
-        // 38k tokens is 3.3 GB): run the GEMM over row chunks, binding each
-        // chunk's rows of x and y as sub-ranges; the binding offset is
-        // aligned down and the remainder rides in the element offsets.
-        let chunk = self.row_chunk(&[w.cols, w.rows]);
-        let mut r0 = 0;
-        while r0 < rows {
-            let n = chunk.min(rows - r0);
-            let mut pc = p;
-            pc[0] = n as u32;
-            let (xr, xo) = self.sub_range((x_row + r0) * w.cols, n * w.cols);
-            let (yr, yo) = self.sub_range((y_row + r0) * w.rows, n * w.rows);
-            pc[3] = xo as u32;
-            pc[4] = yo as u32;
-            let (xr, yr) = (Some(xr), Some(yr));
-            let groups = (w.rows.div_ceil(64) as u32, n.div_ceil(64) as u32, 1);
-            match &w.quant {
-                Some((_, scales, _)) => self.dispatch_ranges(&pipe, &pc, &[(x, xr), (&w.buf, None), (b, None), (y, yr), (scales, None)], groups),
-                None => self.dispatch_ranges(&pipe, &pc, &[(x, xr), (&w.buf, None), (b, None), (y, yr)], groups),
-            }
-            r0 += n;
-        }
+        self.linear_plain(x, x_row, rows, w, bias, act, y, y_row);
     }
 
     fn swiglu(&self, x: &GBuf, rows: usize, dim: usize, out: &GBuf) {

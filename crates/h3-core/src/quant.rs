@@ -25,6 +25,11 @@ pub enum WeightQuant {
     /// NVFP4 as stored by the Trim checkpoint (FP4 E2M1 codes, 16-column
     /// E4M3 scales, one f32 alpha per tensor). Only loaded, never made here.
     Nvfp4,
+    /// MXFP8 W8A8 ([`Mxfp8`]): E4M3 weights *and* activations with one E8M0
+    /// scale per 32 input columns, the block GEMMs on FP8 tensor cores
+    /// (cuBLASLt `VEC32_UE8M0`, sm_100+; emulated elsewhere). Sol-H3 /
+    /// fastvideo-rs's recipe: see [`WeightQuant::for_block`].
+    Mxfp8,
 }
 
 impl WeightQuant {
@@ -57,7 +62,23 @@ impl WeightQuant {
     pub fn is_quantized(self) -> bool {
         self != Self::Native
     }
+
+    /// The format for transformer block `block` of `layers`: MXFP8 leaves the
+    /// first two and the last three blocks in the backend's precision (Sol-H3
+    /// `compute_quant.py`, blocks `[2, 46]` of 50; the 42-block Trim keeps the
+    /// same edges). Every other format applies to every block.
+    pub fn for_block(self, block: usize, layers: usize) -> Self {
+        match self {
+            Self::Mxfp8 if block < MXFP8_FIRST_BLOCK || block + MXFP8_BF16_TAIL >= layers => Self::Native,
+            q => q,
+        }
+    }
 }
+
+/// Blocks before this one stay in the backend's precision under MXFP8.
+pub const MXFP8_FIRST_BLOCK: usize = 2;
+/// Blocks at the end of the stack that stay in the backend's precision under MXFP8.
+pub const MXFP8_BF16_TAIL: usize = 3;
 
 impl std::fmt::Display for WeightQuant {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -65,6 +86,7 @@ impl std::fmt::Display for WeightQuant {
             Self::Native => f.write_str("native"),
             Self::Int8 => f.write_str("int8"),
             Self::Nvfp4 => f.write_str("nvfp4"),
+            Self::Mxfp8 => f.write_str("mxfp8"),
             Self::Int4 { group, hqq, ffn_only } => write!(
                 f,
                 "int4{}-g{group}{}",
@@ -82,13 +104,14 @@ impl std::str::FromStr for WeightQuant {
             "native" | "bf16" | "f16" => Ok(Self::Native),
             "int8" | "q8" => Ok(Self::Int8),
             "nvfp4" | "fp4" => Ok(Self::Nvfp4),
+            "mxfp8" | "fp8" => Ok(Self::Mxfp8),
             _ => {
                 let (s0, ffn_only) = match s.strip_suffix("-ffn") {
                     Some(r) => (r, true),
                     None => (s, false),
                 };
                 let rest = s0.strip_prefix("int4").ok_or_else(|| {
-                    format!("unknown weight format `{s}` (native | int8 | int4[-hqq][-gN][-ffn] | nvfp4)")
+                    format!("unknown weight format `{s}` (native | int8 | int4[-hqq][-gN][-ffn] | nvfp4 | mxfp8)")
                 })?;
                 let (hqq, rest) = match rest.strip_prefix("-hqq") {
                     Some(r) => (true, r),
@@ -442,6 +465,169 @@ impl Nvfp4 {
     }
 }
 
+// ------------------------------------------------------------------ MXFP8
+
+/// Values per MX scale (OCP microscaling block).
+pub const MX_BLOCK: usize = 32;
+/// Largest finite E4M3 value.
+pub const E4M3_MAX: f32 = 448.0;
+
+/// f32 → bf16 → f32, round to nearest even (what the device sees).
+pub fn bf16_round(v: f32) -> f32 {
+    half::bf16::from_f32(v).to_f32()
+}
+
+/// f32 → E4M3 as `cvt.rn.satfinite.e4m3x2.f32`: round to nearest even,
+/// finite values past 448 saturate to ±448, NaN → 0x7F. Twin of the CUDA
+/// `mx_e4m3` and the WGSL `e4m3_sat`.
+pub fn e4m3_satfinite(x: f32) -> u8 {
+    let u = x.to_bits();
+    let sign = ((u >> 24) & 0x80) as u8;
+    let a = u & 0x7FFF_FFFF;
+    if a > 0x7F80_0000 {
+        return sign | 0x7F;
+    }
+    if a >= 0x43E0_0000 {
+        return sign | 0x7E;
+    }
+    if a < 0x3C80_0000 {
+        // Below 2^-6: subnormal codes with quantum 2^-9; the product is exact.
+        let m = (f32::from_bits(a) * 512.0).round_ties_even() as u32;
+        return sign | m as u8;
+    }
+    let mut e = (a >> 23) as i32 - 127;
+    let mut m = (a >> 20) & 7;
+    let rem = a & 0xF_FFFF;
+    if rem > 0x8_0000 || (rem == 0x8_0000 && (m & 1) == 1) {
+        m += 1;
+        if m == 8 {
+            m = 0;
+            e += 1;
+        }
+    }
+    sign | (((e + 7) as u32) << 3) as u8 | m as u8
+}
+
+/// E4M3 (fn variant: no infinities, 0x7F / 0xFF are NaN) → f32.
+pub fn e4m3_decode(b: u8) -> f32 {
+    let sign = if b & 0x80 != 0 { -1.0 } else { 1.0 };
+    let e = i32::from((b >> 3) & 0xF);
+    let m = f32::from(b & 7);
+    if e == 15 && (b & 7) == 7 {
+        return f32::NAN;
+    }
+    if e == 0 {
+        return sign * m / 512.0;
+    }
+    sign * (1.0 + m / 8.0) * 2f32.powi(e - 7)
+}
+
+/// The E8M0 block exponent for a 32-value block with maximum magnitude
+/// `amax`: the smallest power of two that keeps `amax` within 448 after
+/// scaling (Sol-H3 `mxfp8.py::_mx_e8m0_from_amax`). Returns the biased byte
+/// and `2^-exponent`.
+pub fn mx_e8m0(amax: f32) -> (u8, f32) {
+    let bits = amax.to_bits() as i32;
+    let e0 = ((bits >> 23) & 0xFF) - 135;
+    let threshold = f32::from_bits((((e0 + 135) << 23) | 0x60_0000) as u32);
+    let mut e = e0 + i32::from(amax > threshold);
+    e = e.max(-127);
+    let inv = f32::from_bits(((127 - e) << 23) as u32);
+    ((e + 127) as u8, inv)
+}
+
+/// Position of the scale of `(row, group)` in cuBLASLt's `VEC32_UE8M0`
+/// layout (torch `SWIZZLE_32_4_4`): tiles of 128 rows × 4 groups, each 512
+/// bytes, 32 × 4 × 4 inside.
+pub fn mx_scale_offset(row: usize, group: usize, column_blocks: usize) -> usize {
+    let tile = (row / 128) * column_blocks + group / 4;
+    tile * 512 + (row % 32) * 16 + ((row % 128) / 32) * 4 + group % 4
+}
+
+/// Scale bytes of a `[rows, k]` operand: rows padded to 128, groups to 4.
+pub fn mx_scale_len(rows: usize, k: usize) -> usize {
+    rows.div_ceil(128) * 128 * (k / MX_BLOCK).div_ceil(4) * 4
+}
+
+/// A `[rows, cols]` matrix as E4M3 codes with one E8M0 scale per 32 columns,
+/// the scales in the `VEC32_UE8M0` swizzle so the device uses them as they
+/// are. Activations get the same treatment per GEMM ([`Mxfp8::round_rows`]
+/// is the host form of that step).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Mxfp8 {
+    /// `[rows, cols]` E4M3 bytes.
+    pub codes: Vec<u8>,
+    /// [`mx_scale_len`] swizzled E8M0 bytes.
+    pub scales: Vec<u8>,
+    pub rows: usize,
+    pub cols: usize,
+}
+
+impl Mxfp8 {
+    /// Quantize `data` (`cols % 32 == 0`).
+    pub fn quantize(data: &[f32], rows: usize, cols: usize) -> Self {
+        assert_eq!(data.len(), rows * cols);
+        assert!(cols.is_multiple_of(MX_BLOCK), "MXFP8 needs cols % 32 == 0, got {cols}");
+        let cb = (cols / MX_BLOCK).div_ceil(4);
+        let mut codes = vec![0u8; rows * cols];
+        let mut scales = vec![0u8; mx_scale_len(rows, cols)];
+        for r in 0..rows {
+            for g in 0..cols / MX_BLOCK {
+                let blk = &data[r * cols + g * MX_BLOCK..][..MX_BLOCK];
+                let (byte, inv) = mx_e8m0(amax_abs(blk));
+                scales[mx_scale_offset(r, g, cb)] = byte;
+                for (j, &v) in blk.iter().enumerate() {
+                    codes[r * cols + g * MX_BLOCK + j] = e4m3_satfinite(v * inv);
+                }
+            }
+        }
+        Self { codes, scales, rows, cols }
+    }
+
+    pub fn scale_of(&self, row: usize, group: usize) -> f32 {
+        let cb = (self.cols / MX_BLOCK).div_ceil(4);
+        2f32.powi(i32::from(self.scales[mx_scale_offset(row, group, cb)]) - 127)
+    }
+
+    pub fn dequantize(&self) -> Vec<f32> {
+        (0..self.rows * self.cols)
+            .map(|i| {
+                let (r, c) = (i / self.cols, i % self.cols);
+                e4m3_decode(self.codes[i]) * self.scale_of(r, c / MX_BLOCK)
+            })
+            .collect()
+    }
+
+    pub fn bytes(&self) -> usize {
+        self.codes.len() + self.scales.len()
+    }
+
+    /// The activation side of W8A8: every 32-column block of every row of `x`
+    /// (`[rows, k]`, `k % 32 == 0`) rounded to bf16 (the device's storage),
+    /// quantized to E4M3 with its E8M0 block scale and decoded again. The CPU
+    /// reference feeds this to the f32 GEMM; the GPU paths produce the same
+    /// codes and scales for the FP8 tensor cores.
+    pub fn round_rows(x: &[f32], k: usize) -> Vec<f32> {
+        assert!(k.is_multiple_of(MX_BLOCK) && x.len().is_multiple_of(k));
+        let mut out = Vec::with_capacity(x.len());
+        for blk in x.chunks_exact(MX_BLOCK) {
+            let b: Vec<f32> = blk.iter().map(|&v| bf16_round(v)).collect();
+            let (byte, inv) = mx_e8m0(amax_abs(&b));
+            let s = 2f32.powi(i32::from(byte) - 127);
+            out.extend(b.iter().map(|&v| e4m3_decode(e4m3_satfinite(v * inv)) * s));
+        }
+        out
+    }
+}
+
+/// max |x|; a NaN wins (the kernels propagate it too).
+fn amax_abs(x: &[f32]) -> f32 {
+    x.iter().fold(0.0f32, |a, &v| {
+        let v = v.abs();
+        if v > a || v.is_nan() { v } else { a }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -480,6 +666,73 @@ mod tests {
         assert_eq!("int4-hqq-g32".parse(), Ok(WeightQuant::Int4 { group: 32, hqq: true, ffn_only: false }));
         assert_eq!("int4-hqq-g64-ffn".parse::<WeightQuant>().map(|q| q.attn()), Ok(WeightQuant::Int8));
         assert_eq!("nvfp4".parse(), Ok(WeightQuant::Nvfp4));
+    }
+
+    #[test]
+    fn mxfp8_codes_round_trip_and_swizzle_is_a_bijection() {
+        // Every E4M3 code decodes and re-encodes to itself (NaN codes aside).
+        for b in 0..=255u8 {
+            if (b & 0x7F) == 0x7F {
+                continue;
+            }
+            assert_eq!(e4m3_satfinite(e4m3_decode(b)), b, "code {b:#x}");
+        }
+        // Saturation and rounding: 448 is the max, 464 rounds to 448, 2^-9 is the smallest subnormal.
+        assert_eq!(e4m3_decode(e4m3_satfinite(1000.0)), 448.0);
+        assert_eq!(e4m3_decode(e4m3_satfinite(-1000.0)), -448.0);
+        assert_eq!(e4m3_satfinite(1.0 / 512.0), 1);
+        assert_eq!(e4m3_satfinite(1.0 / 1024.0), 0, "ties to even: half a quantum rounds to 0");
+        assert_eq!(e4m3_satfinite(3.0 / 1024.0), 2);
+        // E8M0: a block max of 448 scales by 1, of 449 by 1/2, of 1 by 2^-... keeps the max ≤ 448.
+        assert_eq!(mx_e8m0(448.0), (127, 1.0));
+        assert_eq!(mx_e8m0(449.0), (128, 0.5));
+        for amax in [1e-30f32, 0.003, 0.9, 1.0, 7.5, 300.0, 448.0, 1e4, 3e38] {
+            let (byte, inv) = mx_e8m0(amax);
+            assert!(amax * inv <= 448.0, "{amax}");
+            assert_eq!(inv, 2f32.powi(127 - i32::from(byte)));
+        }
+        // The swizzle covers every byte of a padded [rows, k] scale tensor exactly once.
+        let (rows, k) = (300usize, 7usize * 32);
+        let cb = (k / 32).div_ceil(4);
+        let mut seen = vec![false; mx_scale_len(rows.div_ceil(128) * 128, k)];
+        for r in 0..rows.div_ceil(128) * 128 {
+            for g in 0..cb * 4 {
+                let o = mx_scale_offset(r, g, cb);
+                assert!(!seen[o], "({r}, {g}) collides");
+                seen[o] = true;
+            }
+        }
+        assert!(seen.iter().all(|&s| s));
+        // Quantize → dequantize is within half an E4M3 ulp (1/16 relative, or half a
+        // subnormal quantum of the block scale).
+        let mut rng = crate::rng::Rng::new(3);
+        let (rows, cols) = (37, 96);
+        let w: Vec<f32> = rng.normal(rows * cols).iter().map(|v| v * 0.3).collect();
+        let q = Mxfp8::quantize(&w, rows, cols);
+        assert_eq!(q.scales.len(), 128 * 4);
+        let d = q.dequantize();
+        for r in 0..rows {
+            for c in 0..cols {
+                let s = q.scale_of(r, c / 32);
+                let v = w[r * cols + c];
+                assert!((d[r * cols + c] - v).abs() <= v.abs() / 16.0 + s / 1024.0 + 1e-7, "({r}, {c})");
+            }
+        }
+        // round_rows is quantize ∘ dequantize of the bf16-rounded rows.
+        let x: Vec<f32> = rng.normal(5 * 64);
+        let rr = Mxfp8::round_rows(&x, 64);
+        let xb: Vec<f32> = x.iter().map(|&v| bf16_round(v)).collect();
+        assert_eq!(rr, Mxfp8::quantize(&xb, 5, 64).dequantize());
+        // Block routing: the first two and the last three blocks stay native.
+        assert_eq!(WeightQuant::Mxfp8.for_block(1, 50), WeightQuant::Native);
+        assert_eq!(WeightQuant::Mxfp8.for_block(2, 50), WeightQuant::Mxfp8);
+        assert_eq!(WeightQuant::Mxfp8.for_block(46, 50), WeightQuant::Mxfp8);
+        assert_eq!(WeightQuant::Mxfp8.for_block(47, 50), WeightQuant::Native);
+        assert_eq!(WeightQuant::Mxfp8.for_block(38, 42), WeightQuant::Mxfp8);
+        assert_eq!(WeightQuant::Mxfp8.for_block(39, 42), WeightQuant::Native);
+        assert_eq!(WeightQuant::Int8.for_block(0, 50), WeightQuant::Int8);
+        assert_eq!("mxfp8".parse::<WeightQuant>(), Ok(WeightQuant::Mxfp8));
+        assert_eq!(WeightQuant::Mxfp8.to_string(), "mxfp8");
     }
 
     #[test]

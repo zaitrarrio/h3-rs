@@ -12,7 +12,7 @@
 //! Aliasing rule: an output buffer never aliases an input, except the
 //! arguments documented as *in place*.
 
-use crate::quant::{Nvfp4, Q4, Q8};
+use crate::quant::{Mxfp8, Nvfp4, Q4, Q8};
 use crate::vsa::VsaSpec;
 
 /// Epilogue activation of [`Backend::linear`] and [`Backend::group_norm`].
@@ -380,6 +380,12 @@ pub trait Backend {
         let w = q.dequantize();
         self.weight(&w, q.rows, q.cols)
     }
+    /// MXFP8 W8A8 ([`Mxfp8`]): `linear` with this weight must equal the f32
+    /// GEMM of `q.dequantize()` against [`Mxfp8::round_rows`] of the bf16
+    /// activations (the CPU reference does exactly that; CUDA runs the FP8
+    /// tensor cores on sm_100+ and emulates below). Backends without an FP8
+    /// path dequantize the weight at load and round the activations per GEMM.
+    fn weight_mxfp8(&self, q: &Mxfp8) -> Self::Weight;
     /// Bytes a weight occupies on the device.
     fn weight_bytes(&self, w: &Self::Weight) -> usize;
     /// Wait for queued work (timing only; downloads synchronise themselves).

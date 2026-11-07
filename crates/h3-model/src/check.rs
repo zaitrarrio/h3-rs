@@ -16,7 +16,7 @@ use h3_core::{
     backend::{Act, Backend, Conv1dShape, Conv3dShape, ConvEpilogue, ConvShape, ConvT1dShape, FlowStep, Gate, HeadNorm, ModRef, ModTable, Modulation, Pad, Rope, Snake},
     config::{AudioVaeConfig, H3Config, TaeH3Config, UpscalerConfig, VideoVaeConfig},
     packing::{self, TEXT_TAG},
-    quant::{Nvfp4, Q4, Q8, WeightQuant},
+    quant::{Mxfp8, Nvfp4, Q4, Q8, WeightQuant},
     rng::Rng,
     vsa::{Segment, VsaSpec},
     weights::Synthetic,
@@ -94,6 +94,7 @@ pub enum Mat<'a> {
     Q8(&'a Q8),
     Q4(&'a Q4),
     Nvfp4(&'a Nvfp4),
+    Mxfp8(&'a Mxfp8),
 }
 
 #[derive(Clone, Copy)]
@@ -126,6 +127,7 @@ impl<B: Backend> BackendRunner<'_, B> {
             Mat::Q8(q) => self.0.weight_q8(q),
             Mat::Q4(q) => self.0.weight_q4(q),
             Mat::Nvfp4(q) => self.0.weight_nvfp4(q),
+            Mat::Mxfp8(q) => self.0.weight_mxfp8(q),
         }
     }
 }
@@ -140,6 +142,7 @@ impl<B: Backend> ErasedBackend for BackendRunner<'_, B> {
             Mat::Q8(q) => q.rows,
             Mat::Q4(q) => q.rows,
             Mat::Nvfp4(q) => q.rows,
+            Mat::Mxfp8(q) => q.rows,
         };
         let gy = be.alloc(y_rows * n);
         be.linear(&gx, x_row, rows, &gw, gb.as_ref(), act, &gy, y_row);
@@ -445,6 +448,13 @@ fn ops<B: Backend>(p: &mut Pair<'_, B>, rng: &mut Rng) {
                     ..nv.clone()
                 };
                 p.op(format!("linear nvfp4 first-high {m}x{k}x{n}"), |r| r.linear(&x, 3, m, &Mat::Nvfp4(&nvh), None, act, m + 2, 2));
+            }
+            if k % 32 == 0 {
+                // MXFP8 W8A8: the reference rounds the activations too, so the
+                // FP8 tensor-core path and the emulation must both match it.
+                let mx = Mxfp8::quantize(&w, n, k);
+                p.op(format!("linear mxfp8 {m}x{k}x{n} {act:?}"), |r| r.linear(&x, 3, m, &Mat::Mxfp8(&mx), Some(&b), act, m + 2, 2));
+                p.op(format!("linear mxfp8 no-bias {m}x{k}x{n}"), |r| r.linear(&x, 0, m, &Mat::Mxfp8(&mx), None, Act::None, m, 0));
             }
         }
     }

@@ -5,7 +5,7 @@ use h3_core::{
     Error, Result,
     backend::Backend,
     lora::Adapter,
-    quant::{Nvfp4, Q4, Q8, Stored, WeightQuant},
+    quant::{Mxfp8, Nvfp4, Q4, Q8, Stored, WeightQuant},
     weights::WeightSource,
 };
 use std::collections::HashMap;
@@ -26,6 +26,7 @@ pub enum HostWeight {
     Q8(Q8),
     Q4(Q4),
     Nvfp4(Nvfp4),
+    Mxfp8(Mxfp8),
 }
 
 impl HostWeight {
@@ -35,6 +36,7 @@ impl HostWeight {
             HostWeight::Q8(q) => q.bytes(),
             HostWeight::Q4(q) => q.bytes(),
             HostWeight::Nvfp4(q) => q.bytes(),
+            HostWeight::Mxfp8(q) => q.bytes(),
         }
     }
 }
@@ -53,6 +55,7 @@ impl HostLinear {
             HostWeight::Q8(q) => be.weight_q8(q),
             HostWeight::Q4(q) => be.weight_q4(q),
             HostWeight::Nvfp4(q) => be.weight_nvfp4(q),
+            HostWeight::Mxfp8(q) => be.weight_mxfp8(q),
         };
         Linear { w, b: self.b.as_ref().map(|b| be.upload(b)), rows: self.rows, cols: self.cols }
     }
@@ -115,6 +118,8 @@ pub fn load_host(
             // NVFP4 is only ever read from a checkpoint; a dequantized merge is
             // re-quantized to int8 so the device cost stays small.
             WeightQuant::Nvfp4 => HostWeight::Q8(Q8::quantize(&w, rows, cols)),
+            WeightQuant::Mxfp8 if cols.is_multiple_of(32) => HostWeight::Mxfp8(Mxfp8::quantize(&w, rows, cols)),
+            WeightQuant::Mxfp8 => HostWeight::F32(w),
         }
     } else if stored.len() != keys.len() {
         return Err(err(format!("{keys:?}: only some are stored quantized")));

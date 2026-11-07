@@ -61,6 +61,11 @@ pub fn quantize_dit(src: &dyn WeightSource, cfg: &H3Config, quant: WeightQuant, 
         }
         let (rows, cols) = (shape[0], shape[1..].iter().product::<usize>());
         match fmt {
+            WeightQuant::Mxfp8 => {
+                return Err(Error::Weights(
+                    "MXFP8 has no stored form yet: load a bf16 / f16 tree with `--weights mxfp8` (quantized at load)".into(),
+                ));
+            }
             WeightQuant::Int8 => {
                 let q = Q8::quantize(&w, rows, cols);
                 let ng = cols / q.group;

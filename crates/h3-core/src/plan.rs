@@ -35,6 +35,7 @@ pub fn bytes_per_weight(q: WeightQuant, native: u64) -> f64 {
         WeightQuant::Int8 => 1.0 + 4.0 / 128.0,
         WeightQuant::Int4 { group, .. } => 0.5 + 4.0 / group as f64,
         WeightQuant::Nvfp4 => 0.5 + 1.0 / 16.0,
+        WeightQuant::Mxfp8 => 1.0 + 1.0 / 32.0,
     }
 }
 

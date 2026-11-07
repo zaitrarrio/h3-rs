@@ -7,7 +7,7 @@ use h3_core::backend::{
     Act, Backend, Conv1dShape, Conv3dShape, ConvEpilogue, ConvShape, ConvT1dShape, FlowStep, Gate, HeadNorm, Modulation,
     Pad, Rope, Snake,
 };
-use h3_core::quant::{Nvfp4, Q4, Q8};
+use h3_core::quant::{Mxfp8, Nvfp4, Q4, Q8};
 use h3_core::vsa::{VsaSpec, select};
 use rayon::prelude::*;
 use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
@@ -28,6 +28,9 @@ pub struct CpuWeight {
     pub data: Vec<f32>,
     pub rows: usize,
     pub cols: usize,
+    /// MXFP8 W8A8: `linear` rounds its activations through E4M3 with E8M0
+    /// block scales ([`Mxfp8::round_rows`]) before the f32 GEMM.
+    pub mx: bool,
 }
 
 #[derive(Default)]
@@ -369,7 +372,7 @@ impl Backend for Cpu {
     }
     fn weight(&self, data: &[f32], rows: usize, cols: usize) -> CpuWeight {
         assert_eq!(data.len(), rows * cols);
-        CpuWeight { data: data.to_vec(), rows, cols }
+        CpuWeight { data: data.to_vec(), rows, cols, mx: false }
     }
     fn weight_q8(&self, q: &Q8) -> CpuWeight {
         self.weight(&q.dequantize(), q.rows, q.cols)
@@ -379,6 +382,9 @@ impl Backend for Cpu {
     }
     fn weight_nvfp4(&self, q: &Nvfp4) -> CpuWeight {
         self.weight(&q.dequantize(), q.rows, q.cols)
+    }
+    fn weight_mxfp8(&self, q: &Mxfp8) -> CpuWeight {
+        CpuWeight { data: q.dequantize(), rows: q.rows, cols: q.cols, mx: true }
     }
     fn weight_bytes(&self, w: &CpuWeight) -> usize {
         w.data.len() * 4
@@ -401,6 +407,13 @@ impl Backend for Cpu {
         let b = bias.map(|b| b.r());
         let mut y = y.w();
         let x = &x[x_row * k..(x_row + rows) * k];
+        let xq;
+        let x = if w.mx {
+            xq = Mxfp8::round_rows(x, k);
+            &xq[..]
+        } else {
+            x
+        };
         // Rows × 4 output columns per task keeps the weight row in cache.
         y[y_row * n..(y_row + rows) * n].par_chunks_mut(n).zip(x.par_chunks(k)).for_each(|(yr, xr)| {
             for (o, out) in yr.iter_mut().enumerate() {

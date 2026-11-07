@@ -1936,6 +1936,84 @@ extern "C" __global__ void fw_dequant_q4(u64 out_, u64 q_, u64 sz_, long n, int 
     out[i] = bf((c - sz[2 * g + 1]) * sz[2 * g]);
 }
 
+// ---------------------------------------------------------------- MXFP8 (h3_core::quant::Mxfp8)
+// f32 -> E4M3 as cvt.rn.satfinite: round to nearest even, saturate past 448,
+// NaN -> 0x7F. Bit-exact twin of `quant::e4m3_satfinite`.
+__device__ __forceinline__ unsigned mx_e4m3(float x) {
+    unsigned u = __float_as_uint(x);
+    unsigned sign = (u >> 24) & 0x80u;
+    unsigned a = u & 0x7FFFFFFFu;
+    if (a > 0x7F800000u) return sign | 0x7Fu;
+    if (a >= 0x43E00000u) return sign | 0x7Eu;
+    if (a < 0x3C800000u) return sign | (unsigned)rintf(__uint_as_float(a) * 512.0f);
+    int e = (int)(a >> 23) - 127;
+    unsigned m = (a >> 20) & 7u;
+    unsigned rem = a & 0xFFFFFu;
+    if (rem > 0x80000u || (rem == 0x80000u && (m & 1u))) { m += 1u; if (m == 8u) { m = 0u; e += 1; } }
+    return sign | ((unsigned)(e + 7) << 3) | m;
+}
+__device__ __forceinline__ float mx_e4m3_decode(unsigned b) {
+    float sign = (b & 0x80u) ? -1.0f : 1.0f;
+    int e = (int)((b >> 3) & 0xFu);
+    float m = (float)(b & 7u);
+    if (e == 15 && (b & 7u) == 7u) return __int_as_float(0x7FC00000);
+    if (e == 0) return sign * m / 512.0f;
+    return sign * (1.0f + m / 8.0f) * exp2f((float)(e - 7));
+}
+// E8M0 block exponent: the smallest power of two keeping amax within 448. Returns the biased byte; *inv = 2^-e.
+__device__ __forceinline__ unsigned mx_e8m0(float amax, float* inv) {
+    int bits = __float_as_int(amax);
+    int e0 = ((bits >> 23) & 0xFF) - 135;
+    float threshold = __int_as_float(((e0 + 135) << 23) | 0x600000);
+    int e = e0 + (amax > threshold ? 1 : 0);
+    if (e < -127) e = -127;
+    *inv = __int_as_float((127 - e) << 23);
+    return (unsigned)(e + 127);
+}
+// cuBLASLt VEC32_UE8M0 (torch SWIZZLE_32_4_4) position of the scale of (row, group).
+__device__ __forceinline__ long mx_scale_offset(long row, long group, long column_blocks) {
+    long tile = (row / 128) * column_blocks + (group / 4);
+    return tile * 512 + (row % 32) * 16 + ((row % 128) / 32) * 4 + (group % 4);
+}
+// One warp per 32-column block of x[rows, k] (bf16): block max, E8M0 scale, E4M3 codes.
+// mode 0: codes (u8 [rows, k]) + swizzled scales (u8) for the FP8 GEMM;
+// mode 1: the decoded values back to bf16 in `out` (the emulation path; equals the CPU reference exactly,
+//         since E4M3 × 2^e is representable in bf16).
+extern "C" __global__ void fw_mx_quant(u64 x_, long blocks, int k, u64 codes_, u64 scales_, u64 out_, int mode) {
+    const bf16_t* x = (const bf16_t*)x_;
+    const long blk = ((long)blockIdx.x * blockDim.x + threadIdx.x) >> 5;
+    if (blk >= blocks) return;
+    const int lane = threadIdx.x & 31;
+    const int groups = k >> 5;
+    const long row = blk / groups;
+    const int g = (int)(blk - row * groups);
+    const long idx = row * k + (long)g * 32 + lane;
+    const float v = ld(x, idx);
+    float amax = fabsf(v);
+    for (int o = 16; o > 0; o >>= 1) amax = fmaxf(amax, __shfl_xor_sync(0xffffffffu, amax, o));
+    float inv;
+    const unsigned byte = mx_e8m0(amax, &inv);
+    const unsigned code = mx_e4m3(v * inv);
+    if (mode == 0) {
+        ((unsigned char*)codes_)[idx] = (unsigned char)code;
+        if (lane == 0) ((unsigned char*)scales_)[mx_scale_offset(row, g, (groups + 3) >> 2)] = (unsigned char)byte;
+    } else {
+        ((bf16_t*)out_)[idx] = bf(mx_e4m3_decode(code) * __int_as_float((int)byte << 23));
+    }
+}
+// Expand MXFP8 weight codes + swizzled scales to bf16 (the emulation path on pre-Blackwell cards).
+extern "C" __global__ void fw_dequant_mxfp8(u64 out_, u64 codes_, u64 scales_, long n, int k) {
+    bf16_t* out = (bf16_t*)out_;
+    const unsigned char* q = (const unsigned char*)codes_;
+    const unsigned char* sc = (const unsigned char*)scales_;
+    long i = (long)blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= n) return;
+    const long row = i / k; const int c = (int)(i - row * k);
+    const int groups = k >> 5;
+    const unsigned e = sc[mx_scale_offset(row, c >> 5, (groups + 3) >> 2)];
+    out[i] = bf(mx_e4m3_decode(q[i]) * __int_as_float((int)e << 23));
+}
+
 // NVFP4 (h3_core::quant::Nvfp4): E2M1 codes 2 per byte (low nibble = even
 // column), one E4M3 scale per 16 columns (row-major), one alpha. Expands to
 // bf16 at load; a Blackwell FP4 tensor-core GEMM path is future work.
