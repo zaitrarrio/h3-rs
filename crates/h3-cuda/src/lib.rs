@@ -167,6 +167,7 @@ struct Kernels {
     vsa_fine_pair_mma128: CudaFunction,
     vsa_pair: CudaFunction,
     vsa_coarse4: CudaFunction,
+    vsa_pool_scalar: CudaFunction,
     vsa_fine3: [[CudaFunction; 4]; 2],
     dequant_q8: CudaFunction,
     dequant_q4: CudaFunction,
@@ -352,6 +353,7 @@ impl Cuda {
             vsa_fine_pair_mma128: get("fw_vsa_fine_pair_mma128")?,
             vsa_pair: get("fw_vsa_pair")?,
             vsa_coarse4: get("fw_vsa_coarse4")?,
+            vsa_pool_scalar: get("fw_vsa_pool_scalar")?,
             vsa_fine3: [
                 [get("fw_vsa_fine3a_mma64")?, get("fw_vsa_fine3b_mma64")?, get("fw_vsa_fine3c_mma64")?, get("fw_vsa_fine3d_mma64")?],
                 [get("fw_vsa_fine3a_mma128")?, get("fw_vsa_fine3b_mma128")?, get("fw_vsa_fine3c_mma128")?, get("fw_vsa_fine3d_mma128")?],
@@ -446,7 +448,7 @@ impl Cuda {
 
     fn kernel_name(&self, f: &CudaFunction) -> &'static str {
         let k = &self.f;
-        let all: [(&CudaFunction, &'static str); 55] = [
+        let all: [(&CudaFunction, &'static str); 56] = [
             (&k.bias_act, "bias_act"),
             (&k.swiglu, "swiglu"),
             (&k.gate_residual, "gate_residual"),
@@ -487,6 +489,7 @@ impl Cuda {
             (&k.vsa_fine_pair_mma128, "vsa fine (paired tiles, d128)"),
             (&k.vsa_pair, "vsa pair union"),
             (&k.vsa_coarse4, "vsa coarse + top-k (4 query tiles)"),
+            (&k.vsa_pool_scalar, "vsa pool (scalar)"),
             (&k.vsa_fine3[0][0], "vsa fine (3a, d64)"),
             (&k.vsa_fine3[0][1], "vsa fine (3b, d64)"),
             (&k.vsa_fine3[0][2], "vsa fine (3c, d64)"),
@@ -1118,8 +1121,9 @@ impl Backend for Cuda {
             assert!(n <= g.len);
         }
         let grid = (s.nb as u32, s.heads as u32, 1);
+        let vec_pool = s.d.is_multiple_of(4) && s.d <= 128;
         self.launch(
-            &self.f.vsa_pool,
+            if vec_pool { &self.f.vsa_pool } else { &self.f.vsa_pool_scalar },
             grid,
             (128, 1, 1),
             &[

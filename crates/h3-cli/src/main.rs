@@ -833,6 +833,7 @@ fn generate<B: Backend>(
         }
         None => None,
     };
+    be.profile_reset();
     let tp = std::time::Instant::now();
     let prompt_rows: Prompt = match (&prompt, &embeds) {
         (_, Some(path)) if !need_encoder => gallery::load_prompt(path, cfg.text_dim)?,
@@ -863,14 +864,27 @@ fn generate<B: Backend>(
         tiling,
         preview,
     };
+    // With H3_PROFILE=1 every stage boundary prints its own kernel table.
+    let stage_report = |name: &str| {
+        if let Some(rep) = be.profile_report() {
+            println!("== profile: {name}\n{rep}");
+            be.profile_reset();
+        }
+    };
+    stage_report("prompt encoding (Qwen3-VL)");
     let mut last = None;
-    be.profile_reset();
     for run in 0..runs.max(1) {
         let t0 = std::time::Instant::now();
-        let generation = pipe.generate(be, src.as_ref(), &r.adapters, tables.as_ref(), &req, &mut |ev| {
-            if let Event::Step { index, total, secs } = ev {
+        let generation = pipe.generate(be, src.as_ref(), &r.adapters, tables.as_ref(), &req, &mut |ev| match ev {
+            Event::Prepared { .. } => stage_report("prepare (latent encode, AdaLN tables)"),
+            Event::Step { index, total, secs } => {
                 eprintln!("step {}/{total} {secs:.2}s", index + 1);
+                if index + 1 == total {
+                    stage_report("denoise");
+                }
             }
+            Event::Frames { .. } => stage_report("video decode"),
+            Event::Audio { .. } => stage_report("audio decode"),
         })?;
         let t = &generation.timings;
         println!(
@@ -885,9 +899,7 @@ fn generate<B: Backend>(
         );
         last = Some(generation);
     }
-    if let Some(rep) = be.profile_report() {
-        print!("{rep}");
-    }
+    stage_report("remainder");
     let generation = last.expect("at least one run");
     media::write_y4m(out, generation.frames, generation.width, generation.height, &generation.rgb, packing::FPS as u32)?;
     let wav = out.with_extension("wav");

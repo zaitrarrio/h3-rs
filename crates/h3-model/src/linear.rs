@@ -85,6 +85,10 @@ pub fn load_host(
                 stored.push(s);
             }
             Some(s) => w.extend(s.dequantize()),
+            // A linear the base lacks but an adapter sets outright (the V1
+            // LoRA's `to_gate_compress.set_weight` over MiniMax-H3) starts
+            // from zeros.
+            None if touched && !src.contains(&format!("{k}.weight")) => w.resize(w.len() + o * i, 0.0),
             None => w.extend(src.get(&format!("{k}.weight"), shape)?),
         }
         if touched {

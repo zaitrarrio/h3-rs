@@ -943,7 +943,8 @@ __device__ __forceinline__ void vsa_fine3_body(const bf16_t* q, const bf16_t* k,
     const int h = blockIdx.y, tid = threadIdx.x, warp = tid >> 5, lane = tid & 31;
     const int g = lane >> 2, t = lane & 3;
     const int sub = te / 64;                     // 64-key halves of a tile, as v1
-    const int csub = te / F3BK;                    // 32-key chunks per tile
+    const int csub = te / F3BK;                    // 32-key chunks per tile (a power of two)
+    const int cshift = __ffs(csub) - 1, cmask = csub - 1;
     const int qt = blockIdx.x / sub, qsub = blockIdx.x % sub;
     const int lr0 = warp * 16 + g, lr1 = lr0 + 8;
     const unsigned a = slot[(long)qt * te + qsub * 64 + lr0], b = slot[(long)qt * te + qsub * 64 + lr1];
@@ -972,15 +973,17 @@ __device__ __forceinline__ void vsa_fine3_body(const bf16_t* q, const bf16_t* k,
     const bf16_t* vbase = v + (long)h * seq * D;
     const int ch = tid % CH, krow = tid / CH;
     const unsigned* srow = all_tiles ? 0 : sel + ((long)h * nb + qt) * maxsel;
-    auto key_tok = [&](int c, int key) -> int {
-        const unsigned tile = all_tiles ? (unsigned)(c / csub) : srow[c / csub];
-        const unsigned s2 = slot[tile * (unsigned)te + (unsigned)((c % csub) * F3BK + key)];
-        return s2 == 0xffffffffu ? -1 : (int)s2;
-    };
     int ntk[NJ];
+    // The thread's NJ keys of chunk c are krow + RP·j: one tile lookup and one
+    // base pointer per chunk, then immediate offsets.
     auto resolve = [&](int c) {
+        const unsigned tile = all_tiles ? (unsigned)(c >> cshift) : srow[c >> cshift];
+        const unsigned* sp = slot + tile * (unsigned)te + (unsigned)((c & cmask) * F3BK + krow);
         #pragma unroll
-        for (int j = 0; j < NJ; ++j) ntk[j] = key_tok(c, krow + RP * j);
+        for (int j = 0; j < NJ; ++j) {
+            const unsigned s2 = sp[RP * j];
+            ntk[j] = s2 == 0xffffffffu ? -1 : (int)s2;
+        }
     };
     auto load = [&](bf16_t* dst, const bf16_t* src, unsigned char* valid) {
         #pragma unroll
@@ -1019,17 +1022,22 @@ __device__ __forceinline__ void vsa_fine3_body(const bf16_t* q, const bf16_t* k,
             __syncthreads();
         }
         const bf16_t* kcur = kbuf(c);
+        // ldmatrix addresses: row (lane & 7) of n-tile nt, chunk 2kk + (lane >> 3),
+        // swizzled by (lane & 7). The chunk's bits split as 2kk (bits 2-3) and
+        // lane >> 3 (bits 0-1), so the swizzle separates into a per-lane
+        // constant and (2kk ^ (lane & 4)), both cheap.
+        const unsigned kbase_l = (unsigned)__cvta_generic_to_shared(kcur) + (lane & 7) * (KS_STRIDE * 2)
+                               + (SWZ ? ((((lane >> 3) ^ lane) & 3) << 4) : ((lane >> 3) << 4));
+        const unsigned kx = SWZ ? ((lane & 4) << 4) : 0u;
         float s[NT][4];
         #pragma unroll
         for (int nt = 0; nt < NT; ++nt) {
             s[nt][0] = s[nt][1] = s[nt][2] = s[nt][3] = 0.0f;
-            const int krow8 = nt * 8 + (lane & 7);
             #pragma unroll
             for (int kk = 0; kk < KK; kk += 2) {
                 unsigned b[4];
                 {
-                    // chunk kk·2 + (lane >> 3) of row krow8, swizzled
-                    const unsigned addr = (unsigned)__cvta_generic_to_shared(kcur + at(krow8, kk * 2 + (lane >> 3)));
+                    const unsigned addr = kbase_l + nt * 8 * KS_STRIDE * 2 + (((unsigned)(kk * 2) << 4) ^ kx);
                     asm volatile("ldmatrix.sync.aligned.m8n8.x4.shared.b16 {%0,%1,%2,%3}, [%4];\n"
                                  : "=r"(b[0]), "=r"(b[1]), "=r"(b[2]), "=r"(b[3]) : "r"(addr));
                 }
@@ -1097,6 +1105,11 @@ __device__ __forceinline__ void vsa_fine3_body(const bf16_t* q, const bf16_t* k,
         }
         __syncthreads();
         const bf16_t* vcur = vbuf(c);
+        // V rows are keys kk·16 + (lane & 7) + 8·((lane >> 3) & 1), chunk dt + (lane >> 4)
+        // with dt even: the swizzle splits into a per-lane term and (dt ^ (lane & 6)).
+        const unsigned vbase_l = (unsigned)__cvta_generic_to_shared(vcur) + ((lane & 7) + 8 * ((lane >> 3) & 1)) * (KS_STRIDE * 2)
+                               + (SWZ ? ((((lane >> 4) ^ lane) & 1) << 4) : ((lane >> 4) << 4));
+        const unsigned vx = SWZ ? ((lane & 6) << 4) : 0u;
         #pragma unroll
         for (int kk = 0; kk < F3BK / 16; ++kk) {
             float p[8];
@@ -1109,10 +1122,9 @@ __device__ __forceinline__ void vsa_fine3_body(const bf16_t* q, const bf16_t* k,
             l1 += p[2] + p[3] + p[6] + p[7];
             const unsigned a0 = pack_bf16(p[0], p[1]), a1 = pack_bf16(p[2], p[3]);
             const unsigned a2 = pack_bf16(p[4], p[5]), a3 = pack_bf16(p[6], p[7]);
-            const int vkey = kk * 16 + (lane & 7) + ((lane >> 3) & 1) * 8;
             #pragma unroll
             for (int dt = 0; dt < DT; dt += 2) {
-                const unsigned addr = (unsigned)__cvta_generic_to_shared(vcur + at(vkey, dt + (lane >> 4)));
+                const unsigned addr = vbase_l + kk * 16 * KS_STRIDE * 2 + (((unsigned)dt << 4) ^ vx);
                 unsigned b0, b1, b2, b3;
                 asm volatile("ldmatrix.sync.aligned.m8n8.x4.trans.shared.b16 {%0,%1,%2,%3}, [%4];\n"
                              : "=r"(b0), "=r"(b1), "=r"(b2), "=r"(b3) : "r"(addr));
@@ -1488,8 +1500,45 @@ ATTN_MMA2_KERNELS(128)
 
 // ---------------------------------------------------------------- VSA
 
-// Tile means (f32): block (tile, head), thread c < d. pooled is [3][heads][nb][d].
-extern "C" __global__ void fw_vsa_pool(u64 q_, u64 k_, u64 v_, u64 slot_, u64 bsz_, u64 pooled_, int heads, int seq, int d, int nb, int te) {
+// Tile means (f32): block (tile, head), 128 threads. pooled is [3][heads][nb][d].
+// Each warp sums every fourth slot of the tile with 8-byte (4 × bf16) loads
+// per lane, so one key row is one coalesced read per warp; the four partial
+// sums meet in shared memory. d % 4 == 0 and d <= 128 (scalar fallback below).
+extern "C" __global__ void __launch_bounds__(128) fw_vsa_pool(u64 q_, u64 k_, u64 v_, u64 slot_, u64 bsz_, u64 pooled_, int heads, int seq, int d, int nb, int te) {
+    __shared__ float part[3][4][128];
+    const bf16_t *q = (const bf16_t*)q_, *k = (const bf16_t*)k_, *v = (const bf16_t*)v_;
+    const unsigned *slot = (const unsigned*)slot_, *bsz = (const unsigned*)bsz_;
+    float* pooled = (float*)pooled_;
+    const int t = blockIdx.x, h = blockIdx.y, tid = threadIdx.x, warp = tid >> 5, lane = tid & 31;
+    const unsigned n = bsz[t];
+    const int d4 = d >> 2;
+    float sq[4] = {0.f, 0.f, 0.f, 0.f}, sk[4] = {0.f, 0.f, 0.f, 0.f}, sv[4] = {0.f, 0.f, 0.f, 0.f};
+    if (lane < d4) {
+        for (unsigned i = warp; i < n; i += 4) {
+            const long row = ((long)h * seq + slot[(long)t * te + i]) * d + lane * 4;
+            const uint2 wq = *(const uint2*)(q + row), wk = *(const uint2*)(k + row), wv = *(const uint2*)(v + row);
+            sq[0] += __uint_as_float(wq.x << 16); sq[1] += __uint_as_float(wq.x & 0xffff0000u);
+            sq[2] += __uint_as_float(wq.y << 16); sq[3] += __uint_as_float(wq.y & 0xffff0000u);
+            sk[0] += __uint_as_float(wk.x << 16); sk[1] += __uint_as_float(wk.x & 0xffff0000u);
+            sk[2] += __uint_as_float(wk.y << 16); sk[3] += __uint_as_float(wk.y & 0xffff0000u);
+            sv[0] += __uint_as_float(wv.x << 16); sv[1] += __uint_as_float(wv.x & 0xffff0000u);
+            sv[2] += __uint_as_float(wv.y << 16); sv[3] += __uint_as_float(wv.y & 0xffff0000u);
+        }
+        #pragma unroll
+        for (int j = 0; j < 4; ++j) { part[0][warp][lane * 4 + j] = sq[j]; part[1][warp][lane * 4 + j] = sk[j]; part[2][warp][lane * 4 + j] = sv[j]; }
+    }
+    __syncthreads();
+    const int c = tid;
+    if (c >= d) return;
+    const float inv = 1.0f / (float)(n ? n : 1);
+    const long o = ((long)h * nb + t) * d + c, plane = (long)heads * nb * d;
+    pooled[o] = (part[0][0][c] + part[0][1][c] + part[0][2][c] + part[0][3][c]) * inv;
+    pooled[plane + o] = (part[1][0][c] + part[1][1][c] + part[1][2][c] + part[1][3][c]) * inv;
+    pooled[2 * plane + o] = (part[2][0][c] + part[2][1][c] + part[2][2][c] + part[2][3][c]) * inv;
+}
+
+// Scalar pool for head dims that are not a multiple of 4 (or > 128).
+extern "C" __global__ void fw_vsa_pool_scalar(u64 q_, u64 k_, u64 v_, u64 slot_, u64 bsz_, u64 pooled_, int heads, int seq, int d, int nb, int te) {
     const bf16_t *q = (const bf16_t*)q_, *k = (const bf16_t*)k_, *v = (const bf16_t*)v_;
     const unsigned *slot = (const unsigned*)slot_, *bsz = (const unsigned*)bsz_;
     float* pooled = (float*)pooled_;
