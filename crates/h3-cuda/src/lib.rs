@@ -166,7 +166,7 @@ struct Kernels {
     vsa_fine_pair_mma128: CudaFunction,
     vsa_pair: CudaFunction,
     vsa_coarse4: CudaFunction,
-    vsa_fine3: [[CudaFunction; 3]; 2],
+    vsa_fine3: [[CudaFunction; 4]; 2],
     dequant_q8: CudaFunction,
     dequant_q4: CudaFunction,
     dequant_nvfp4: CudaFunction,
@@ -352,8 +352,8 @@ impl Cuda {
             vsa_pair: get("fw_vsa_pair")?,
             vsa_coarse4: get("fw_vsa_coarse4")?,
             vsa_fine3: [
-                [get("fw_vsa_fine3a_mma64")?, get("fw_vsa_fine3b_mma64")?, get("fw_vsa_fine3c_mma64")?],
-                [get("fw_vsa_fine3a_mma128")?, get("fw_vsa_fine3b_mma128")?, get("fw_vsa_fine3c_mma128")?],
+                [get("fw_vsa_fine3a_mma64")?, get("fw_vsa_fine3b_mma64")?, get("fw_vsa_fine3c_mma64")?, get("fw_vsa_fine3d_mma64")?],
+                [get("fw_vsa_fine3a_mma128")?, get("fw_vsa_fine3b_mma128")?, get("fw_vsa_fine3c_mma128")?, get("fw_vsa_fine3d_mma128")?],
             ],
             dequant_q8: get("fw_dequant_q8")?,
             dequant_q4: get("fw_dequant_q4")?,
@@ -387,6 +387,7 @@ impl Cuda {
             vsa_fine3: match std::env::var("H3_CUDA_VSA_FINE").as_deref() {
                 Ok("a") => Some(0),
                 Ok("c") => Some(2),
+                Ok("d") => Some(3),
                 Ok("v1") => None,
                 _ => Some(1),
             },
@@ -444,7 +445,7 @@ impl Cuda {
 
     fn kernel_name(&self, f: &CudaFunction) -> &'static str {
         let k = &self.f;
-        let all: [(&CudaFunction, &'static str); 53] = [
+        let all: [(&CudaFunction, &'static str); 55] = [
             (&k.bias_act, "bias_act"),
             (&k.swiglu, "swiglu"),
             (&k.gate_residual, "gate_residual"),
@@ -491,6 +492,8 @@ impl Cuda {
             (&k.vsa_fine3[1][0], "vsa fine (3a, d128)"),
             (&k.vsa_fine3[1][1], "vsa fine (3b, d128)"),
             (&k.vsa_fine3[1][2], "vsa fine (3c, d128)"),
+            (&k.vsa_fine3[0][3], "vsa fine (3d, d64)"),
+            (&k.vsa_fine3[1][3], "vsa fine (3d, d128)"),
             (&k.dequant_q8, "dequant int8"),
             (&k.dequant_q4, "dequant int4"),
             (&k.dequant_nvfp4, "dequant nvfp4"),
