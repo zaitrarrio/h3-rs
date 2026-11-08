@@ -636,8 +636,11 @@ fn ops<B: Backend>(p: &mut Pair<'_, B>, rng: &mut Rng) {
         let td = ConvT1dShape { cin: c, cout: c, groups: c, len, k: 12, stride: 2, pad: 0 };
         let wd = rng.uniform(c * 12, 0.3);
         p.op("conv_transpose1d depthwise", |r| r.conv_transpose1d(&x, &td, &wd, None));
-        let alpha = rng.uniform(c, 0.5).iter().map(|v| v + 1.0).collect::<Vec<_>>();
-        let beta = rng.uniform(c, 0.5);
+        // The snake parameters enter sin(e^α·x): a bf16 backend's rounding of α
+        // is a phase error, so every backend gets bf16-representable values.
+        let r16 = |v: &f32| half::bf16::from_f32(*v).to_f32();
+        let alpha = rng.uniform(c, 0.5).iter().map(|v| r16(&(v + 1.0))).collect::<Vec<_>>();
+        let beta = rng.uniform(c, 0.5).iter().map(r16).collect::<Vec<_>>();
         p.op("snake alpha", |r| r.snake(&x, c, len, &alpha, None));
         p.op("snake beta", |r| r.snake(&x, c, len, &alpha, Some(&beta)));
     }
