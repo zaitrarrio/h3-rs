@@ -659,7 +659,17 @@ impl<B: Backend> VideoVae<B> {
     /// asynchronously, so the GPU runs tile `i + 1` while the host converts
     /// tile `i`; the stitch is one parallel pass at the end.
     pub fn decode_clip(&self, be: &B, z: &Volume, tiling: Option<Tiling>) -> Result<Volume> {
-        let Some(tl) = tiling else { return self.decode_clip_tile(be, z) };
+        let (rows, yo, xo) = self.decode_tiles(be, z, tiling)?;
+        Ok(if rows.len() == 1 && rows[0].len() == 1 { rows.into_iter().next().unwrap().pop().unwrap() } else { stitch_tiles(&rows, &yo, &xo) })
+    }
+
+    /// The tiles of one clip, downloaded (one GPU tile ahead of each
+    /// download), with the overlaps `stitch_tiles` needs; a single tile when
+    /// untiled. The stitch itself is host work the caller may overlap with
+    /// the next clip's kernels.
+    #[allow(clippy::type_complexity)]
+    fn decode_tiles(&self, be: &B, z: &Volume, tiling: Option<Tiling>) -> Result<(Vec<Vec<Volume>>, Vec<usize>, Vec<usize>)> {
+        let Some(tl) = tiling else { return Ok((vec![vec![self.decode_clip_tile(be, z)?]], Vec::new(), Vec::new())) };
         let r = self.spatial_ratio();
         let (ys, yl, yo) = split_tiles(z.h * r, tl.tile, tl.overlap, r);
         let (xs, xl, xo) = split_tiles(z.w * r, tl.tile, tl.overlap, r);
@@ -676,7 +686,7 @@ impl<B: Backend> VideoVae<B> {
         tiles.extend(pending.map(download));
         let mut it = tiles.into_iter();
         let rows: Vec<Vec<Volume>> = (0..ys.len()).map(|_| it.by_ref().take(xs.len()).collect()).collect();
-        Ok(stitch_tiles(&rows, &yo, &xo))
+        Ok((rows, yo, xo))
     }
 
     /// `_temporal_decode_plan`: `(pad tokens, chunks, decoded frames)`.
@@ -721,38 +731,63 @@ impl<B: Backend> VideoVae<B> {
         let chunk_tok = cfg.tokens_chunk();
         let chunk_frames = chunk_tok * cfg.temporal_ratio();
         let pre = cfg.frame_pre_padding();
-        let mut written = 0;
-        let mut overlap: Option<Volume> = None;
-        for ci in 0..chunks {
-            let start = ci * chunk_tok;
-            let n = (chunk_tok + cfg.token_overlap()).min(z.t - start);
-            let clip = self.decode_clip(be, &z.crop(start, n, 0, z.h, 0, z.w), tiling)?;
-            let chunk_t = chunk_frames.min(clip.t) - pre;
-            let keep = chunk_t.min(total - written);
-            let next_overlap = if cfg.token_drop > 0 && clip.t > chunk_frames + pre {
-                Some(clip.crop(chunk_frames + pre, clip.t - chunk_frames - pre, 0, clip.h, 0, clip.w))
-            } else {
-                None
+        let frame_overlap = cfg.frame_overlap();
+        let token_drop = cfg.token_drop;
+        // Chunk i's host work (stitch, temporal blend, denormalise) runs on
+        // a thread while chunk i + 1's kernels and downloads proceed here;
+        // `on_chunk` still sees the chunks in order.
+        std::thread::scope(|sc| -> Result<usize> {
+            type Finished = (Volume, Option<Volume>, usize);
+            let mut written = 0;
+            let mut overlap: Option<Volume> = None;
+            let mut pending: Option<std::thread::ScopedJoinHandle<'_, Finished>> = None;
+            let mut join = |pending: &mut Option<std::thread::ScopedJoinHandle<'_, Finished>>, overlap: &mut Option<Volume>, written: &mut usize| {
+                if let Some(h) = pending.take() {
+                    let (px, next_overlap, keep) = h.join().expect("decode chunk thread");
+                    if keep > 0 {
+                        *written += keep;
+                        on_chunk(&px);
+                    }
+                    *overlap = next_overlap;
+                }
             };
-            if keep > 0 {
-                written += keep;
-                let px = finish_chunk(&clip, pre, chunk_t, keep, overlap.as_ref(), cfg.frame_overlap());
-                on_chunk(&px);
+            for ci in 0..chunks {
+                let start = ci * chunk_tok;
+                let n = (chunk_tok + cfg.token_overlap()).min(z.t - start);
+                let (rows, yo, xo) = self.decode_tiles(be, &z.crop(start, n, 0, z.h, 0, z.w), tiling)?;
+                join(&mut pending, &mut overlap, &mut written);
+                let clip_t = rows[0][0].t;
+                let chunk_t = chunk_frames.min(clip_t) - pre;
+                let keep = chunk_t.min(total - written);
+                let ov_in = overlap.take();
+                pending = Some(sc.spawn(move || {
+                    let clip = if rows.len() == 1 && rows[0].len() == 1 { rows.into_iter().next().unwrap().pop().unwrap() } else { stitch_tiles(&rows, &yo, &xo) };
+                    let next_overlap = if token_drop > 0 && clip.t > chunk_frames + pre {
+                        Some(clip.crop(chunk_frames + pre, clip.t - chunk_frames - pre, 0, clip.h, 0, clip.w))
+                    } else {
+                        None
+                    };
+                    let px = if keep > 0 { finish_chunk(&clip, pre, chunk_t, keep, ov_in.as_ref(), frame_overlap) } else { Volume::zeros(clip.c, 0, clip.h, clip.w) };
+                    (px, next_overlap, keep)
+                }));
             }
-            overlap = next_overlap;
-        }
-        if let Some(ov) = overlap {
-            if written < total {
-                let keep = (total - written).min(ov.t);
-                let px = finish_chunk(&ov, 0, ov.t, keep, None, 0);
-                written += keep;
-                on_chunk(&px);
+            join(&mut pending, &mut overlap, &mut written);
+            if let Some(ov) = overlap {
+                if written < total {
+                    let keep = (total - written).min(ov.t);
+                    let px = finish_chunk(&ov, 0, ov.t, keep, None, 0);
+                    written += keep;
+                    on_chunk(&px);
+                }
             }
-        }
-        if written != total {
-            return Err(Error::Geometry(format!("decoded {written} frames, the plan expected {total}")));
-        }
-        Ok(total)
+            Ok(written)
+        })
+        .and_then(|written| {
+            if written != total {
+                return Err(Error::Geometry(format!("decoded {written} frames, the plan expected {total}")));
+            }
+            Ok(total)
+        })
     }
 }
 

@@ -303,9 +303,12 @@ impl<B: Backend> H3Dit<B> {
             refiner.push(unit_host(&format!("token_refiner.refiner_blocks.{l}"), false, WeightQuant::Native)?.upload(be));
         }
         let mut blocks = Vec::with_capacity(cfg.layers);
+        // MXFP8 leaves the first two and last three blocks in bf16 (`for_block`);
+        // `H3_MXFP8_ALL_BLOCKS=1` quantizes them too (a speed / quality experiment).
+        let all_blocks = std::env::var("H3_MXFP8_ALL_BLOCKS").is_ok_and(|v| v == "1");
         for l in 0..cfg.layers {
-            // MXFP8 leaves the first two and last three blocks in bf16 (`for_block`).
-            let h = unit_host(&format!("transformer_blocks.{l}"), has_gate, opts.quant.for_block(l, cfg.layers))?;
+            let q = if all_blocks { opts.quant } else { opts.quant.for_block(l, cfg.layers) };
+            let h = unit_host(&format!("transformer_blocks.{l}"), has_gate, q)?;
             blocks.push(if opts.stream_blocks { Residency::Host(h) } else { Residency::Device(h.upload(be)) });
         }
         let plain = |k: &str| -> Result<Linear<B>> {
