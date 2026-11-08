@@ -33,6 +33,7 @@ const VSA_POOL: &str = include_str!("shaders/vsa_pool.wgsl");
 const VSA_COARSE: &str = include_str!("shaders/vsa_coarse.wgsl");
 const ELEM: &str = include_str!("shaders/elementwise.wgsl");
 const MX_ACT: &str = include_str!("shaders/mx_act.wgsl");
+const VSA_QK8: &str = include_str!("shaders/vsa_qk8.wgsl");
 const GROUP_NORM: &str = include_str!("shaders/group_norm.wgsl");
 const CONV: &str = include_str!("shaders/conv.wgsl");
 const CONV3D: &str = include_str!("shaders/conv3d.wgsl");
@@ -75,6 +76,8 @@ pub struct GVsa {
     seq: usize,
     scale: f32,
     tile: usize,
+    /// INT8 Q·Kᵀ emulation (`vsa_qk8.wgsl`): per-head K mean, rounded Q / K copies.
+    qk8: Option<(GBuf, GBuf, GBuf)>,
     sub: usize,
 }
 
@@ -1141,6 +1144,7 @@ impl Backend for Wgpu {
             scale: spec.scale,
             tile: plan.tile_elems,
             sub: plan.tile_elems / 64,
+            qk8: spec.qk8.then(|| (self.alloc(h * d), self.alloc(h * plan.seq * d), self.alloc(h * plan.seq * d))),
         }
     }
 
@@ -1156,6 +1160,18 @@ impl Backend for Wgpu {
         let coarse = self.pipeline("vsa_coarse", || VSA_COARSE.to_string());
         let p = [s.heads as u32, s.d as u32, s.nb as u32, s.nprefix as u32, s.nregions as u32, s.scale.to_bits(), 0, 0];
         self.dispatch(&coarse, &p, &[&s.pooled, &s.coarse, &s.sel, &s.regions], (s.nb as u32, s.heads as u32, 1));
+        // INT8 Q·Kᵀ emulation: the fine stage reads the rounded copies; the
+        // tile means and selection above used the exact values.
+        if let Some((kmean, q8, k8)) = &s.qk8 {
+            let pipe = self.pipeline("vsa_qk8", || VSA_QK8.to_string());
+            let base = [s.heads as u32, s.seq as u32, s.d as u32, s.nb as u32, s.tile as u32, 0, 0, 0];
+            self.dispatch(&pipe, &base, &[q, k, &s.slot, &s.bsz, kmean, q8, k8], (s.heads as u32, 1, 1));
+            let mut p1 = base;
+            p1[5] = 1;
+            self.dispatch(&pipe, &p1, &[q, k, &s.slot, &s.bsz, kmean, q8, k8], (s.nb as u32, s.heads as u32, 1));
+            self.flash(1, q8, k8, v, out, s.heads, s.heads, s.seq, s.seq, s.d, s.scale, false, Some((s, gate)));
+            return;
+        }
         self.flash(1, q, k, v, out, s.heads, s.heads, s.seq, s.seq, s.d, s.scale, false, Some((s, gate)));
     }
 

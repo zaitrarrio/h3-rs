@@ -93,6 +93,9 @@ struct AttnArgs {
     /// Steps run dense before VSA starts.
     #[arg(long, default_value_t = 0)]
     dense_first_steps: usize,
+    /// INT8 Q·Kᵀ in the VSA fine stage (SageAttention's recipe; int8 tensor cores on CUDA).
+    #[arg(long, default_value_t = false)]
+    vsa_qk8: bool,
     /// Block linears on the device: native (bf16 / f16) | int8 | int4[-hqq][-gN][-ffn] | nvfp4.
     #[arg(long, default_value = "native")]
     weights: WeightQuant,
@@ -111,11 +114,12 @@ impl AttnArgs {
     fn attention(&self, v: &Variant) -> Attention {
         match (self.attention, v.vsa) {
             (AttnKind::Dense, _) | (AttnKind::Auto, None) => Attention::Dense,
-            (AttnKind::Vsa, None) => Attention::Vsa { sparsity: self.vsa_sparsity.unwrap_or(0.8), tile: 64, ref_sparsity: 0.9 },
+            (AttnKind::Vsa, None) => Attention::Vsa { sparsity: self.vsa_sparsity.unwrap_or(0.8), tile: 64, ref_sparsity: 0.9, qk8: self.vsa_qk8 },
             (_, Some(p)) => Attention::Vsa {
                 sparsity: self.vsa_sparsity.unwrap_or(p.sparsity),
                 tile: p.tile,
                 ref_sparsity: p.ref_keep_rate.map_or(self.vsa_sparsity.unwrap_or(p.sparsity), |k| 1.0 - k),
+                qk8: self.vsa_qk8,
             },
         }
     }

@@ -203,15 +203,68 @@ pub struct VsaSpec {
     pub heads: usize,
     pub head_dim: usize,
     pub scale: f32,
+    /// INT8 Q·Kᵀ in the fine stage (SageAttention's recipe): per head, K is
+    /// shifted by its mean over the sequence (softmax-invariant), then Q and
+    /// K are rounded to int8 with one scale per (head, tile); P·V stays
+    /// bf16 / f32 and the coarse stage keeps the exact tile means. The CPU
+    /// reference and WebGPU round the same way ([`qk8_round`]); CUDA runs
+    /// the int8 tensor cores on the codes.
+    pub qk8: bool,
 }
 
 impl VsaSpec {
     pub fn new(segments: &[Segment], tile_elems: usize, heads: usize, head_dim: usize) -> Self {
-        Self { plan: TilePlan::new(segments, tile_elems), heads, head_dim, scale: 1.0 / (head_dim as f32).sqrt() }
+        Self { plan: TilePlan::new(segments, tile_elems), heads, head_dim, scale: 1.0 / (head_dim as f32).sqrt(), qk8: false }
+    }
+    pub fn with_qk8(self, qk8: bool) -> Self {
+        Self { qk8, ..self }
     }
     pub fn dense(&self) -> Self {
         Self { plan: self.plan.dense(), ..self.clone() }
     }
+}
+
+/// The host twin of the INT8 Q·Kᵀ rounding: `q`, `k` are `[heads][seq][d]`
+/// f32 (the device's bf16 values); returns them rounded as the fine stage
+/// sees them. Per head, `kmean[c]` is the mean of K over the sequence; per
+/// (head, tile) the scale is `max |x| / 127` over the tile's real tokens
+/// (`x = q`, or `x = k − kmean`), codes are `round_ties_even(x / scale)` in
+/// `[−127, 127]`, and the value is `code · scale`. A tile whose max is 0
+/// keeps zeros.
+pub fn qk8_round(q: &[f32], k: &[f32], spec: &VsaSpec) -> (Vec<f32>, Vec<f32>) {
+    let (plan, heads, d) = (&spec.plan, spec.heads, spec.head_dim);
+    let (seq, nb, te) = (plan.seq, plan.num_tiles(), plan.tile_elems);
+    let mut qo = q.to_vec();
+    let mut ko = k.to_vec();
+    for h in 0..heads {
+        let base = h * seq * d;
+        let mut kmean = vec![0f64; d];
+        for tok in 0..seq {
+            for c in 0..d {
+                kmean[c] += k[base + tok * d + c] as f64;
+            }
+        }
+        let kmean: Vec<f32> = kmean.iter().map(|m| (m / seq as f64) as f32).collect();
+        for t in 0..nb {
+            let toks: Vec<usize> = (0..plan.block_sizes[t] as usize).map(|s| plan.slot_src[t * te + s] as usize).collect();
+            let (mut qmax, mut kmax) = (0f32, 0f32);
+            for &tok in &toks {
+                for c in 0..d {
+                    qmax = qmax.max(q[base + tok * d + c].abs());
+                    kmax = kmax.max((k[base + tok * d + c] - kmean[c]).abs());
+                }
+            }
+            let (qs, ks) = (qmax / 127.0, kmax / 127.0);
+            for &tok in &toks {
+                for c in 0..d {
+                    let i = base + tok * d + c;
+                    qo[i] = if qs > 0.0 { (q[i] / qs).round_ties_even().clamp(-127.0, 127.0) * qs } else { 0.0 };
+                    ko[i] = if ks > 0.0 { ((k[i] - kmean[c]) / ks).round_ties_even().clamp(-127.0, 127.0) * ks } else { 0.0 };
+                }
+            }
+        }
+    }
+    (qo, ko)
 }
 
 /// Select the key tiles of query tile `qt` from a row of pooled scores

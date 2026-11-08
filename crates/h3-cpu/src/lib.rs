@@ -196,6 +196,13 @@ pub fn vsa_reference(q: &[f32], k: &[f32], v: &[f32], gate: Option<&[f32]>, spec
     let (plan, heads, d) = (&spec.plan, spec.heads, spec.head_dim);
     let (seq, nb, te) = (plan.seq, plan.num_tiles(), plan.tile_elems);
     let scale = spec.scale as f64;
+    // INT8 Q·Kᵀ: the fine stage sees the rounded Q / shifted-and-rounded K;
+    // the tile means, selection and gated branch stay on the exact values.
+    let rounded = spec.qk8.then(|| h3_core::vsa::qk8_round(q, k, spec));
+    let (qf, kf): (&[f32], &[f32]) = match &rounded {
+        Some((qr, kr)) => (qr, kr),
+        None => (q, k),
+    };
     let per_head: Vec<Vec<(usize, Vec<f32>)>> = (0..heads)
         .into_par_iter()
         .map(|h| {
@@ -247,13 +254,13 @@ pub fn vsa_reference(q: &[f32], k: &[f32], v: &[f32], gate: Option<&[f32]>, spec
             for qt in 0..nb {
                 for qs in 0..plan.block_sizes[qt] as usize {
                     let qtok = plan.slot_src[qt * te + qs] as usize;
-                    let qr = row(q, qtok);
+                    let qr = row(qf, qtok);
                     let (mut m, mut z) = (f32::NEG_INFINITY, 0f64);
                     let mut acc = vec![0f64; d];
                     for &kt in &keep[qt] {
                         for ks in 0..plan.block_sizes[kt] as usize {
                             let ktok = plan.slot_src[kt * te + ks] as usize;
-                            let kr = row(k, ktok);
+                            let kr = row(kf, ktok);
                             let s = ((0..d).map(|c| qr[c] as f64 * kr[c] as f64).sum::<f64>() * scale) as f32;
                             if s > m {
                                 let shrink = if m.is_finite() { ((m - s) as f64).exp() } else { 0.0 };

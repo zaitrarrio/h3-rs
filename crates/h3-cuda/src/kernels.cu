@@ -612,6 +612,12 @@ __device__ __forceinline__ void mma_bf16(float* c, unsigned a0, unsigned a1, uns
                  : "+f"(c[0]), "+f"(c[1]), "+f"(c[2]), "+f"(c[3])
                  : "r"(a0), "r"(a1), "r"(a2), "r"(a3), "r"(b0), "r"(b1));
 }
+// m16n8k32 int8 × int8 → int32 (sm_80+): A = 16×32 row, B = 32×8 col.
+__device__ __forceinline__ void mma_s8(int* c, unsigned a0, unsigned a1, unsigned a2, unsigned a3, unsigned b0, unsigned b1) {
+    asm volatile("mma.sync.aligned.m16n8k32.row.col.s32.s8.s8.s32 {%0,%1,%2,%3}, {%4,%5,%6,%7}, {%8,%9}, {%0,%1,%2,%3};\n"
+                 : "+r"(c[0]), "+r"(c[1]), "+r"(c[2]), "+r"(c[3])
+                 : "r"(a0), "r"(a1), "r"(a2), "r"(a3), "r"(b0), "r"(b1));
+}
 __device__ __forceinline__ unsigned pack_bf16(float lo, float hi) {
     unsigned r;
     asm("cvt.rn.bf16x2.f32 %0, %1, %2;" : "=r"(r) : "f"(hi), "f"(lo));   // hi lands in the upper half
@@ -929,11 +935,16 @@ ATTN_MMA_KERNELS(128)
 // SWZ: rows stored unpadded (D halfs) with the 16-byte chunk index XOR-ed
 // with (row & 7), which keeps ldmatrix and cp.async conflict-free and cuts
 // the staging from 35 to 32 KB so three blocks fit an SM instead of two.
-template <int D, bool DB, bool QREG, bool SWZ>
+// Q8: INT8 Q·Kᵀ (SageAttention's recipe). q8 / k8 hold the int8 codes of Q
+// and of K − mean(K) ([heads][seq][D] bytes), qsc / ksc one scale per
+// (head, tile); K is staged as int8 (ks8, swizzled 16-byte chunks) and the
+// scores come out of mma.s8 as int32, scaled by qsc·ksc. P·V stays bf16.
+template <int D, bool DB, bool QREG, bool SWZ, bool Q8>
 __device__ __forceinline__ void vsa_fine3_body(const bf16_t* q, const bf16_t* k, const bf16_t* v, bf16_t* out,
         int heads, int seq, float scale, const unsigned* slot, const unsigned* sel, const unsigned* nsel,
         const float* pooled, const bf16_t* gate, int has_gate, int nb, int np, int dense_all, int te, int maxsel,
-        bf16_t* ks, bf16_t* vs, unsigned char* kvalid) {
+        bf16_t* ks, bf16_t* vs, unsigned char* kvalid,
+        const signed char* q8, const signed char* k8, const float* qsc, const float* ksc, unsigned char* ks8) {
     constexpr int F3BK = 32;
     constexpr int KS_STRIDE = SWZ ? D : D + 8;
     // element offset of 16-byte chunk `chunk` of row `row` in the staging tile
@@ -963,6 +974,22 @@ __device__ __forceinline__ void vsa_fine3_body(const bf16_t* q, const bf16_t* k,
             qa[kk][3] = tok1 >= 0 ? q1[c + 4] : 0u;
         }
     }
+    constexpr int KK8 = D / 32, CH8 = D / 16, RP8 = 128 / CH8, NJ8 = F3BK / RP8;
+    // int8 staging: row = key (D bytes), 16-byte chunk c of row r at chunk c ^ (r & (CH8 − 1)).
+    auto at8 = [](int row, int chunk) -> int { return row * D + ((chunk ^ (row & (CH8 - 1))) << 4); };
+    unsigned qa8[Q8 ? KK8 : 1][4];
+    if constexpr (Q8) {
+        const unsigned* q80 = (const unsigned*)(q8 + ((long)h * seq + (tok0 < 0 ? 0 : tok0)) * D);
+        const unsigned* q81 = (const unsigned*)(q8 + ((long)h * seq + (tok1 < 0 ? 0 : tok1)) * D);
+        #pragma unroll
+        for (int kk = 0; kk < KK8; ++kk) {
+            qa8[kk][0] = tok0 >= 0 ? q80[kk * 8 + t] : 0u;
+            qa8[kk][1] = tok1 >= 0 ? q81[kk * 8 + t] : 0u;
+            qa8[kk][2] = tok0 >= 0 ? q80[kk * 8 + 4 + t] : 0u;
+            qa8[kk][3] = tok1 >= 0 ? q81[kk * 8 + 4 + t] : 0u;
+        }
+    }
+    const float qs8 = Q8 ? qsc[(long)h * nb + qt] : 1.0f;
     float o[DT][4];
     #pragma unroll
     for (int i = 0; i < DT; ++i) o[i][0] = o[i][1] = o[i][2] = o[i][3] = 0.0f;
@@ -974,6 +1001,8 @@ __device__ __forceinline__ void vsa_fine3_body(const bf16_t* q, const bf16_t* k,
     const int ch = tid % CH, krow = tid / CH;
     const unsigned* srow = all_tiles ? 0 : sel + ((long)h * nb + qt) * maxsel;
     int ntk[NJ];
+    const int ch8 = tid % CH8, krow8 = tid / CH8;
+    int ntk8[Q8 ? NJ8 : 1];
     // The thread's NJ keys of chunk c are krow + RP·j: one tile lookup and one
     // base pointer per chunk, then immediate offsets.
     auto resolve = [&](int c) {
@@ -984,7 +1013,25 @@ __device__ __forceinline__ void vsa_fine3_body(const bf16_t* q, const bf16_t* k,
             const unsigned s2 = sp[RP * j];
             ntk[j] = s2 == 0xffffffffu ? -1 : (int)s2;
         }
+        if constexpr (Q8) {
+            const unsigned* sp8 = slot + tile * (unsigned)te + (unsigned)((c & cmask) * F3BK + krow8);
+            #pragma unroll
+            for (int j = 0; j < NJ8; ++j) {
+                const unsigned s2 = sp8[RP8 * j];
+                ntk8[j] = s2 == 0xffffffffu ? -1 : (int)s2;
+            }
+        }
     };
+    // int8 K rows of chunk c into ks8 (zero-filled padding), with the valid mask.
+    auto load8 = [&](unsigned char* dst, unsigned char* valid) {
+        #pragma unroll
+        for (int j = 0; j < (Q8 ? NJ8 : 1); ++j) {
+            const int key = krow8 + RP8 * j, tk = ntk8[j];
+            cp_async16(dst + at8(key, ch8), k8 + (long)h * seq * D + (unsigned)(tk < 0 ? 0 : tk) * (unsigned)D + ch8 * 16, tk >= 0);
+            if (valid && ch8 == 0) valid[key] = tk >= 0;
+        }
+    };
+    auto k8buf = [&](int c) { return ks8 + (c % NBUF) * F3BK * D; };
     auto load = [&](bf16_t* dst, const bf16_t* src, unsigned char* valid) {
         #pragma unroll
         for (int j = 0; j < NJ; ++j) {
@@ -998,7 +1045,7 @@ __device__ __forceinline__ void vsa_fine3_body(const bf16_t* q, const bf16_t* k,
     auto valid_of = [&](int c) { return kvalid + (c % NBUF) * F3BK; };
     if (nchunks > 0) {
         resolve(0);
-        load(kbuf(0), kbase, valid_of(0));
+        if constexpr (Q8) load8(k8buf(0), valid_of(0)); else load(kbuf(0), kbase, valid_of(0));
         cp_async_commit();
         load(vbuf(0), vbase, 0);
         cp_async_commit();
@@ -1012,7 +1059,7 @@ __device__ __forceinline__ void vsa_fine3_body(const bf16_t* q, const bf16_t* k,
             asm volatile("cp.async.wait_group 1;\n" ::);
             __syncthreads();
             if (c + 1 < nchunks) {
-                load(kbuf(c + 1), kbase, valid_of(c + 1));
+                if constexpr (Q8) load8(k8buf(c + 1), valid_of(c + 1)); else load(kbuf(c + 1), kbase, valid_of(c + 1));
                 cp_async_commit();
                 load(vbuf(c + 1), vbase, 0);
                 cp_async_commit();
@@ -1021,38 +1068,61 @@ __device__ __forceinline__ void vsa_fine3_body(const bf16_t* q, const bf16_t* k,
             cp_async_wait1();
             __syncthreads();
         }
-        const bf16_t* kcur = kbuf(c);
-        // ldmatrix addresses: row (lane & 7) of n-tile nt, chunk 2kk + (lane >> 3),
-        // swizzled by (lane & 7). The chunk's bits split as 2kk (bits 2-3) and
-        // lane >> 3 (bits 0-1), so the swizzle separates into a per-lane
-        // constant and (2kk ^ (lane & 4)), both cheap.
-        const unsigned kbase_l = (unsigned)__cvta_generic_to_shared(kcur) + (lane & 7) * (KS_STRIDE * 2)
-                               + (SWZ ? ((((lane >> 3) ^ lane) & 3) << 4) : ((lane >> 3) << 4));
-        const unsigned kx = SWZ ? ((lane & 4) << 4) : 0u;
         float s[NT][4];
-        #pragma unroll
-        for (int nt = 0; nt < NT; ++nt) {
-            s[nt][0] = s[nt][1] = s[nt][2] = s[nt][3] = 0.0f;
+        if constexpr (Q8) {
+            // INT8 Q·Kᵀ: ldmatrix.x2 over the int8 rows gives the two 32-bit B
+            // halves of a k32 step; the int32 sums scale by qsc·ksc of the
+            // key's tile (K was shifted by its mean, which softmax ignores).
+            const int tile_c = all_tiles ? (c >> cshift) : (int)srow[c >> cshift];
+            const float f8 = qs8 * ksc[(long)h * nb + tile_c];
+            const unsigned k8base_l = (unsigned)__cvta_generic_to_shared(k8buf(c)) + (lane & 7) * D;
+            const int rsw = (lane & 7) & (CH8 - 1), mhalf = (lane >> 3) & 1;
             #pragma unroll
-            for (int kk = 0; kk < KK; kk += 2) {
-                unsigned b[4];
-                {
-                    const unsigned addr = kbase_l + nt * 8 * KS_STRIDE * 2 + (((unsigned)(kk * 2) << 4) ^ kx);
-                    asm volatile("ldmatrix.sync.aligned.m8n8.x4.shared.b16 {%0,%1,%2,%3}, [%4];\n"
-                                 : "=r"(b[0]), "=r"(b[1]), "=r"(b[2]), "=r"(b[3]) : "r"(addr));
-                }
+            for (int nt = 0; nt < NT; ++nt) {
+                int acc[4] = {0, 0, 0, 0};
                 #pragma unroll
-                for (int u = 0; u < 2; ++u) {
-                    unsigned a0, a1, a2, a3;
-                    if (QREG) { a0 = qa[kk + u][0]; a1 = qa[kk + u][1]; a2 = qa[kk + u][2]; a3 = qa[kk + u][3]; }
-                    else {
-                        const int cc = ((kk + u) * 16 + t * 2) >> 1;
-                        a0 = tok0 >= 0 ? __ldg(q0 + cc) : 0u;
-                        a1 = tok1 >= 0 ? __ldg(q1 + cc) : 0u;
-                        a2 = tok0 >= 0 ? __ldg(q0 + cc + 4) : 0u;
-                        a3 = tok1 >= 0 ? __ldg(q1 + cc + 4) : 0u;
+                for (int kk = 0; kk < KK8; ++kk) {
+                    const unsigned addr = k8base_l + nt * 8 * D + (((2 * kk + mhalf) ^ rsw) << 4);
+                    unsigned b0, b1;
+                    asm volatile("ldmatrix.sync.aligned.m8n8.x2.shared.b16 {%0,%1}, [%2];\n" : "=r"(b0), "=r"(b1) : "r"(addr));
+                    mma_s8(acc, qa8[kk][0], qa8[kk][1], qa8[kk][2], qa8[kk][3], b0, b1);
+                }
+                s[nt][0] = (float)acc[0] * f8; s[nt][1] = (float)acc[1] * f8;
+                s[nt][2] = (float)acc[2] * f8; s[nt][3] = (float)acc[3] * f8;
+            }
+        } else {
+            const bf16_t* kcur = kbuf(c);
+            // ldmatrix addresses: row (lane & 7) of n-tile nt, chunk 2kk + (lane >> 3),
+            // swizzled by (lane & 7). The chunk's bits split as 2kk (bits 2-3) and
+            // lane >> 3 (bits 0-1), so the swizzle separates into a per-lane
+            // constant and (2kk ^ (lane & 4)), both cheap.
+            const unsigned kbase_l = (unsigned)__cvta_generic_to_shared(kcur) + (lane & 7) * (KS_STRIDE * 2)
+                                   + (SWZ ? ((((lane >> 3) ^ lane) & 3) << 4) : ((lane >> 3) << 4));
+            const unsigned kx = SWZ ? ((lane & 4) << 4) : 0u;
+            #pragma unroll
+            for (int nt = 0; nt < NT; ++nt) {
+                s[nt][0] = s[nt][1] = s[nt][2] = s[nt][3] = 0.0f;
+                #pragma unroll
+                for (int kk = 0; kk < KK; kk += 2) {
+                    unsigned b[4];
+                    {
+                        const unsigned addr = kbase_l + nt * 8 * KS_STRIDE * 2 + (((unsigned)(kk * 2) << 4) ^ kx);
+                        asm volatile("ldmatrix.sync.aligned.m8n8.x4.shared.b16 {%0,%1,%2,%3}, [%4];\n"
+                                     : "=r"(b[0]), "=r"(b[1]), "=r"(b[2]), "=r"(b[3]) : "r"(addr));
                     }
-                    mma_bf16(s[nt], a0, a1, a2, a3, b[2 * u], b[2 * u + 1]);
+                    #pragma unroll
+                    for (int u = 0; u < 2; ++u) {
+                        unsigned a0, a1, a2, a3;
+                        if (QREG) { a0 = qa[kk + u][0]; a1 = qa[kk + u][1]; a2 = qa[kk + u][2]; a3 = qa[kk + u][3]; }
+                        else {
+                            const int cc = ((kk + u) * 16 + t * 2) >> 1;
+                            a0 = tok0 >= 0 ? __ldg(q0 + cc) : 0u;
+                            a1 = tok1 >= 0 ? __ldg(q1 + cc) : 0u;
+                            a2 = tok0 >= 0 ? __ldg(q0 + cc + 4) : 0u;
+                            a3 = tok1 >= 0 ? __ldg(q1 + cc + 4) : 0u;
+                        }
+                        mma_bf16(s[nt], a0, a1, a2, a3, b[2 * u], b[2 * u + 1]);
+                    }
                 }
             }
         }
@@ -1080,7 +1150,7 @@ __device__ __forceinline__ void vsa_fine3_body(const bf16_t* q, const bf16_t* k,
         }
         if (!DB) {
             __syncthreads();           // every warp is done with ks
-            if (c + 1 < nchunks) load(kbuf(c + 1), kbase, valid_of(c + 1));
+            if (c + 1 < nchunks) { if constexpr (Q8) load8(k8buf(c + 1), valid_of(c + 1)); else load(kbuf(c + 1), kbase, valid_of(c + 1)); }
             cp_async_commit();
         }
         #pragma unroll
@@ -1168,9 +1238,9 @@ extern "C" __global__ void __launch_bounds__(128, 4) fw_vsa_fine3a_mma##D(u64 q_
     __shared__ __align__(16) bf16_t ks[32 * (D + 8)];                                                                \
     __shared__ __align__(16) bf16_t vs[32 * (D + 8)];                                                                \
     __shared__ unsigned char kvalid[32];                                                                             \
-    vsa_fine3_body<D, false, false, false>((const bf16_t*)q_, (const bf16_t*)k_, (const bf16_t*)v_, (bf16_t*)out_, heads,   \
+    vsa_fine3_body<D, false, false, false, false>((const bf16_t*)q_, (const bf16_t*)k_, (const bf16_t*)v_, (bf16_t*)out_, heads,   \
         seq, scale, (const unsigned*)slot_, (const unsigned*)sel_, (const unsigned*)nsel_, (const float*)pooled_,    \
-        (const bf16_t*)gate_, has_gate, nb, np, dense_all, te, maxsel, ks, vs, kvalid);                               \
+        (const bf16_t*)gate_, has_gate, nb, np, dense_all, te, maxsel, ks, vs, kvalid, 0, 0, 0, 0, 0);                               \
 }                                                                                                                    \
 extern "C" __global__ void __launch_bounds__(128, 2) fw_vsa_fine3b_mma##D(u64 q_, u64 k_, u64 v_, u64 out_,         \
         int heads, int seq, float scale, u64 slot_, u64 sel_, u64 nsel_, u64 pooled_, u64 gate_, int has_gate,       \
@@ -1178,9 +1248,9 @@ extern "C" __global__ void __launch_bounds__(128, 2) fw_vsa_fine3b_mma##D(u64 q_
     __shared__ __align__(16) bf16_t ks[2 * 32 * (D + 8)];                                                            \
     __shared__ __align__(16) bf16_t vs[2 * 32 * (D + 8)];                                                            \
     __shared__ unsigned char kvalid[64];                                                                             \
-    vsa_fine3_body<D, true, true, false>((const bf16_t*)q_, (const bf16_t*)k_, (const bf16_t*)v_, (bf16_t*)out_, heads,     \
+    vsa_fine3_body<D, true, true, false, false>((const bf16_t*)q_, (const bf16_t*)k_, (const bf16_t*)v_, (bf16_t*)out_, heads,     \
         seq, scale, (const unsigned*)slot_, (const unsigned*)sel_, (const unsigned*)nsel_, (const float*)pooled_,    \
-        (const bf16_t*)gate_, has_gate, nb, np, dense_all, te, maxsel, ks, vs, kvalid);                               \
+        (const bf16_t*)gate_, has_gate, nb, np, dense_all, te, maxsel, ks, vs, kvalid, 0, 0, 0, 0, 0);                               \
 }                                                                                                                    \
 extern "C" __global__ void __launch_bounds__(128, 3) fw_vsa_fine3c_mma##D(u64 q_, u64 k_, u64 v_, u64 out_,         \
         int heads, int seq, float scale, u64 slot_, u64 sel_, u64 nsel_, u64 pooled_, u64 gate_, int has_gate,       \
@@ -1188,9 +1258,9 @@ extern "C" __global__ void __launch_bounds__(128, 3) fw_vsa_fine3c_mma##D(u64 q_
     __shared__ __align__(16) bf16_t ks[2 * 32 * (D + 8)];                                                            \
     __shared__ __align__(16) bf16_t vs[2 * 32 * (D + 8)];                                                            \
     __shared__ unsigned char kvalid[64];                                                                             \
-    vsa_fine3_body<D, true, false, false>((const bf16_t*)q_, (const bf16_t*)k_, (const bf16_t*)v_, (bf16_t*)out_, heads,    \
+    vsa_fine3_body<D, true, false, false, false>((const bf16_t*)q_, (const bf16_t*)k_, (const bf16_t*)v_, (bf16_t*)out_, heads,    \
         seq, scale, (const unsigned*)slot_, (const unsigned*)sel_, (const unsigned*)nsel_, (const float*)pooled_,    \
-        (const bf16_t*)gate_, has_gate, nb, np, dense_all, te, maxsel, ks, vs, kvalid);                               \
+        (const bf16_t*)gate_, has_gate, nb, np, dense_all, te, maxsel, ks, vs, kvalid, 0, 0, 0, 0, 0);                               \
 }
 VSA_FINE3_KERNELS(64)
 VSA_FINE3_KERNELS(128)
@@ -1203,12 +1273,102 @@ extern "C" __global__ void __launch_bounds__(128, 3) fw_vsa_fine3d_mma##D(u64 q_
     __shared__ __align__(16) bf16_t ks[2 * 32 * D];                                                                  \
     __shared__ __align__(16) bf16_t vs[2 * 32 * D];                                                                  \
     __shared__ unsigned char kvalid[64];                                                                             \
-    vsa_fine3_body<D, true, true, true>((const bf16_t*)q_, (const bf16_t*)k_, (const bf16_t*)v_, (bf16_t*)out_,     \
+    vsa_fine3_body<D, true, true, true, false>((const bf16_t*)q_, (const bf16_t*)k_, (const bf16_t*)v_, (bf16_t*)out_,     \
         heads, seq, scale, (const unsigned*)slot_, (const unsigned*)sel_, (const unsigned*)nsel_,                    \
-        (const float*)pooled_, (const bf16_t*)gate_, has_gate, nb, np, dense_all, te, maxsel, ks, vs, kvalid);       \
+        (const float*)pooled_, (const bf16_t*)gate_, has_gate, nb, np, dense_all, te, maxsel, ks, vs, kvalid,        \
+        0, 0, 0, 0, 0);                                                                                              \
 }
 VSA_FINE3D_KERNEL(64)
 VSA_FINE3D_KERNEL(128)
+
+// e / f: 3d with INT8 Q·Kᵀ (q8 / k8 codes, per-tile scales); e asks for three
+// blocks per SM, f for four (the int8 path holds half the Q registers and
+// stages K in a quarter of the bytes).
+#define VSA_FINE3Q8_KERNEL(D, NAME, BLOCKS)                                                                           \
+extern "C" __global__ void __launch_bounds__(128, BLOCKS) NAME##D(u64 q_, u64 k_, u64 v_, u64 out_,                  \
+        int heads, int seq, float scale, u64 slot_, u64 sel_, u64 nsel_, u64 pooled_, u64 gate_, int has_gate,       \
+        int nb, int np, int dense_all, int te, int maxsel, u64 q8_, u64 k8_, u64 qsc_, u64 ksc_) {                   \
+    __shared__ __align__(16) unsigned char ks8[2 * 32 * D];                                                          \
+    __shared__ __align__(16) bf16_t vs[2 * 32 * D];                                                                  \
+    __shared__ unsigned char kvalid[64];                                                                             \
+    vsa_fine3_body<D, true, true, true, true>((const bf16_t*)q_, (const bf16_t*)k_, (const bf16_t*)v_, (bf16_t*)out_, \
+        heads, seq, scale, (const unsigned*)slot_, (const unsigned*)sel_, (const unsigned*)nsel_,                    \
+        (const float*)pooled_, (const bf16_t*)gate_, has_gate, nb, np, dense_all, te, maxsel, (bf16_t*)0, vs, kvalid, \
+        (const signed char*)q8_, (const signed char*)k8_, (const float*)qsc_, (const float*)ksc_, ks8);              \
+}
+VSA_FINE3Q8_KERNEL(64, fw_vsa_fine3e_mma, 3)
+VSA_FINE3Q8_KERNEL(128, fw_vsa_fine3e_mma, 3)
+VSA_FINE3Q8_KERNEL(64, fw_vsa_fine3f_mma, 4)
+VSA_FINE3Q8_KERNEL(128, fw_vsa_fine3f_mma, 4)
+
+// Per-head mean of K over the sequence (the shift that makes the int8
+// rounding of K well conditioned; softmax does not see it).
+extern "C" __global__ void fw_vsa_kmean(u64 k_, u64 kmean_, int seq, int d) {
+    const bf16_t* k = (const bf16_t*)k_ + (long)blockIdx.x * seq * d;
+    float* kmean = (float*)kmean_ + (long)blockIdx.x * d;
+    for (int c = threadIdx.x; c < d; c += blockDim.x) {
+        float acc = 0.0f;
+        for (int tok = 0; tok < seq; ++tok) acc += ld(k, (long)tok * d + c);
+        kmean[c] = acc / (float)seq;
+    }
+}
+// INT8 codes of Q and K − kmean per (head, tile) with one scale each
+// (max |x| / 127, codes round to nearest even, [−127, 127]); the host twin is
+// h3_core::vsa::qk8_round. Grid (nb, heads), 128 threads, d % 4 == 0.
+extern "C" __global__ void __launch_bounds__(128) fw_vsa_qk8(u64 q_, u64 k_, u64 slot_, u64 bsz_, u64 kmean_, u64 q8_, u64 k8_,
+                                                             u64 qsc_, u64 ksc_, int heads, int seq, int d, int nb, int te) {
+    __shared__ float red[2][4];
+    __shared__ float sc[2];
+    const bf16_t *q = (const bf16_t*)q_, *k = (const bf16_t*)k_;
+    const unsigned *slot = (const unsigned*)slot_, *bsz = (const unsigned*)bsz_;
+    const float* kmean = (const float*)kmean_ + (long)blockIdx.y * d;
+    signed char *q8 = (signed char*)q8_, *k8 = (signed char*)k8_;
+    const int t = blockIdx.x, h = blockIdx.y, tid = threadIdx.x, warp = tid >> 5, lane = tid & 31;
+    const unsigned n = bsz[t];
+    const int d4 = d >> 2;
+    float qm = 0.0f, km = 0.0f;
+    if (lane < d4) {
+        for (unsigned i = warp; i < n; i += 4) {
+            const long row = ((long)h * seq + slot[(long)t * te + i]) * d + lane * 4;
+            const uint2 wq = *(const uint2*)(q + row), wk = *(const uint2*)(k + row);
+            qm = fmaxf(qm, fmaxf(fmaxf(fabsf(__uint_as_float(wq.x << 16)), fabsf(__uint_as_float(wq.x & 0xffff0000u))),
+                                 fmaxf(fabsf(__uint_as_float(wq.y << 16)), fabsf(__uint_as_float(wq.y & 0xffff0000u)))));
+            km = fmaxf(km, fmaxf(fmaxf(fabsf(__uint_as_float(wk.x << 16) - kmean[lane * 4]), fabsf(__uint_as_float(wk.x & 0xffff0000u) - kmean[lane * 4 + 1])),
+                                 fmaxf(fabsf(__uint_as_float(wk.y << 16) - kmean[lane * 4 + 2]), fabsf(__uint_as_float(wk.y & 0xffff0000u) - kmean[lane * 4 + 3]))));
+        }
+    }
+    for (int o = 16; o > 0; o >>= 1) { qm = fmaxf(qm, __shfl_xor_sync(0xffffffffu, qm, o)); km = fmaxf(km, __shfl_xor_sync(0xffffffffu, km, o)); }
+    if (lane == 0) { red[0][warp] = qm; red[1][warp] = km; }
+    __syncthreads();
+    if (tid == 0) {
+        const float qmax = fmaxf(fmaxf(red[0][0], red[0][1]), fmaxf(red[0][2], red[0][3]));
+        const float kmax = fmaxf(fmaxf(red[1][0], red[1][1]), fmaxf(red[1][2], red[1][3]));
+        sc[0] = qmax / 127.0f; sc[1] = kmax / 127.0f;
+        ((float*)qsc_)[(long)h * nb + t] = sc[0];
+        ((float*)ksc_)[(long)h * nb + t] = sc[1];
+    }
+    __syncthreads();
+    const float qi = sc[0] > 0.0f ? 1.0f / sc[0] : 0.0f, ki = sc[1] > 0.0f ? 1.0f / sc[1] : 0.0f;
+    if (lane < d4) {
+        for (unsigned i = warp; i < n; i += 4) {
+            const long row = ((long)h * seq + slot[(long)t * te + i]) * d + lane * 4;
+            const uint2 wq = *(const uint2*)(q + row), wk = *(const uint2*)(k + row);
+            const float qv[4] = {__uint_as_float(wq.x << 16), __uint_as_float(wq.x & 0xffff0000u), __uint_as_float(wq.y << 16), __uint_as_float(wq.y & 0xffff0000u)};
+            const float kv[4] = {__uint_as_float(wk.x << 16) - kmean[lane * 4], __uint_as_float(wk.x & 0xffff0000u) - kmean[lane * 4 + 1],
+                                 __uint_as_float(wk.y << 16) - kmean[lane * 4 + 2], __uint_as_float(wk.y & 0xffff0000u) - kmean[lane * 4 + 3]};
+            unsigned pq = 0u, pk = 0u;
+            #pragma unroll
+            for (int j = 0; j < 4; ++j) {
+                const int cq = max(-127, min(127, __float2int_rn(qv[j] * qi)));
+                const int ck = max(-127, min(127, __float2int_rn(kv[j] * ki)));
+                pq |= ((unsigned)cq & 0xffu) << (8 * j);
+                pk |= ((unsigned)ck & 0xffu) << (8 * j);
+            }
+            *(unsigned*)(q8 + row) = pq;
+            *(unsigned*)(k8 + row) = pk;
+        }
+    }
+}
 
 // The union of two consecutive query tiles' selections (sorted, deduplicated),
 // entry = tile | flags << 30. One warp per (pair, head); lane 0 merges (the
