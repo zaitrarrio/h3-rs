@@ -100,12 +100,13 @@ time); when the tables do not fit, they are uploaded per step.
    the 600 W PRO 6000, `docs/runs/2026-11-07-vast-pro6000-server-mxfp8`).
    The FFN-up FP8 GEMM is split along N (cuBLASLt ran `n=28672` at 355
    TFLOP/s, its halves run at 775: 4.83 s per forward, ~38.6 s per clip
-   projected, to be measured as a clip). Next on that path: MXFP8 for the
-   decoder's block linears (their 36 × 28-tile
-   GEMMs are 73 % of the decode), a stored MXFP8 checkpoint (`h3 quantize`;
-   quantizing at load costs 140 s of host time), and a Blackwell FP4
+   projected; measured at 0.79× the bf16 clip on a second 600 W box). The
+   stored MXFP8 checkpoint and the MXFP8 decoder are in
+   (`docs/runs/2026-11-08-vast-pro6000-ws-mxfp8-stored`: 25.6 GB, 104 s
+   load, decode −19 % at 51 dB). Next on that path: a Blackwell FP4
    tensor-core GEMM for the NVFP4 linears (now 4-bit resident, expanded to
-   bf16 per GEMM; fastvideo-rs's FP4 VSA fine stage is its last 1.3×).
+   bf16 per GEMM; fastvideo-rs's FP4 VSA fine stage is its last 1.3×), and
+   the VSA fine stage itself, now 35 % of an MXFP8 forward.
 5. Generate the parity fixtures; fix what they find.
 6. WebGPU: 16× behind CUDA on the same card; f16 activations and a
    tensor-core-friendly GEMM tiling are the two levers (the 4 GiB buffer /

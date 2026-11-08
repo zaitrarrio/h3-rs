@@ -1,0 +1,15 @@
+watchdog armed
+name, driver_version, power.limit [W], memory.total [MiB], clocks.max.sm [MHz]
+NVIDIA RTX PRO 6000 Blackwell Workstation Edition, 615.71.10, 600.00 W, 97887 MiB, 3090 MHz
+64
+               total        used        free      shared  buff/cache   available
+Mem:             440         183         191         166         235         257
+overlay         250G  812M  250G   1% /
+== check default
+snake beta                                           rel 3.01e-2  FAIL
+Error: 1 of 109 checks failed (tolerance 3e-2)
+== check emulation
+snake beta                                           rel 3.01e-2  FAIL
+Error: 1 of 109 checks failed (tolerance 3e-2)
+exit 0
+

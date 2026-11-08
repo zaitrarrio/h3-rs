@@ -44,7 +44,17 @@ State and invariants only; the reasoning is in `docs/design.md`.
   `n ≥ 24576` run as two row-slice GEMMs (`H3_CUDA_MX_SPLIT=p`,
   `H3_CUDA_MX_SPLIT_MIN=n`): 32.9 → 15.1 ms, the forward 110 → 96.5 ms per
   block (4.83 s) on the 600 W Server Edition; splitting the QKV shape gains
-  nothing. No stored MXFP8 form yet (`h3 quantize` refuses it).
+  nothing. Stored form: `h3 quantize --weights mxfp8 [--skip-adaln]` writes
+  `<key>.weight.mx8` (E4M3 codes) + `.mxs` (swizzled scales), edges plain
+  (`for_layer_key`); the V2 tree becomes 25.6 GB in 117 s and loads in 104 s
+  against 202 s for bf16. `--decoder-weights mxfp8` puts the video
+  decoder's block linears in MXFP8: 51.3 dB against the bf16 decode (the
+  gate fastvideo-rs used), decode 9.75 → 7.5–7.9 s on a 600 W card. A clip
+  with the split, the stored file and the MXFP8 decoder: denoise 44.4 s
+  where bf16 is 56.3 s on the same (slower) Workstation Edition box
+  (`docs/runs/2026-11-08-vast-pro6000-ws-mxfp8-stored`). The cuBLASLt
+  candidate timing makes two runs differ at the rounding level
+  (`H3_CUDA_LT_NTH=i` pins it).
 - Decode host path: tiles are decoded one ahead of their download, the
   stitch / chunk finish / 8-bit conversion are row-parallel (rayon) and
   tested against the sequential reference; the audio upsampler's crop is
