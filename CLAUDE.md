@@ -50,14 +50,22 @@ State and invariants only; the reasoning is in `docs/design.md`.
   against 202 s for bf16. `--decoder-weights mxfp8` puts the video
   decoder's block linears in MXFP8: 51.3 dB against the bf16 decode (the
   gate fastvideo-rs used), decode 9.75 → 7.5–7.9 s on a 600 W card. A clip
-  with the split, the stored file and the MXFP8 decoder: denoise 44.4 s
-  where bf16 is 56.3 s on the same (slower) Workstation Edition box
-  (`docs/runs/2026-11-08-vast-pro6000-ws-mxfp8-stored`). The cuBLASLt
-  candidate timing makes two runs differ at the rounding level
-  (`H3_CUDA_LT_NTH=i` pins it).
-- Decode host path: tiles are decoded one ahead of their download, the
-  stitch / chunk finish / 8-bit conversion are row-parallel (rayon) and
-  tested against the sequential reference; the audio upsampler's crop is
+  with the split, the stored file and the MXFP8 decoder on the Server
+  Edition (`docs/runs/2026-11-08-vast-pro6000-server-best`, the
+  comparable card: bf16 bench 6.24–6.28 s per forward): **denoise 38.9 s,
+  decode 5.6 s, 45.0 s after load, 37.9 GB** against bf16's 50.0 / 8.2 /
+  58.7 s and fastvideo-rs's 45.8 s denoise. `H3_MXFP8_ALL_BLOCKS=1`
+  quantizes the edge blocks too (−1.2 s, same PSNR band; off: the recipe's
+  edges are calibrated). The cuBLASLt candidate timing makes two runs
+  differ at the rounding level (`H3_CUDA_LT_NTH=i` pins it). Measure on a
+  Server Edition whose bf16 bench forward is ~6.3 s: a Workstation Edition
+  box ran 7.0 s, the Max-Q 9.6–10.1 s, and numbers across them do not
+  compare.
+- Decode host path: tiles are decoded one ahead of their download, each
+  chunk's stitch / finish runs on a thread while the next chunk's kernels
+  proceed (`on_chunk` stays in order; the first profiled decode table
+  therefore holds two chunks), the stitch / chunk finish / 8-bit conversion
+  are row-parallel (rayon) and tested against the sequential reference; the audio upsampler's crop is
   the transposed conv's `pad` (symmetric) with ×ratio in the filter. Keep
   `cargo test -p h3-model --release -- --ignored host_decode_chunk_timing`
   under ~0.2 s per chunk.

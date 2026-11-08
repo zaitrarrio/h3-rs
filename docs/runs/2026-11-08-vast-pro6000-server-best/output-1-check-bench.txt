@@ -1,0 +1,25 @@
+watchdog armed
+name, driver_version, power.limit [W], memory.total [MiB], clocks.max.sm [MHz]
+NVIDIA RTX PRO 6000 Blackwell Server Edition, 615.71.09, 600.00 W, 97887 MiB, 2430 MHz
+256
+               total        used        free      shared  buff/cache   available
+Mem:             755          78         507           0         172         676
+overlay         250G  757M  250G   1% /
+== check default
+cuda NVIDIA RTX PRO 6000 Blackwell Server Edition (sm_120)
+all 109 checks pass (tolerance 3e-2)
+== check emulation
+cuda NVIDIA RTX PRO 6000 Blackwell Server Edition (sm_120)
+all 109 checks pass (tolerance 3e-2)
+== bench bf16 full depth (clock sanity: the Server Edition of 2026-11-07 did 6.29-6.34 s)
+forward 0: 6.278s (125.6 ms/block; ×50/50 blocks ≈ 6.28s)
+forward 1: 6.237s (124.7 ms/block; ×50/50 blocks ≈ 6.24s)
+== bench mxfp8 full depth
+forward 0: 4.989s (99.8 ms/block; ×50/50 blocks ≈ 4.99s)
+forward 1: 4.750s (95.0 ms/block; ×50/50 blocks ≈ 4.75s)
+forward 2: 4.763s (95.3 ms/block; ×50/50 blocks ≈ 4.76s)
+== bench mxfp8 all blocks
+forward 0: 4.813s (96.3 ms/block; ×50/50 blocks ≈ 4.81s)
+forward 1: 4.585s (91.7 ms/block; ×50/50 blocks ≈ 4.59s)
+exit 0
+

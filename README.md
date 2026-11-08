@@ -46,11 +46,13 @@ power-capped at ~1.4 GHz, not its 3.09 GHz boost.)
 On the **RTX PRO 6000 Server Edition (600 W)**, fastvideo-rs's gold GPU
 (`docs/runs/2026-11-07-vast-pro6000-server-mxfp8`), the same V2 clip:
 
-| | h3-rs bf16 | h3-rs `--weights mxfp8` | fastvideo-rs (MXFP8) |
+| | h3-rs bf16 | h3-rs stored `mxfp8` + `--decoder-weights mxfp8` | fastvideo-rs (MXFP8) |
 |---|---|---|---|
-| denoise | 50.6 s | **45.0 s** (before the FFN-up GEMM split; after it 4.83 s / forward on the bench, and 0.79× the bf16 clip on a second, slower 600 W box) | 45.8 s |
-| video decode | 8.9 s | 8.8 s; **7.5–7.9 s** with `--decoder-weights mxfp8` (51 dB against the bf16 decode) | 4.7–6.3 s |
-| peak device memory | 56.2 GB | **41.0 GB** (37.9 GB with the stored checkpoint and the MXFP8 decoder) | 61.0 GiB |
+| denoise | 50.0 s | **38.9 s** | 45.8 s |
+| video decode | 8.2 s | **5.6 s** (51 dB against the bf16 decode) | 4.7 s MXFP8 / 6.3 s bf16 |
+| total after load | 58.7 s | **45.0 s** | |
+| load | 76 s | **37 s** (25.6 GB checkpoint) | |
+| peak device memory | 56.2 GB | **37.9 GB** | 61.0 GiB |
 
 `--weights mxfp8` runs blocks 2–46 as W8A8 on the FP8 tensor cores
 (cuBLASLt `VEC32_UE8M0`, sm_100+; emulated in bf16 elsewhere); the clip
@@ -59,7 +61,8 @@ sampler turns weight rounding into texture). `h3 quantize --weights mxfp8
 --skip-adaln` stores it once (65 GiB → 25.6 GB in 117 s, loads in 104 s
 instead of 202 s). `--decoder-weights mxfp8` does the same for the video
 decoder's block linears and is visually the bf16 decode
-(`docs/runs/2026-11-08-vast-pro6000-ws-mxfp8-stored`).
+(`docs/runs/2026-11-08-vast-pro6000-ws-mxfp8-stored`,
+`…-server-best`).
 
 Per block at that geometry: 470 ms VSA / 815 ms dense on the A6000, 230 /
 354 ms on the L40S. The VSA phases on the L40S after the kernel work in

@@ -100,10 +100,11 @@ time); when the tables do not fit, they are uploaded per step.
    the 600 W PRO 6000, `docs/runs/2026-11-07-vast-pro6000-server-mxfp8`).
    The FFN-up FP8 GEMM is split along N (cuBLASLt ran `n=28672` at 355
    TFLOP/s, its halves run at 775: 4.83 s per forward, ~38.6 s per clip
-   projected; measured at 0.79× the bf16 clip on a second 600 W box). The
-   stored MXFP8 checkpoint and the MXFP8 decoder are in
-   (`docs/runs/2026-11-08-vast-pro6000-ws-mxfp8-stored`: 25.6 GB, 104 s
-   load, decode −19 % at 51 dB). Next on that path: a Blackwell FP4
+   projected). The stored MXFP8 checkpoint, the MXFP8 decoder and the
+   chunk-overlapped decode are in: on the Server Edition the V2 clip is
+   38.9 s denoise + 5.6 s decode against fastvideo-rs's 45.8 s MXFP8
+   denoise (`docs/runs/2026-11-08-vast-pro6000-server-best`). Next on that
+   path: a Blackwell FP4
    tensor-core GEMM for the NVFP4 linears (now 4-bit resident, expanded to
    bf16 per GEMM; fastvideo-rs's FP4 VSA fine stage is its last 1.3×), and
    the VSA fine stage itself, now 35 % of an MXFP8 forward.
