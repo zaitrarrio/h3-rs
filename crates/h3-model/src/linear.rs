@@ -125,6 +125,8 @@ pub fn load_host(
         return Err(err(format!("{keys:?}: only some are stored quantized")));
     } else if stored.iter().all(|s| matches!(s, Stored::Q8(_))) {
         HostWeight::Q8(Q8::concat(stored.into_iter().map(|s| if let Stored::Q8(q) = s { q } else { unreachable!() }).collect()))
+    } else if stored.iter().all(|s| matches!(s, Stored::Mxfp8(_))) {
+        HostWeight::Mxfp8(Mxfp8::concat(stored.into_iter().map(|s| if let Stored::Mxfp8(q) = s { q } else { unreachable!() }).collect()))
     } else if stored.iter().all(|s| matches!(s, Stored::Q4(_))) {
         HostWeight::Q4(Q4::concat(stored.into_iter().map(|s| if let Stored::Q4(q) = s { q } else { unreachable!() }).collect()))
     } else if stored.iter().all(|s| matches!(s, Stored::Nvfp4(_))) {

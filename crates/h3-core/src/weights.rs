@@ -41,6 +41,7 @@ pub trait WeightSource {
         self.contains(&format!("{key}.weight"))
             || self.contains(&format!("{key}.weight.q8"))
             || self.contains(&format!("{key}.weight.q4"))
+            || self.contains(&format!("{key}.weight.mx8"))
             || self.contains(&format!("{}::_nvfp4_weight", nvfp4_module(key)))
     }
     /// A convolution weight that may be stored weight-normalised
@@ -213,7 +214,20 @@ impl WeightSource for SafetensorsDir {
         let bad = |m: String| Error::Weights(format!("`{key}`: {m}"));
         let q8 = format!("{key}.weight.q8");
         let q4 = format!("{key}.weight.q4");
+        let mx8 = format!("{key}.weight.mx8");
         let nv = format!("{}::_nvfp4_weight", nvfp4_module(key));
+        if self.contains_raw(&mx8) {
+            // MXFP8: E4M3 codes [rows, cols] + the swizzled E8M0 scales as stored (crate::export).
+            let (dt, shape, data) = self.raw(&mx8)?;
+            if dt != Dtype::U8 || shape.len() != 2 {
+                return Err(bad(format!("mx8 is {dt:?} {shape:?}")));
+            }
+            let (sdt, sshape, sdata) = self.raw(&format!("{key}.weight.mxs"))?;
+            if sdt != Dtype::U8 || sdata.len() != crate::quant::mx_scale_len(shape[0], shape[1]) {
+                return Err(bad(format!("mxs is {sdt:?} {sshape:?} for codes {shape:?}")));
+            }
+            return Ok(Some(Stored::Mxfp8(crate::quant::Mxfp8::from_stored(data.to_vec(), sdata.to_vec(), shape[0], shape[1]))));
+        }
         if self.contains_raw(&q8) {
             let (dt, shape, data) = self.raw(&q8)?;
             if dt != Dtype::I8 || shape.len() != 2 {

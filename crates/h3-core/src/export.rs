@@ -19,7 +19,7 @@
 use crate::{
     Error, Result,
     config::H3Config,
-    quant::{Q4, Q8, Stored, WeightQuant},
+    quant::{Mxfp8, Q4, Q8, Stored, WeightQuant},
     weights::{WeightSource, h3_manifest},
 };
 use safetensors::Dtype;
@@ -47,7 +47,7 @@ pub fn quantize_dit(src: &dyn WeightSource, cfg: &H3Config, quant: WeightQuant, 
             continue;
         }
         let key = name.strip_suffix(".weight");
-        let fmt = key.map_or(WeightQuant::Native, |k| quant.for_key(k));
+        let fmt = key.map_or(WeightQuant::Native, |k| quant.for_layer_key(k, cfg.layers));
         let mut w = match (key, src.stored(key.unwrap_or(""))?) {
             (Some(_), Some(stored)) => stored.dequantize(),
             _ => src.get(&name, &shape)?,
@@ -62,9 +62,12 @@ pub fn quantize_dit(src: &dyn WeightSource, cfg: &H3Config, quant: WeightQuant, 
         let (rows, cols) = (shape[0], shape[1..].iter().product::<usize>());
         match fmt {
             WeightQuant::Mxfp8 => {
-                return Err(Error::Weights(
-                    "MXFP8 has no stored form yet: load a bf16 / f16 tree with `--weights mxfp8` (quantized at load)".into(),
-                ));
+                if cols % 32 != 0 {
+                    return Err(Error::Weights(format!("`{name}`: MXFP8 needs a row length divisible by 32, got {cols}")));
+                }
+                let q = Mxfp8::quantize(&w, rows, cols);
+                out.push((format!("{name}.mx8"), Dtype::U8, vec![rows, cols], q.codes));
+                out.push((format!("{name}.mxs"), Dtype::U8, vec![q.scales.len()], q.scales));
             }
             WeightQuant::Int8 => {
                 let q = Q8::quantize(&w, rows, cols);
@@ -140,7 +143,10 @@ pub fn metadata(quant: WeightQuant, variant: &str) -> HashMap<String, String> {
 pub fn stored_matches(stored: &Option<Stored>, fmt: WeightQuant) -> bool {
     matches!(
         (stored, fmt),
-        (None, WeightQuant::Native) | (Some(Stored::Q8(_)), WeightQuant::Int8) | (Some(Stored::Q4(_)), WeightQuant::Int4 { .. })
+        (None, WeightQuant::Native)
+            | (Some(Stored::Q8(_)), WeightQuant::Int8)
+            | (Some(Stored::Q4(_)), WeightQuant::Int4 { .. })
+            | (Some(Stored::Mxfp8(_)), WeightQuant::Mxfp8)
     )
 }
 
@@ -168,6 +174,7 @@ mod tests {
             WeightQuant::Int8,
             WeightQuant::Int4 { group: 16, hqq: true, ffn_only: true },
             WeightQuant::Int4 { group: 32, hqq: false, ffn_only: false },
+            WeightQuant::Mxfp8,
         ] {
             let path = dir.join(format!("{quant}.safetensors"));
             write(&path, &quantize_dit(&src, &cfg, quant, None, false).unwrap(), metadata(quant, "test")).unwrap();
@@ -179,7 +186,7 @@ mod tests {
                 let (rows, cols) = (s[0], s[1..].iter().product::<usize>());
                 let w = src.get(n, s).unwrap();
                 let st = q.stored(key).unwrap();
-                assert!(stored_matches(&st, quant.for_key(key)), "{n}: {:?}", st.as_ref().map(|s| s.shape()));
+                assert!(stored_matches(&st, quant.for_layer_key(key, cfg.layers)), "{n}: {:?}", st.as_ref().map(|s| s.shape()));
                 match st {
                     None => {}
                     Some(Stored::Q8(got)) => {
@@ -190,6 +197,9 @@ mod tests {
                         let WeightQuant::Int4 { group, hqq, .. } = quant.for_key(key) else { unreachable!() };
                         let want = Q4::quantize(&w, rows, cols, group, hqq);
                         assert_eq!((got.q, got.scales, got.zeros, got.group), (want.q, want.scales, want.zeros, want.group), "{n}");
+                    }
+                    Some(Stored::Mxfp8(got)) => {
+                        assert_eq!(got, Mxfp8::quantize(&w, rows, cols), "{n}");
                     }
                     Some(Stored::Nvfp4(_)) => unreachable!(),
                 }

@@ -10,6 +10,8 @@
 //! [`Nvfp4::dequantize`] and is the reference the GPU kernels are checked
 //! against.
 
+use rayon::prelude::*;
+
 pub const Q8_GROUP: usize = 128;
 
 /// How the DiT's transformer-block weights are stored on the device.
@@ -71,6 +73,16 @@ impl WeightQuant {
         match self {
             Self::Mxfp8 if block < MXFP8_FIRST_BLOCK || block + MXFP8_BF16_TAIL >= layers => Self::Native,
             q => q,
+        }
+    }
+
+    /// [`Self::for_block`] then [`Self::for_key`] for a key of a `layers`-deep
+    /// DiT (the exporter's rule; the loader knows the block it is loading).
+    pub fn for_layer_key(self, key: &str, layers: usize) -> Self {
+        let block = key.strip_prefix("transformer_blocks.").and_then(|r| r.split_once('.')).and_then(|(i, _)| i.parse().ok());
+        match block {
+            Some(b) => self.for_block(b, layers).for_key(key),
+            None => self.for_key(key),
         }
     }
 }
@@ -137,6 +149,7 @@ pub enum Stored {
     Q8(Q8),
     Q4(Q4),
     Nvfp4(Nvfp4),
+    Mxfp8(Mxfp8),
 }
 
 impl Stored {
@@ -145,6 +158,7 @@ impl Stored {
             Stored::Q8(q) => q.dequantize(),
             Stored::Q4(q) => q.dequantize(),
             Stored::Nvfp4(q) => q.dequantize(),
+            Stored::Mxfp8(q) => q.dequantize(),
         }
     }
     pub fn shape(&self) -> (usize, usize) {
@@ -152,6 +166,7 @@ impl Stored {
             Stored::Q8(q) => (q.rows, q.cols),
             Stored::Q4(q) => (q.rows, q.cols),
             Stored::Nvfp4(q) => (q.rows, q.cols),
+            Stored::Mxfp8(q) => (q.rows, q.cols),
         }
     }
 }
@@ -564,22 +579,56 @@ pub struct Mxfp8 {
 }
 
 impl Mxfp8 {
-    /// Quantize `data` (`cols % 32 == 0`).
+    /// Quantize `data` (`cols % 32 == 0`); one task per 128-row scale tile.
     pub fn quantize(data: &[f32], rows: usize, cols: usize) -> Self {
         assert_eq!(data.len(), rows * cols);
         assert!(cols.is_multiple_of(MX_BLOCK), "MXFP8 needs cols % 32 == 0, got {cols}");
         let cb = (cols / MX_BLOCK).div_ceil(4);
+        let tile = cb * 512;
         let mut codes = vec![0u8; rows * cols];
         let mut scales = vec![0u8; mx_scale_len(rows, cols)];
-        for r in 0..rows {
-            for g in 0..cols / MX_BLOCK {
-                let blk = &data[r * cols + g * MX_BLOCK..][..MX_BLOCK];
-                let (byte, inv) = mx_e8m0(amax_abs(blk));
-                scales[mx_scale_offset(r, g, cb)] = byte;
-                for (j, &v) in blk.iter().enumerate() {
-                    codes[r * cols + g * MX_BLOCK + j] = e4m3_satfinite(v * inv);
+        codes.par_chunks_mut(128 * cols).zip(scales.par_chunks_mut(tile)).enumerate().for_each(|(t, (cq, sq))| {
+            let nrows = cq.len() / cols;
+            for r in 0..nrows {
+                let row = t * 128 + r;
+                for g in 0..cols / MX_BLOCK {
+                    let blk = &data[row * cols + g * MX_BLOCK..][..MX_BLOCK];
+                    let (byte, inv) = mx_e8m0(amax_abs(blk));
+                    sq[mx_scale_offset(r, g, cb)] = byte;
+                    for (j, &v) in blk.iter().enumerate() {
+                        cq[r * cols + g * MX_BLOCK + j] = e4m3_satfinite(v * inv);
+                    }
                 }
             }
+        });
+        Self { codes, scales, rows, cols }
+    }
+
+    /// From stored codes `[rows, cols]` and swizzled scales ([`mx_scale_len`] bytes).
+    pub fn from_stored(codes: Vec<u8>, scales: Vec<u8>, rows: usize, cols: usize) -> Self {
+        assert_eq!(codes.len(), rows * cols);
+        assert_eq!(scales.len(), mx_scale_len(rows, cols));
+        Self { codes, scales, rows, cols }
+    }
+
+    /// Stack matrices with the same columns by rows (fused QKV): the scale
+    /// tiles are re-laid for the combined row count.
+    pub fn concat(parts: Vec<Mxfp8>) -> Self {
+        let cols = parts[0].cols;
+        let rows: usize = parts.iter().map(|p| p.rows).sum();
+        let cb = (cols / MX_BLOCK).div_ceil(4);
+        let mut codes = Vec::with_capacity(rows * cols);
+        let mut scales = vec![0u8; mx_scale_len(rows, cols)];
+        let mut r0 = 0;
+        for p in &parts {
+            assert_eq!(p.cols, cols);
+            codes.extend_from_slice(&p.codes);
+            for r in 0..p.rows {
+                for g in 0..cols / MX_BLOCK {
+                    scales[mx_scale_offset(r0 + r, g, cb)] = p.scales[mx_scale_offset(r, g, cb)];
+                }
+            }
+            r0 += p.rows;
         }
         Self { codes, scales, rows, cols }
     }
@@ -718,6 +767,13 @@ mod tests {
                 assert!((d[r * cols + c] - v).abs() <= v.abs() / 16.0 + s / 1024.0 + 1e-7, "({r}, {c})");
             }
         }
+        // concat re-lays the scale tiles: equal to quantizing the stacked matrix.
+        let (a, b) = (rng.normal(37 * 96), rng.normal(100 * 96));
+        let stacked: Vec<f32> = a.iter().chain(&b).copied().collect();
+        assert_eq!(Mxfp8::concat(vec![Mxfp8::quantize(&a, 37, 96), Mxfp8::quantize(&b, 100, 96)]), Mxfp8::quantize(&stacked, 137, 96));
+        assert_eq!(WeightQuant::Mxfp8.for_layer_key("transformer_blocks.1.ff.net.2", 50), WeightQuant::Native);
+        assert_eq!(WeightQuant::Mxfp8.for_layer_key("transformer_blocks.2.ff.net.2", 50), WeightQuant::Mxfp8);
+        assert_eq!(WeightQuant::Mxfp8.for_layer_key("transformer_blocks.2.norm1", 50), WeightQuant::Native);
         // round_rows is quantize ∘ dequantize of the bf16-rounded rows.
         let x: Vec<f32> = rng.normal(5 * 64);
         let rr = Mxfp8::round_rows(&x, 64);

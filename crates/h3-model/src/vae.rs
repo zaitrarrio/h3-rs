@@ -7,6 +7,7 @@
 use crate::linear::{Linear, load_plain};
 use rayon::prelude::*;
 use h3_core::{
+    quant::{Mxfp8, Q8, WeightQuant},
     Error, Result,
     backend::{Act, Backend, Conv3dShape, ConvEpilogue, Gate, HeadNorm, Modulation, Pad, Rope},
     config::{PIXEL_MEAN, PIXEL_STD, VideoVaeConfig},
@@ -359,8 +360,15 @@ impl<'a, B: Backend> Dev<'a, B> {
 
 impl<B: Backend> VideoVae<B> {
     pub fn load(be: &B, cfg: VideoVaeConfig, src: &dyn WeightSource, encoder: bool, decoder: bool) -> Result<Self> {
+        Self::load_with(be, cfg, src, encoder, decoder, WeightQuant::Native)
+    }
+
+    /// [`Self::load`] with the decoder's block linears (fused QKV, out, FFN
+    /// in / out of every ViT block) in `quant` (`Mxfp8` or `Int8`; the
+    /// projections, norms and convolutions stay native).
+    pub fn load_with(be: &B, cfg: VideoVaeConfig, src: &dyn WeightSource, encoder: bool, decoder: bool, quant: WeightQuant) -> Result<Self> {
         let enc = if encoder { Some(Self::load_encoder(be, &cfg, src)?) } else { None };
-        let dec = if decoder { Some(Self::load_decoder(be, &cfg, src)?) } else { None };
+        let dec = if decoder { Some(Self::load_decoder(be, &cfg, src, quant)?) } else { None };
         Ok(Self { cfg, encoder: enc, decoder: dec })
     }
 
@@ -403,10 +411,23 @@ impl<B: Backend> VideoVae<B> {
         })
     }
 
-    fn load_decoder(be: &B, cfg: &VideoVaeConfig, src: &dyn WeightSource) -> Result<Decoder<B>> {
+    fn load_decoder(be: &B, cfg: &VideoVaeConfig, src: &dyn WeightSource, quant: WeightQuant) -> Result<Decoder<B>> {
         let dd = cfg.decoder_dim();
         let ff = cfg.decoder_ffn_mult * dd;
         let lz = cfg.latent_channels;
+        // A block linear in the requested format (plain weights only: the VAE
+        // trees are not stored quantized).
+        let block_linear = |w: Vec<f32>, b: Vec<f32>, rows: usize, cols: usize| -> Linear<B> {
+            let w = match quant {
+                WeightQuant::Mxfp8 if cols.is_multiple_of(32) => be.weight_mxfp8(&Mxfp8::quantize(&w, rows, cols)),
+                WeightQuant::Int8 => be.weight_q8(&Q8::quantize(&w, rows, cols)),
+                _ => be.weight(&w, rows, cols),
+            };
+            Linear { w, b: Some(be.upload(&b)), rows, cols }
+        };
+        let lin = |key: &str, rows: usize, cols: usize| -> Result<Linear<B>> {
+            Ok(block_linear(src.get(&format!("{key}.weight"), &[rows, cols])?, src.get(&format!("{key}.bias"), &[rows])?, rows, cols))
+        };
         let mut blocks = Vec::new();
         for l in 0..cfg.decoder_layers {
             let p = format!("decoder.transformer_blocks.{l}");
@@ -418,12 +439,12 @@ impl<B: Backend> VideoVae<B> {
             }
             blocks.push(DecBlock {
                 norm1: be.upload(&src.get(&format!("{p}.norm1.weight"), &[dd])?),
-                qkv: Linear { w: be.weight(&qkv_w, 3 * dd, dd), b: Some(be.upload(&qkv_b)), rows: 3 * dd, cols: dd },
-                out: load_plain(be, src, &format!("{p}.attn.to_out.0"), dd, dd, true)?,
+                qkv: block_linear(qkv_w, qkv_b, 3 * dd, dd),
+                out: lin(&format!("{p}.attn.to_out.0"), dd, dd)?,
                 scale1: be.upload(&src.get(&format!("{p}.scale1"), &[dd])?),
                 norm2: be.upload(&src.get(&format!("{p}.norm2.weight"), &[dd])?),
-                ff_in: load_plain(be, src, &format!("{p}.ff.net.0.proj"), 2 * ff, dd, true)?,
-                ff_out: load_plain(be, src, &format!("{p}.ff.net.2"), dd, ff, true)?,
+                ff_in: lin(&format!("{p}.ff.net.0.proj"), 2 * ff, dd)?,
+                ff_out: lin(&format!("{p}.ff.net.2"), dd, ff)?,
                 scale2: be.upload(&src.get(&format!("{p}.scale2"), &[dd])?),
             });
         }

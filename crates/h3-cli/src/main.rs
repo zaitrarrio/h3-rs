@@ -99,6 +99,9 @@ struct AttnArgs {
     /// Keep the block weights in host memory and upload them per step (small GPUs).
     #[arg(long, default_value_t = false)]
     stream_blocks: bool,
+    /// The video decoder's block linears: native | mxfp8 (FP8 tensor cores on sm_100+) | int8.
+    #[arg(long, default_value = "native")]
+    decoder_weights: WeightQuant,
     /// Tokens per FFN chunk (default: all).
     #[arg(long)]
     ffn_chunk: Option<usize>,
@@ -763,7 +766,7 @@ fn generate<B: Backend>(
     };
     let need_encoder = first_image.is_some() || last_image.is_some() || !refs.is_empty() || continuation.is_some();
     let dit = H3Dit::load(be, cfg.clone(), src.as_ref(), &LoadOptions { quant: attn.weights, stream_blocks: attn.stream_blocks }, &r.adapters)?;
-    let vae = VideoVae::load(be, vae_cfg, &SafetensorsDir::open(&vae_dir)?, need_encoder, !preview)?;
+    let vae = VideoVae::load_with(be, vae_cfg, &SafetensorsDir::open(&vae_dir)?, need_encoder, !preview, attn.decoder_weights)?;
     let audio_vae = AudioVae::load(be, AudioVaeConfig::h3(), &SafetensorsDir::open(&model_dir.join("audio_vae"))?, refs.iter().any(|s| s.contains("audio")) || continuation.as_deref().is_some_and(|c| c.contains("audio")), true)?;
     let tae = match (&r.tae, preview) {
         (Some(p), true) => Some(TaeH3::load(be, TaeH3Config::taeh3(), &SafetensorsDir::open(p)?)?),
