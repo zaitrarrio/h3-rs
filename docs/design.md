@@ -50,7 +50,7 @@ of gathering.
 | `fasth3-trim` | FastVideo-FastH3-Trim-8-Step-NVFP4 | as V2 | VSA 0.8 | 42 blocks, `adaln_basis` rank 16, NVFP4 linears (FlashInfer 128×4 scale swizzle undone at load), 26-block fast decoder |
 | `fasth3-omni` | FastVideo-FastH3-Omni-8-Step-V1 (`transformer_ref`) | PDD: 32 fine intervals, node indices 0,4,…,32; fused heads per block, initial noise ×0.999 | VSA 0.9 tile 128, reference regions at keep rate 0.1 | Ref2VA only |
 | `pika-flex` | Pika-Labs/Pika-H3-Flex adapters over the base | renoise knots 1000/750/500/250/100/40, noise from seed + 1 | dense | 480p / 768p buckets, both keyframes cover-cropped |
-| `regen-2k` | Open-H3-Regenerate-2K | sigmas 0.909375, 6/7, 2/3, 0 (Euler), video clock only, silent audio conditions | VSA optional | latent upscaler to 90×160, rank-576 LoRA, Sharp curve AdaLN branches (`adaln_t_table.bin` is fetched separately), 24-block fast decoder, output trimmed to 121 frames |
+| `regen-2k` | Open-H3-Regenerate-2K | sigmas 0.909375, 6/7, 2/3, 0 (Euler), video clock only, silent audio conditions | VSA optional | latent upscaler to 90×160, rank-576 LoRA, Sharp curve AdaLN branches (`adaln_t_table.bin` is fetched separately), decoded by the base model's 36-block VAE as in FastVideo's pipeline (the release's `vae_fast/` Sol decoder is a windowed-attention model this crate does not implement), 124 frames trimmed to 121 |
 
 A checkpoint's `fastvideo_inference.json` overrides the preset's sampler and
 VSA numbers.
@@ -120,3 +120,11 @@ time); when the tables do not fit, they are uploaded per step.
    2 GiB binding limits also cap clips above ~38k tokens until activations
    are chunked more widely).
 7. Block streaming with overlapped uploads (now serial); a 24 GB card run.
+8. Variants: re-run Pika Flex FL2VA / Ref2VA and Regen-2K on a Server
+   Edition after the renoise-row and decoder fixes
+   (`docs/runs/2026-11-08-vast-pro6000-server-variants`; the account is
+   out of credit). Ref2VA / Omni prompts are 7.2 k rows and the host
+   Qwen3-VL takes two minutes: a device text encoder is the next host
+   cost. Optional: the Sol-H3-VAE windowed decoder (`vae_fast/`, 24
+   blocks, ComfyUI decodes it in ~⅓ of the full decoder's time) needs a row
+   gather / scatter op and block-major rows.

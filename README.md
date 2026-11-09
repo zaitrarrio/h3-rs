@@ -19,6 +19,13 @@ is a `--variant`:
 | `pika-flex` | `Pika-Labs/Pika-H3-Flex` (FL2VA / Ref2VA LoRA, 480p / 768p) | 6 | dense |
 | `regen-2k` | `Efficient-Large-Model/Open-H3-Regenerate-2K` (`h3 regen2k`) | 3 | dense / VSA |
 
+Run with the released weights on an RTX PRO 6000 Server Edition
+(`docs/runs/2026-11-08-vast-pro6000-server-variants`): `h3` T2VA / FL2VA /
+Ref2VA, `fasth3-omni` Ref2VA, and `fasth3-v2` / `fasth3-trim` (earlier
+records). `pika-flex` and `regen-2k` load and build their tables; their
+clips hit two CUDA-only bugs there (fixed since: renoise noise rows, the
+Regen decoder choice) and have not been re-run on a GPU yet.
+
 The MLX recipes of the cookbook use the same checkpoints; on Apple GPUs the
 WebGPU backend runs them through Metal.
 
@@ -151,6 +158,10 @@ huggingface-cli download Efficient-Large-Model/Open-H3-Regenerate-2K --local-dir
 h3 regen2k --regen-dir regen --model-dir h3 --draft fox.y4m --prompt "..." \
     --adaln-table adaln_t_table.bin --out fox-2k.y4m
 ```
+
+The 2K latents are decoded by the base model's VAE, as in FastVideo's
+pipeline; the release's `vae_fast/` Sol decoder (windowed attention) is not
+used.
 
 ### Prompt-to-clip demo
 

@@ -1,8 +1,12 @@
 //! Open-H3-Regenerate-2K: a 768p H3 draft → 2560×1440 through the latent
 //! upscaler, a rank-576 LoRA merged into the DiT, the Sharp curve AdaLN
-//! branches, three fixed-sigma Euler forwards and the 24-block fast decoder.
-//! The released pipeline writes a silent video: the audio stream (encoded
-//! silence) only conditions the DiT.
+//! branches, three fixed-sigma Euler forwards and the base model's VAE
+//! (FastVideo's pipeline decodes with `base_model/vae`, the 36-block
+//! full-attention ViT decoder; the release's `vae_fast/` Sol decoder is a
+//! 24-block windowed-attention model, `blocks.N.attn.to_qkv`, which this
+//! crate does not implement: run through the full decoder it paints a
+//! 16-pixel grid). The released pipeline writes a silent video: the audio
+//! stream (encoded silence) only conditions the DiT.
 
 use rayon::prelude::*;
 use crate::{
@@ -90,9 +94,9 @@ impl SharpCurve {
 pub struct Regen<B: Backend> {
     pub dit: H3Dit<B>,
     /// Encoder from the base VAE.
-    pub encoder: VideoVae<B>,
     /// The fast 24-block decoder.
-    pub decoder: VideoVae<B>,
+    /// The base model's VAE: encoder for the draft, decoder for the 2K output.
+    pub vae: VideoVae<B>,
     pub audio_vae: AudioVae<B>,
     pub upscaler: Upscaler<B>,
     pub curve: SharpCurve,
@@ -131,10 +135,10 @@ impl<B: Backend> Regen<B> {
         }
         let sigmas = regen_sigmas(req.steps, req.start_sigma)?;
         // Draft latent: posterior sampled with the fixed seed, normalised.
-        let m = self.encoder.encode_pixels(be, &req.draft, req.tiling)?;
+        let m = self.vae.encode_pixels(be, &req.draft, req.tiling)?;
         let mut rng42 = Rng::new(KEYFRAME_ENCODE_SEED);
         let mut draft = Posterior::from_moments(&m).sample(&mut rng42);
-        self.encoder.normalize_latents(&mut draft);
+        self.vae.normalize_latents(&mut draft);
         let up = self.upscaler.upscale(be, &draft, OUTPUT_SIZE)?;
         let (lt, lh, lw) = (up.t, up.h, up.w);
         let na = packing::audio_latents(DRAFT_PADDED_FRAMES);
@@ -180,11 +184,11 @@ impl<B: Backend> Regen<B> {
         }
         let rows = be.download(&x_v);
         let mut latent = unpatch_rows(&rows, cfg.in_channels, lt, lh, lw, cfg.patch);
-        self.decoder.denormalize_latents(&mut latent);
+        self.vae.denormalize_latents(&mut latent);
         let td = Instant::now();
         let mut rgb = Vec::new();
         let (mut frames, mut width, mut height) = (0usize, 0usize, 0usize);
-        self.decoder.decode(be, &latent, req.tiling, &mut |chunk: &Volume| {
+        self.vae.decode(be, &latent, req.tiling, &mut |chunk: &Volume| {
             if frames >= DRAFT_FRAMES {
                 return;
             }

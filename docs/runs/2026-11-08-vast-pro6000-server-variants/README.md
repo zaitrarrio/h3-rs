@@ -78,3 +78,59 @@ into a different sample of the same scene. The grids
 (frames 0 / 40 / 80 / 120) show the same fox, trees and light with small
 pose differences and no artifacts. `--vsa-qk8` stays opt-in like
 `--weights mxfp8`, and is part of the fastest measured recipe.
+
+## The other official variants (h3-bin4 = 6fc41e2 unless noted)
+
+All at 1344×768×124, seed 7, the fox prompt; keyframes / the reference
+image are frames of the previous run's V2 fox clip (`fox.y4m`, re-encoded
+from `fox-b-best.mp4`). Timings on the 600 W Server Edition:
+
+| variant, task | load | prompt rows (Qwen3-VL, host) | denoise | decode | status |
+|---|---|---|---|---|---|
+| `h3` T2VA (bf16, dense) | 83.7 s | 33 in 96 s | 524.7 s = 49 × 10.71 s | | clip (`base-t2va-frames.png`) |
+| `h3` FL2VA, first + last keyframe | 68.3 s | 2065 in 70 s | 621.4 s = 49 × 12.69 s | | clip (`base-fl2va-frames.png`) |
+| `h3` Ref2VA (`transformer_ref`), one image | 100.8 s | 7209 in 126 s | 896.0 s = 49 × 18.29 s | | clip (`base-ref2va-frames.png`) |
+| `pika-flex` FL2VA / Ref2VA, 768p bucket | 83 s | | | | AdaLN tables (13 renoise knots, 126 MB) in 145 s; both clips **panicked** after load: `renoise needs noise` (below) |
+| `fasth3-omni` Ref2VA (PDD, VSA 0.9 tile 128) | 90.7 s | 7209 in 122 s | 112.4 s = 8 × 14.07 s | 8.1 s | clip (`omni-ref2va-frames.png`); tables (17 PDD knots, 165 MB) in 182 s |
+| `regen-2k` from the 768p draft | 118 s | | 3 × 97.7 s at 2560×1440 (+ 103 s prepare: draft encode, upscale, tables) | 21.1 s | ran, but the frames carry a 16-pixel grid (`regen-2k-frames.png`, below) |
+
+The reference image is presented to Qwen3-VL at a 2048 short edge
+(`REFERENCE_IMAGE_SHORT_EDGE`, the released contract), which is 7176
+vision tokens: the Ref2VA prompt is 7209 rows and the DiT sequence grows by
+that much, hence 18.3 s per dense forward against 10.7 s for T2VA, and the
+host text encoder takes two minutes. Omni's 14 s per VSA forward is on the
+same long sequence (and bf16 weights).
+
+### Found and fixed
+
+1. **61-frame requests** (my scripts): both 61-frame attempts were refused
+   by the geometry guard; H3's floor is 124 frames (Pika's 120).
+2. **Qwen3-VL vision tower on CUDA** (`h3-bin` → `h3-bin4`): the per-frame
+   rope tables were copied from f32 tables into bf16 scratch; the CUDA
+   backend keeps the dtypes apart and asserted (`output-5-omni-first-try.txt`),
+   so every image-conditioned run (FL2VA, Ref2VA, Omni) died after load. One
+   frame's table is now uploaded once (every frame shares the coordinates).
+3. **Fast decoder weights** (`output-6-regen-first-try.txt`): the release's
+   `vae_fast/` file fuses `to_qkv`; the loader read `to_q/k/v`. Fixed, then
+   found irrelevant: see 5.
+4. **Pika renoise** (`pika-fl2va.log`): `flow_step` reads the renoise noise
+   at the rows' offset, the pipeline allocated it for the target rows only;
+   with a keyframe or a reference the offset is non-zero and the CUDA bounds
+   assert fired (the CPU would have sliced out of range). Fixed in 9a5bf77
+   with a tiny-pipeline regression test; **not yet re-run on a GPU**.
+5. **Regen-2K decoder**: `vae_fast/fast_h3_vae_noncausal_24l.safetensors`
+   is the Sol-H3-VAE decoder (`blocks.N.attn.to_qkv`), a 24-block model with
+   16×16-token spatial × 5-latent temporal attention windows, half-window
+   shifts on odd layers, five global rows per block and window-local RoPE
+   (ComfyUI `comfy/ldm/minimax/vae.py`, `NonCausalViT3DDecoder`). Run through
+   the full-attention decoder it paints the 16-pixel grid in
+   `regen-2k-frames.png`. FastVideo's `open_h3_regenerate_2k` pipeline does
+   not use it: it decodes with `base_model/vae` (36 blocks) and trims 124
+   frames to 121 (`stages/finalize.py`). `h3 regen2k` now does the same
+   (commit after 9a5bf77); the Sol decoder is not implemented. **Not yet
+   re-run on a GPU**; the 2K decode through the full decoder will cost more
+   than the 21 s measured here.
+
+Cost: the box ran 23:27–02:43 UTC (3.3 h, $1.54/h) and pulled ~420 GB; the
+account went from ~$8.3 to $2.72, which is why the Pika and Regen-2K re-runs
+wait for credit.

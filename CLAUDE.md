@@ -137,7 +137,21 @@ State and invariants only; the reasoning is in `docs/design.md`.
 - Variants are presets in `h3_core::variant`; a checkpoint's
   `fastvideo_inference.json` overrides the preset. Base and Pika Ref2VA use
   `transformer_ref`. Adapters (Pika LoRA, Regen-2K LoRA, FastH3 V1 diffs) are
-  merged in f32 at load, before quantization.
+  merged in f32 at load, before quantization. Run with real weights on the
+  600 W Server Edition (`docs/runs/2026-11-08-vast-pro6000-server-variants`):
+  base T2VA (49 × 10.7 s), FL2VA (49 × 12.7 s), Ref2VA (49 × 18.3 s: the
+  reference image is 7176 Qwen3-VL tokens at the contract's 2048 short
+  edge), Omni Ref2VA (8 × 14.1 s); Pika Flex and Regen-2K loaded and built
+  their tables but their clips have not run on a GPU since the fixes below.
+  Frames floor: 124 (Pika 120). Backends keep f32 tables and bf16
+  activations apart: `copy` never mixes them (the vision tower's per-frame
+  rope tables are uploaded, not copied). Renoise noise buffers span the
+  conditioning rows (`flow_step` reads noise at the rows' offset).
+  `h3 regen2k` decodes with the base VAE like FastVideo's pipeline; the
+  release's `vae_fast/` Sol decoder (`blocks.N.attn.to_qkv`, 24 blocks,
+  16×16×5 attention windows, shifted on odd layers, 5 global rows per block,
+  window-local RoPE; ComfyUI `comfy/ldm/minimax/vae.py`) is not implemented
+  and paints a 16-pixel grid through the full-attention decoder.
 - AdaLN: the 13 B modulation weights are never resident. Tables are computed
   per generation by streaming each block's weight through the backend once,
   or loaded from an `h3 adaln-tables` file; `h3 quantize --skip-adaln` then

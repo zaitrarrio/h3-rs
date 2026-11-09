@@ -944,16 +944,15 @@ fn regen2k<B: Backend>(
     let adapters = vec![Adapter::open(&lora, None, None).with_context(|| format!("{}", lora.display()))?];
     let dit = H3Dit::load(be, cfg.clone(), &src, &LoadOptions { quant: attn.weights, stream_blocks: attn.stream_blocks }, &adapters)?;
     let curve = SharpCurve::load(&regen_dir.join("lora/sharp_curve_branches.safetensors"), adaln_table, &cfg)?;
-    let encoder = VideoVae::load(be, VideoVaeConfig::h3(), &SafetensorsDir::open(&model_dir.join("vae"))?, true, false)?;
-    let fast = regen_dir.join("vae_fast");
-    let fast_src = h3_core::weights::Remapped { inner: SafetensorsDir::open(&fast)?, map: Box::new(h3_core::weights::vae_source_key) };
-    let fast_layers = (0..64).take_while(|l| fast_src.contains(&format!("decoder.transformer_blocks.{l}.norm1.weight"))).count();
-    let decoder = VideoVae::load(be, VideoVaeConfig { decoder_layers: fast_layers, ..VideoVaeConfig::h3() }, &fast_src, false, true)?;
+    // FastVideo's pipeline decodes with the base model's VAE (36-block
+    // full-attention decoder); the release's `vae_fast/` Sol decoder uses
+    // windowed attention this crate does not implement.
+    let vae = VideoVae::load_with(be, VideoVaeConfig::h3(), &SafetensorsDir::open(&model_dir.join("vae"))?, true, true, attn.decoder_weights)?;
     let audio_vae = AudioVae::load(be, AudioVaeConfig::h3(), &SafetensorsDir::open(&model_dir.join("audio_vae"))?, true, false)?;
     let upscaler = Upscaler::load(be, UpscalerConfig::regen_2k(), &SafetensorsDir::open(&regen_dir.join("latent_upsampler"))?)?;
-    let regen = Regen { dit, encoder, decoder, audio_vae, upscaler, curve };
+    let regen = Regen { dit, vae, audio_vae, upscaler, curve };
     be.sync();
-    println!("load {:.1}s ({fast_layers}-block fast decoder)", t0.elapsed().as_secs_f64());
+    println!("load {:.1}s", t0.elapsed().as_secs_f64());
     let (frames, _) = media::read_frames(draft)?;
     if frames.len() < h3_model::regen::DRAFT_FRAMES {
         bail!("the draft has {} frames; Regenerate-2K needs {}", frames.len(), h3_model::regen::DRAFT_FRAMES);
