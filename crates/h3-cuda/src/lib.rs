@@ -37,6 +37,9 @@ pub struct CuBuf {
     f32: bool,
 }
 
+/// Token chunks of the two-stage per-head K mean (`fw_vsa_kmean` / `fw_vsa_kmean2`).
+const KMEAN_CHUNKS: usize = 128;
+
 /// VSA state: tile tables (u32), the region table, f32 pooled means and
 /// pooled-branch output, selections and counts.
 pub struct CuVsa {
@@ -64,7 +67,7 @@ pub struct CuVsa {
     scale: f32,
     /// INT8 Q·Kᵀ: codes `[heads][seq][d]` (bytes in u16 words), per-(head,
     /// tile) scales, the per-head K mean.
-    qk8: Option<(CuBuf, CuBuf, CuBuf, CuBuf, CuBuf)>,
+    qk8: Option<(CuBuf, CuBuf, CuBuf, CuBuf, CuBuf, CuBuf)>,
 }
 
 pub struct CuWeight {
@@ -194,6 +197,7 @@ struct Kernels {
     vsa_pool_scalar: CudaFunction,
     vsa_fine3: [[CudaFunction; 6]; 2],
     vsa_kmean: CudaFunction,
+    vsa_kmean2: CudaFunction,
     vsa_qk8: CudaFunction,
     dequant_q8: CudaFunction,
     dequant_q4: CudaFunction,
@@ -453,6 +457,7 @@ impl Cuda {
                 [get("fw_vsa_fine3a_mma128")?, get("fw_vsa_fine3b_mma128")?, get("fw_vsa_fine3c_mma128")?, get("fw_vsa_fine3d_mma128")?, get("fw_vsa_fine3e_mma128")?, get("fw_vsa_fine3f_mma128")?],
             ],
             vsa_kmean: get("fw_vsa_kmean")?,
+            vsa_kmean2: get("fw_vsa_kmean2")?,
             vsa_qk8: get("fw_vsa_qk8")?,
             dequant_q8: get("fw_dequant_q8")?,
             dequant_q4: get("fw_dequant_q4")?,
@@ -555,7 +560,7 @@ impl Cuda {
 
     fn kernel_name(&self, f: &CudaFunction) -> &'static str {
         let k = &self.f;
-        let all: [(&CudaFunction, &'static str); 65] = [
+        let all: [(&CudaFunction, &'static str); 66] = [
             (&k.bias_act, "bias_act"),
             (&k.swiglu, "swiglu"),
             (&k.gate_residual, "gate_residual"),
@@ -610,6 +615,7 @@ impl Cuda {
             (&k.vsa_fine3[0][5], "vsa fine (3f int8 qk, d64)"),
             (&k.vsa_fine3[1][5], "vsa fine (3f int8 qk, d128)"),
             (&k.vsa_kmean, "vsa k mean"),
+            (&k.vsa_kmean2, "vsa k mean (fold)"),
             (&k.vsa_qk8, "vsa int8 q/k quant"),
             (&k.dequant_q8, "dequant int8"),
             (&k.dequant_q4, "dequant int4"),
@@ -1409,7 +1415,14 @@ impl Backend for Cuda {
             heads: h,
             qk8: spec.qk8.then(|| {
                 let codes = (h * spec.plan.seq * d).div_ceil(2);
-                (self.alloc(codes), self.alloc(codes), Backend::upload_table(self, &vec![0.0; h * nb]), Backend::upload_table(self, &vec![0.0; h * nb]), Backend::upload_table(self, &vec![0.0; h * d]))
+                (
+                    self.alloc(codes),
+                    self.alloc(codes),
+                    Backend::upload_table(self, &vec![0.0; h * nb]),
+                    Backend::upload_table(self, &vec![0.0; h * nb]),
+                    Backend::upload_table(self, &vec![0.0; h * d]),
+                    Backend::upload_table(self, &vec![0.0; h * KMEAN_CHUNKS * d]),
+                )
             }),
             d,
             seq: plan.seq,
@@ -1531,8 +1544,10 @@ impl Backend for Cuda {
                 (None, 4 | 5) => 3,
                 (None, v) => v,
             };
-            if let Some((q8, k8, qsc, ksc, kmean)) = &s.qk8 {
-                self.launch(&self.f.vsa_kmean, (s.heads as u32, 1, 1), (256, 1, 1), &[Arg::P(self.ptr(k)), Arg::P(self.ptr(kmean)), Arg::I(s.seq as i32), Arg::I(s.d as i32)]);
+            if let Some((q8, k8, qsc, ksc, kmean, kpart)) = &s.qk8 {
+                let nch = KMEAN_CHUNKS as i32;
+                self.launch(&self.f.vsa_kmean, (KMEAN_CHUNKS as u32, s.heads as u32, 1), (128, 1, 1), &[Arg::P(self.ptr(k)), Arg::P(self.ptr(kpart)), Arg::I(s.seq as i32), Arg::I(s.d as i32), Arg::I(nch)]);
+                self.launch(&self.f.vsa_kmean2, (s.heads as u32, 1, 1), (128, 1, 1), &[Arg::P(self.ptr(kpart)), Arg::P(self.ptr(kmean)), Arg::I(s.seq as i32), Arg::I(s.d as i32), Arg::I(nch)]);
                 self.launch(
                     &self.f.vsa_qk8,
                     (s.nb as u32, s.heads as u32, 1),

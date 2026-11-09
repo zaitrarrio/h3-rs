@@ -1302,13 +1302,31 @@ VSA_FINE3Q8_KERNEL(64, fw_vsa_fine3f_mma, 4)
 VSA_FINE3Q8_KERNEL(128, fw_vsa_fine3f_mma, 4)
 
 // Per-head mean of K over the sequence (the shift that makes the int8
-// rounding of K well conditioned; softmax does not see it).
-extern "C" __global__ void fw_vsa_kmean(u64 k_, u64 kmean_, int seq, int d) {
-    const bf16_t* k = (const bf16_t*)k_ + (long)blockIdx.x * seq * d;
+// rounding of K well conditioned; softmax does not see it). Two fixed-shape
+// stages so the sum order never depends on scheduling: grid (nch, heads)
+// writes one partial row sum per token chunk, grid (heads) folds the chunks.
+// One block per head over 38k tokens took 2.0 ms; the pair takes ~0.1 ms.
+extern "C" __global__ void fw_vsa_kmean(u64 k_, u64 part_, int seq, int d, int nch) {
+    const bf16_t* k = (const bf16_t*)k_ + (long)blockIdx.y * seq * d;
+    float* part = (float*)part_ + ((long)blockIdx.y * nch + blockIdx.x) * d;
+    const int cs = (seq + nch - 1) / nch, t0 = blockIdx.x * cs, t1 = min(seq, t0 + cs);
+    for (int c = threadIdx.x; c < d; c += blockDim.x) {
+        float a0 = 0.0f, a1 = 0.0f, a2 = 0.0f, a3 = 0.0f;
+        int tok = t0;
+        for (; tok + 4 <= t1; tok += 4) {
+            a0 += ld(k, (long)tok * d + c); a1 += ld(k, (long)(tok + 1) * d + c);
+            a2 += ld(k, (long)(tok + 2) * d + c); a3 += ld(k, (long)(tok + 3) * d + c);
+        }
+        for (; tok < t1; ++tok) a0 += ld(k, (long)tok * d + c);
+        part[c] = (a0 + a1) + (a2 + a3);
+    }
+}
+extern "C" __global__ void fw_vsa_kmean2(u64 part_, u64 kmean_, int seq, int d, int nch) {
+    const float* part = (const float*)part_ + (long)blockIdx.x * nch * d;
     float* kmean = (float*)kmean_ + (long)blockIdx.x * d;
     for (int c = threadIdx.x; c < d; c += blockDim.x) {
         float acc = 0.0f;
-        for (int tok = 0; tok < seq; ++tok) acc += ld(k, (long)tok * d + c);
+        for (int i = 0; i < nch; ++i) acc += part[(long)i * d + c];
         kmean[c] = acc / (float)seq;
     }
 }
