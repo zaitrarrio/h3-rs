@@ -431,12 +431,20 @@ impl<B: Backend> VideoVae<B> {
         let mut blocks = Vec::new();
         for l in 0..cfg.decoder_layers {
             let p = format!("decoder.transformer_blocks.{l}");
-            let mut qkv_w = Vec::with_capacity(3 * dd * dd);
-            let mut qkv_b = Vec::with_capacity(3 * dd);
-            for m in ["to_q", "to_k", "to_v"] {
-                qkv_w.extend(src.get(&format!("{p}.attn.{m}.weight"), &[dd, dd])?);
-                qkv_b.extend(src.get(&format!("{p}.attn.{m}.bias"), &[dd])?);
-            }
+            // Diffusers stores to_q / to_k / to_v; the original `vae_source` /
+            // `vae_fast` layout (Regenerate-2K's fast decoder, read through
+            // `weights::vae_source_key`) fuses them as `to_qkv` in q | k | v order.
+            let (qkv_w, qkv_b) = if src.contains(&format!("{p}.attn.to_q.weight")) {
+                let mut qkv_w = Vec::with_capacity(3 * dd * dd);
+                let mut qkv_b = Vec::with_capacity(3 * dd);
+                for m in ["to_q", "to_k", "to_v"] {
+                    qkv_w.extend(src.get(&format!("{p}.attn.{m}.weight"), &[dd, dd])?);
+                    qkv_b.extend(src.get(&format!("{p}.attn.{m}.bias"), &[dd])?);
+                }
+                (qkv_w, qkv_b)
+            } else {
+                (src.get(&format!("{p}.attn.to_qkv.weight"), &[3 * dd, dd])?, src.get(&format!("{p}.attn.to_qkv.bias"), &[3 * dd])?)
+            };
             blocks.push(DecBlock {
                 norm1: be.upload(&src.get(&format!("{p}.norm1.weight"), &[dd])?),
                 qkv: block_linear(qkv_w, qkv_b, 3 * dd, dd),

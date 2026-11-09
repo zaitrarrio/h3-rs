@@ -277,22 +277,23 @@ impl<B: Backend> Qwen3Vl<B> {
         be.linear(&x, 0, n, &tower.patch_embed.w, tower.patch_embed.b.as_ref(), Act::None, &h, 0);
         let pe = be.upload(&self.pos_embed_for(tower, input.grid));
         be.axpby(&h, 0, 1.0, &pe, 0, 1.0, n * vh);
-        // Rotary over (row, col) in block order, repeated per frame.
-        let mut coords = Vec::with_capacity(n);
-        for _ in 0..t {
-            for br in 0..gh / m {
-                for bc in 0..gw / m {
-                    for mr in 0..m {
-                        for mc in 0..m {
-                            coords.push([(br * m + mr) as u32, (bc * m + mc) as u32]);
-                        }
+        // Rotary over (row, col) in block order; every frame has the same
+        // coordinates, so one frame's table serves them all (f32 tables are
+        // uploaded, never copied into bf16 scratch: the CUDA backend keeps
+        // the two dtypes apart and refuses a mixed copy).
+        let mut coords = Vec::with_capacity(per_frame);
+        for br in 0..gh / m {
+            for bc in 0..gw / m {
+                for mr in 0..m {
+                    for mc in 0..m {
+                        coords.push([(br * m + mr) as u32, (bc * m + mc) as u32]);
                     }
                 }
             }
         }
         let rope = qwen3_vision_rope(&coords, hd);
-        let (rc, rs) = (be.upload_table(&rope.cos), be.upload_table(&rope.sin));
-        let rp = Some(Rope { cos: &rc, sin: &rs, rot: hd });
+        let (fc, fs) = (be.upload_table(&rope.cos), be.upload_table(&rope.sin));
+        let frp = Some(Rope { cos: &fc, sin: &fs, rot: hd });
         let normed = be.alloc(n * vh);
         let qkv = be.alloc(n * 3 * vh);
         let (q, k, v) = (be.alloc(heads * per_frame * hd), be.alloc(heads * per_frame * hd), be.alloc(heads * per_frame * hd));
@@ -321,11 +322,6 @@ impl<B: Backend> Qwen3Vl<B> {
                 let rows = per_frame;
                 let frame_qkv = be.alloc(rows * 3 * vh);
                 be.copy(&qkv, r0 * 3 * vh, &frame_qkv, 0, rows * 3 * vh);
-                let fc = be.alloc(rows * hd / 2);
-                let fs = be.alloc(rows * hd / 2);
-                be.copy(&rc, r0 * hd / 2, &fc, 0, rows * hd / 2);
-                be.copy(&rs, r0 * hd / 2, &fs, 0, rows * hd / 2);
-                let frp = Some(Rope { cos: &fc, sin: &fs, rot: hd });
                 be.head_split(&frame_qkv, rows, 3 * vh, 0, heads, hd, None, frp, &q);
                 be.head_split(&frame_qkv, rows, 3 * vh, vh, heads, hd, None, frp, &k);
                 be.head_split(&frame_qkv, rows, 3 * vh, 2 * vh, heads, hd, None, None, &v);
@@ -333,7 +329,6 @@ impl<B: Backend> Qwen3Vl<B> {
                 be.attention(&q, &k, &v, heads, heads, rows, rows, hd, false, &fa);
                 be.copy(&fa, 0, &attn, r0 * vh, rows * vh);
             }
-            let _ = rp;
             be.linear(&attn, 0, n, &bl.proj.w, bl.proj.b.as_ref(), Act::None, &tmp, 0);
             be.gate_residual(&h, &tmp, n, vh, Gate::None);
             be.layer_norm(&h, n, vh, Some(&bl.norm2.0), Some(&bl.norm2.1), 1e-6, &normed);
