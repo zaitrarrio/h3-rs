@@ -1,0 +1,13 @@
++ timeout 5000 /w/h3-bin4 generate --backend cuda --variant pika-flex --model-dir /w/h3 --variant-dir /w/pika --tables /w/pika.tables --seed 7 --prompt 'A red fox trots through fresh snow at dawn in a quiet pine forest; snow crunches softly under its paws and a light wind moves through the branches.' --task fl2va --first-image /w/assets/first.png --last-image /w/assets/last.png --width 1344 --heig
+adapter: /w/pika/fl2va/adapter.safetensors
+cuda NVIDIA RTX PRO 6000 Blackwell Server Edition (sm_120)
+load 83.4s
+prompt: 2065 rows in 73.7s
+
+thread 'main' (33016) panicked at crates/h3-cuda/src/lib.rs:1664:17:
+renoise needs noise
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+real	2m59.040s
+user	4m51.028s
+sys	1m28.526s

@@ -1,0 +1,11 @@
++ timeout 5000 /w/h3-bin4 generate --backend cuda --variant h3 --model-dir /w/h3 --tables /w/base.tables --seed 7 --prompt 'A red fox trots through fresh snow at dawn in a quiet pine forest; snow crunches softly under its paws and a light wind moves through the branches.' --task ref2va --ref image:/w/assets/first.png --width 1344 --height 768 --frames 124 --out /w/base-ref2va.y4m
+cuda NVIDIA RTX PRO 6000 Blackwell Server Edition (sm_120)
+load 100.8s
+prompt: 7209 rows in 125.6s
+run 0: total 915.38s  prepare 0.12s  adaln 0.00s  denoise 895.99s (["18.09", "18.23", "18.27", "18.29", "18.30", "18.30", "18.30", "18.30", "18.30", "18.30", "18.29", "18.29", "18.30", "18.30", "18.29", "18.30", "18.29", "18.29", "18.29", "18.29", "18.29", "18.29", "18.29", "18.29", "18.29", "18.29", "18.29", "18.29", "18.29", "18.29", "18.29", "18.29", "18.29", "18.30", "18.29", "18.29", "18.29",
+wrote /w/base-ref2va.y4m (124 frames 1344x768) and /w/base-ref2va.wav
+mux: ffmpeg -i /w/base-ref2va.y4m -i /w/base-ref2va.wav -c:v libx264 -pix_fmt yuv420p -c:a aac /w/base-ref2va.mp4
+
+real	19m9.144s
+user	17m8.840s
+sys	1m45.668s

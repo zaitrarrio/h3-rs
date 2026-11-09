@@ -399,8 +399,12 @@ impl<B: Backend> Pipeline<B> {
         let _ = heads_n;
         let v_out = be.alloc(layout.video_indices.len() * vp);
         let a_out = be.alloc(layout.audio_indices.len() * ap);
-        let noise_v = be.alloc(nv_t);
-        let noise_a = be.alloc(na_t);
+        // `flow_step` reads the noise at the same offset as `x`, so the buffers
+        // span the conditioning rows too (zeros there; only the target rows are
+        // written). With references or keyframes `off_v` > 0: an `n`-long
+        // buffer made every conditioned Pika run fail on CUDA.
+        let noise_v = be.alloc(off_v + nv_t);
+        let noise_a = be.alloc(off_a + na_t);
         // Renoise draws from a generator seeded seed + 1 (Pika).
         let mut renoise_rng = Rng::new(req.seed.wrapping_add(1));
         for i in 0..steps {
@@ -418,22 +422,24 @@ impl<B: Backend> Pipeline<B> {
             self.dit.forward(be, &ws, &x_v, &x_a, &text, &mods, heads.as_ref(), &v_out, &a_out);
             let sv = video_sched.step(i);
             let sa = audio_sched.step(i);
-            let step_of = |c: h3_core::schedule::StepCoeffs, n: usize, noise: &B::Buf, rng: &mut Rng| -> FlowStep {
+            let step_of = |c: h3_core::schedule::StepCoeffs, off: usize, n: usize, noise: &B::Buf, rng: &mut Rng| -> FlowStep {
                 match c.rule {
                     StepRule::Euler => FlowStep::Euler { sigma: c.sigma, next: c.next },
                     StepRule::Renoise => {
                         if c.next == 0.0 {
                             FlowStep::Terminal { sigma: c.sigma }
                         } else {
-                            be.write(noise, &rng.normal(n));
+                            let mut z = vec![0.0; off];
+                            z.extend(rng.normal(n));
+                            be.write(noise, &z);
                             FlowStep::Renoise { sigma: c.sigma, next: c.next }
                         }
                     }
                 }
             };
-            let fv = step_of(sv, nv_t, &noise_v, &mut renoise_rng);
+            let fv = step_of(sv, off_v, nv_t, &noise_v, &mut renoise_rng);
             be.flow_step(&x_v, off_v, &v_out, off_v, Some(&noise_v), nv_t, fv);
-            let fa = step_of(sa, na_t, &noise_a, &mut renoise_rng);
+            let fa = step_of(sa, off_a, na_t, &noise_a, &mut renoise_rng);
             be.flow_step(&x_a, off_a, &a_out, off_a, Some(&noise_a), na_t, fa);
             be.sync();
             t.steps_s.push(ts.elapsed().as_secs_f64());
@@ -587,4 +593,58 @@ pub fn unpatch_rows(rows: &[f32], c: usize, t: usize, h: usize, w: usize, (pt, p
         }
     }
     v
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::audio_vae::AudioVae;
+    use crate::dit::{Attention, H3Dit, LoadOptions};
+    use crate::taeh3::TaeH3;
+    use crate::vae::VideoVae;
+    use h3_core::config::{AudioVaeConfig, H3Config, TaeH3Config, VideoVaeConfig};
+    use h3_core::packing::{Anchor, Geometry};
+    use h3_core::schedule::{Schedule, StepRule, PIKA_KNOTS};
+    use h3_core::weights::Synthetic;
+    use h3_cpu::Cpu;
+
+    /// Pika's renoise steps draw noise for the target rows only, but
+    /// `flow_step` reads it at the rows' offset: with a keyframe (conditioning
+    /// rows first) the noise buffer must span the whole latent. This ran only
+    /// on the Server Edition before, where the CUDA backend caught it.
+    #[test]
+    fn renoise_with_a_keyframe_runs() {
+        let be = Cpu;
+        let cfg = H3Config::tiny();
+        let src = Synthetic { seed: 1 };
+        let pipe = Pipeline {
+            dit: H3Dit::load(&be, cfg.clone(), &src, &LoadOptions { quant: Default::default(), stream_blocks: false }, &[]).unwrap(),
+            vae: Some(VideoVae::load(&be, VideoVaeConfig::tiny(), &src, true, true).unwrap()),
+            audio_vae: Some(AudioVae::load(&be, AudioVaeConfig::tiny(), &src, false, true).unwrap()),
+            tae: Some(TaeH3::load(&be, TaeH3Config::tiny(), &src).unwrap()),
+        };
+        let g = Geometry { width: 64, height: 32, frames: 124 };
+        let mut r = Rng::new(3);
+        let keyframe = Volume::from_data(3, 1, 32, 64, r.uniform(3 * 32 * 64, 0.5).iter().map(|v| v + 0.5).collect());
+        let req = Request {
+            prompt: Prompt::text_only(r.normal(4 * cfg.text_dim), cfg.text_dim),
+            geometry: g,
+            seed: 7,
+            keyframes: vec![(Anchor::First, keyframe)],
+            references: vec![],
+            continuation: None,
+            sampler: SamplerPlan::Schedules {
+                video: Schedule::from_rungs(&PIKA_KNOTS, 12.0, StepRule::Renoise).unwrap(),
+                audio: Schedule::from_rungs(&PIKA_KNOTS, 12.0, StepRule::Renoise).unwrap(),
+            },
+            attention: Attention::Dense,
+            dense_first_steps: 0,
+            ffn_chunk: usize::MAX,
+            tiling: None,
+            preview: true,
+        };
+        let out = pipe.generate(&be, &src, &[], None, &req, &mut |_| {}).unwrap();
+        assert_eq!((out.width, out.height), (64, 32));
+        assert!(out.frames > 0 && out.rgb.len() == out.frames * 64 * 32 * 3);
+    }
 }
