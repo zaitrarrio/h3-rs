@@ -1,0 +1,43 @@
+/w/pika/fl2va:
+total 2702424
+drwxr-xr-x 2 root root         66 Nov  8 23:28 .
+drwxr-xr-x 4 root root         81 Nov  8 23:28 ..
+-rw-r--r-- 1 root root 2767274120 Nov  8 23:27 adapter.safetensors
+-rw-r--r-- 1 root root       1034 Nov  8 23:28 manifest.json
+
+/w/pika/ref2va:
+total 2702424
+drwxr-xr-x 2 root root         66 Nov  8 23:28 .
+drwxr-xr-x 4 root root         81 Nov  8 23:28 ..
+-rw-r--r-- 1 root root 2767274120 Nov  8 23:28 adapter.safetensors
+-rw-r--r-- 1 root root       1040 Nov  8 23:28 manifest.json
+== Pika Flex AdaLN tables (renoise knots)
+adapter: /w/pika/fl2va/adapter.safetensors
+13 timesteps [0.0, 0.02702701, 0.07692307, 0.100000024, 0.19999999, 0.25, 0.4285714, 0.5, 0.6666667, 0.75, 0.8888889, 0.999, 1.0] → /w/pika.tables (126.1 MB) in 144.7s
+
+real	2m31.429s
+user	4m53.813s
+sys	1m1.211s
+== Pika FL2VA, 768p bucket, 61 frames
+adapter: /w/pika/fl2va/adapter.safetensors
+Error: geometry: Pika H3 Flex generates 5–15 s at 24 fps; aligned num_frames 73 is outside 120–362
+[in#0 @ 0x584254842380] Error opening input: No such file or directory
+Error opening input file /w/pika-fl2va.y4m.
+Error opening input files: No such file or directory
+curl: Can't open '/w/pika-fl2va-grid.png'
+curl: try 'curl --help' or 'curl --manual' for more information
+[in#0 @ 0x5874ae99e4c0] Error opening input: No such file or directory
+Error opening input file /w/pika-fl2va.y4m.
+Error opening input files: No such file or directory
+curl: Can't open '/w/pika-fl2va.mp4'
+curl: try 'curl --help' or 'curl --manual' for more information
+== Pika Ref2VA, one image reference
+adapter: /w/pika/ref2va/adapter.safetensors
+Error: geometry: Pika H3 Flex generates 5–15 s at 24 fps; aligned num_frames 73 is outside 120–362
+[in#0 @ 0x5769f823c380] Error opening input: No such file or directory
+Error opening input file /w/pika-ref2va.y4m.
+Error opening input files: No such file or directory
+curl: Can't open '/w/pika-ref2va-grid.png'
+curl: try 'curl --help' or 'curl --manual' for more information
+exit 26
+
