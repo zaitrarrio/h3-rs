@@ -46,13 +46,19 @@ power-capped at ~1.4 GHz, not its 3.09 GHz boost.)
 On the **RTX PRO 6000 Server Edition (600 W)**, fastvideo-rs's gold GPU
 (`docs/runs/2026-11-07-vast-pro6000-server-mxfp8`), the same V2 clip:
 
-| | h3-rs bf16 | h3-rs stored `mxfp8` + `--decoder-weights mxfp8` | fastvideo-rs (MXFP8) |
-|---|---|---|---|
-| denoise | 50.0 s | **38.9 s** | 45.8 s |
-| video decode | 8.2 s | **5.6 s** (51 dB against the bf16 decode) | 4.7 s MXFP8 / 6.3 s bf16 |
-| total after load | 58.7 s | **45.0 s** | |
-| load | 76 s | **37 s** (25.6 GB checkpoint) | |
-| peak device memory | 56.2 GB | **37.9 GB** | 61.0 GiB |
+| | h3-rs bf16 | h3-rs stored `mxfp8` + `--decoder-weights mxfp8` | + `--vsa-qk8` | fastvideo-rs (MXFP8) |
+|---|---|---|---|---|
+| denoise | 50.0 s | **38.9 s** | **37.2 s** | 45.8 s |
+| video decode | 8.2 s | **5.6 s** (51 dB against the bf16 decode) | 5.8 s | 4.7 s MXFP8 / 6.3 s bf16 |
+| total after load | 58.7 s | **45.0 s** | **43.6 s** | |
+| load | 76 s | **37 s** (25.6 GB checkpoint) | 84 s (quantized at load) | |
+| peak device memory | 56.2 GB | **37.9 GB** | | 61.0 GiB |
+
+`--vsa-qk8` runs the VSA fine stage's Q·Kᵀ in INT8 (SageAttention's
+recipe; `docs/runs/2026-11-08-vast-pro6000-server-variants`): the fine
+stage goes 35.4 → 30.6 ms per call including its helpers, the clip keeps
+the scene (17.5 dB against bf16 attention, the same band as MXFP8 against
+bf16 weights).
 
 `--weights mxfp8` runs blocks 2–46 as W8A8 on the FP8 tensor cores
 (cuBLASLt `VEC32_UE8M0`, sm_100+; emulated in bf16 elsewhere); the clip

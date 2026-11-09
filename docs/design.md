@@ -107,7 +107,13 @@ time); when the tables do not fit, they are uploaded per step.
    path: a Blackwell FP4
    tensor-core GEMM for the NVFP4 linears (now 4-bit resident, expanded to
    bf16 per GEMM; fastvideo-rs's FP4 VSA fine stage is its last 1.3×), and
-   the VSA fine stage itself, now 35 % of an MXFP8 forward.
+   the VSA fine stage itself, 35 % of an MXFP8 forward. INT8 Q·Kᵀ
+   (`--vsa-qk8`) took the stage to 30.6 ms per call and the clip denoise
+   to 37.2 s on the Server Edition
+   (`docs/runs/2026-11-08-vast-pro6000-server-variants`); the int8 body
+   is instruction bound like the bf16 one, so the next step there is
+   INT8 / FP8 P·V (SageAttention2's second half), which also halves the
+   V staging.
 5. Generate the parity fixtures; fix what they find.
 6. WebGPU: 16× behind CUDA on the same card; f16 activations and a
    tensor-core-friendly GEMM tiling are the two levers (the 4 GiB buffer /

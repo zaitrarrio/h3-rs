@@ -76,7 +76,17 @@ State and invariants only; the reasoning is in `docs/design.md`.
   resident, swizzled 32 KB staging, 168 registers, three blocks per SM);
   `H3_CUDA_VSA_FINE=v1|a|b|c` select the others, `H3_CUDA_VSA_PAIR=1` the
   two-tiles-per-block body, `H3_CUDA_VSA_COARSE1=1` the one-query-tile
-  coarse kernel. The fine stage is instruction-issue and occupancy bound,
+  coarse kernel. `--vsa-qk8` (INT8 Q·Kᵀ, SageAttention's recipe: K shifted
+  by its per-head mean, one int8 scale per head × 64-row tile, `mma.s8`
+  k32 steps, bf16 P·V; CPU oracle `vsa::qk8_round`, WebGPU emulates) runs
+  `fw_vsa_fine3e` (`H3_CUDA_VSA_FINE=f` the 4-blocks-per-SM twin, slower):
+  on the 600 W Server Edition the fine stage goes 35.4 → 29.2 ms per call
+  plus 1.5 ms of helpers (two-stage K mean 0.44 ms, single-read quant
+  1.08 ms), the MXFP8 forward 4.79 → 4.54 s, the V2 clip denoise 39.2 →
+  **37.2 s** (total after load 45.4 → 43.6 s); 17.5 dB against bf16
+  attention, the MXFP8-vs-bf16 band, same scene, no artifacts
+  (`docs/runs/2026-11-08-vast-pro6000-server-variants`). Opt-in like
+  `--weights mxfp8`. The fine stage is instruction-issue and occupancy bound,
   not memory bound: sharing gathers across tiles and halving shared-memory
   reads gained nothing, the instruction diet (hardware bf16 cvt, scale in
   the exp FMA, mask skipped on full chunks, ldmatrix K, conditional

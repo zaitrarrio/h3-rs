@@ -1,0 +1,11 @@
++ timeout 4000 /w/h3-bin3 generate --backend cuda --variant fasth3-v2 --model-dir /w/v2 --tables /w/v2.tables --width 1344 --height 768 --frames 124 --seed 7 --weights mxfp8 --decoder-weights mxfp8 --prompt 'A red fox trots through fresh snow at dawn in a quiet pine forest; snow crunches softly under its paws and a light wind moves through the branches.' --out /w/qa.y4m
+cuda NVIDIA RTX PRO 6000 Blackwell Server Edition (sm_120)
+load 85.8s
+prompt: 33 rows in 100.8s
+run 0: total 45.41s  prepare 0.27s  adaln 0.00s  denoise 39.16s (["5.07", "4.84", "4.85", "4.86", "4.87", "4.88", "4.89", "4.89"])  decode 5.71s  audio 0.19s
+wrote /w/qa.y4m (124 frames 1344x768) and /w/qa.wav
+mux: ffmpeg -i /w/qa.y4m -i /w/qa.wav -c:v libx264 -pix_fmt yuv420p -c:a aac /w/qa.mp4
+
+real	3m59.949s
+user	4m38.192s
+sys	1m49.738s

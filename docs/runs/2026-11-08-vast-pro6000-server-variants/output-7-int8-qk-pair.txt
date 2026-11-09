@@ -1,0 +1,38 @@
+16 /root/v2pull.txt
+v2 transformer 66G in 228s
+/w/v2:
+
+/w/v2/transformer:
+== bench mxfp8 --vsa-qk8 (fine3e), two-stage k mean
+forward 0: 4.775s (95.5 ms/block; ×50/50 blocks ≈ 4.78s)
+forward 1: 4.542s (90.8 ms/block; ×50/50 blocks ≈ 4.54s)
+  vsa fine (3e int8 qk, d128)                 2914.7 ms  32.0%     100 calls    29.147 ms/call
+  vsa coarse + top-k (4 query tiles)           208.7 ms   2.3%     100 calls     2.087 ms/call
+  vsa pool                                     119.2 ms   1.3%     100 calls     1.192 ms/call
+  vsa int8 q/k quant                           108.1 ms   1.2%     100 calls     1.081 ms/call
+  vsa k mean                                    42.3 ms   0.5%     100 calls     0.423 ms/call
+  vsa k mean (fold)                              1.4 ms   0.0%     100 calls     0.014 ms/call
+== unprofiled, 3 steps: bf16 attention / --vsa-qk8
+forward 0: 4.991s (99.8 ms/block; ×50/50 blocks ≈ 4.99s)
+forward 1: 4.788s (95.8 ms/block; ×50/50 blocks ≈ 4.79s)
+forward 2: 4.802s (96.0 ms/block; ×50/50 blocks ≈ 4.80s)
+forward 0: 4.762s (95.2 ms/block; ×50/50 blocks ≈ 4.76s)
+forward 1: 4.538s (90.8 ms/block; ×50/50 blocks ≈ 4.54s)
+forward 2: 4.550s (91.0 ms/block; ×50/50 blocks ≈ 4.55s)
+== adaln tables fasth3-v2
+18 timesteps [0.0001001358, 0.0003336072, 0.014211655, 0.032424748, 0.04585159, 0.056831896, 0.090909064, 0.10048044, 0.14285713, 0.16725987, 0.23076922, 0.25, 0.35714287, 0.41176468, 0.5, 0.7, 0.999, 1.0] → /w/v2.tables (174.6 MB) in 144.0s
+
+real	2m32.556s
+user	1m25.144s
+sys	1m8.377s
+== (a) MXFP8 DiT + decoder, bf16 attention
+load 85.8s
+run 0: total 45.41s  prepare 0.27s  adaln 0.00s  denoise 39.16s (["5.07", "4.84", "4.85", "4.86", "4.87", "4.88", "4.89", "4.89"])  decode 5.71s  audio 0.19s
+== (b) = (a) with --vsa-qk8
+load 83.6s
+run 0: total 43.56s  prepare 0.28s  adaln 0.00s  denoise 37.18s (["4.82", "4.60", "4.61", "4.62", "4.63", "4.63", "4.64", "4.64"])  decode 5.83s  audio 0.19s
+== PSNR (b) vs (a)
+[Parsed_psnr_0 @ 0x6026dd5d4240] PSNR y:12.983911 u:27.985757 v:29.933175 average:17.535807 min:16.608414 max:18.464343
+qk8 pair done
+exit 0
+
