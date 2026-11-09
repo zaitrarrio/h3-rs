@@ -1414,6 +1414,7 @@ impl Backend for Cuda {
             te: plan.tile_elems,
             heads: h,
             qk8: spec.qk8.then(|| {
+                assert!(plan.tile_elems <= 128 && d <= 128, "fw_vsa_qk8 holds a tile of ≤ 128 rows × ≤ 128 channels in registers");
                 let codes = (h * spec.plan.seq * d).div_ceil(2);
                 (
                     self.alloc(codes),
@@ -1551,7 +1552,7 @@ impl Backend for Cuda {
                 self.launch(
                     &self.f.vsa_qk8,
                     (s.nb as u32, s.heads as u32, 1),
-                    (128, 1, 1),
+                    (256, 1, 1),
                     &[
                         Arg::P(self.ptr(q)),
                         Arg::P(self.ptr(k)),

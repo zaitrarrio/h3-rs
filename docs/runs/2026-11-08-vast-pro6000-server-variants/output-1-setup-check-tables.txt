@@ -1,0 +1,30 @@
+watchdog armed 10800
+name, driver_version, power.limit [W], memory.total [MiB]
+NVIDIA RTX PRO 6000 Blackwell Server Edition, 615.71.09, 600.00 W, 97887 MiB
+256
+overlay         450G   22G  429G   5% /
+total 197544
+drwxr-xr-x 2 root root        84 Nov  8 23:26 .
+drwxr-xr-x 7 root root       109 Nov  8 23:26 ..
+-rw-r--r-- 1 root root   1865499 Nov  8 23:26 first.png
+-rw-r--r-- 1 root root   5959746 Nov  8 23:26 fox.mp4
+-rw-r--r-- 1 root root    659534 Nov  8 23:26 fox.wav
+-rw-r--r-- 1 root root 191988517 Nov  8 23:26 fox.y4m
+-rw-r--r-- 1 root root   1795589 Nov  8 23:26 last.png
+== check default
+cuda NVIDIA RTX PRO 6000 Blackwell Server Edition (sm_120)
+all 109 checks pass (tolerance 3e-2)
+pika 5.2G
+regen 20G
+0
+weights 265G in 487s
+196G	/w/h3
+== adaln tables, base (50 uniform points)
+omni 66G
+99 timesteps [0.0, 0.0017331243, 0.0035335422, 0.0054053664, 0.0068965554, 0.007352948, 0.009380877, 0.011494219, 0.013698697, 0.0139859915, 0.015999973, 0.01840496, 0.020920575, 0.021276593, 0.023554623, 0.026315868, 0.028777063, 0.029213548, 0.032258153, 0.03546101, 0.0364964, 0.03883493, 0.042393982, 0.0444445, 0.046153843, 0.050131917, 0.052631617, 0.054347813, 0.058823586, 0.061068773, 0.0635
+
+real	3m23.899s
+user	1m37.275s
+sys	1m48.519s
+exit 124
+

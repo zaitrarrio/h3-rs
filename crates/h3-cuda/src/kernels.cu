@@ -1332,10 +1332,12 @@ extern "C" __global__ void fw_vsa_kmean2(u64 part_, u64 kmean_, int seq, int d, 
 }
 // INT8 codes of Q and K − kmean per (head, tile) with one scale each
 // (max |x| / 127, codes round to nearest even, [−127, 127]); the host twin is
-// h3_core::vsa::qk8_round. Grid (nb, heads), 128 threads, d % 4 == 0.
-extern "C" __global__ void __launch_bounds__(128) fw_vsa_qk8(u64 q_, u64 k_, u64 slot_, u64 bsz_, u64 kmean_, u64 q8_, u64 k8_,
+// h3_core::vsa::qk8_round. Grid (nb, heads), 256 threads, d % 4 == 0, d ≤ 128,
+// tile ≤ 128 rows: warp w holds rows w, w+8, … in registers across the
+// max pass and the rounding pass, so Q and K are read once (not twice).
+extern "C" __global__ void __launch_bounds__(256) fw_vsa_qk8(u64 q_, u64 k_, u64 slot_, u64 bsz_, u64 kmean_, u64 q8_, u64 k8_,
                                                              u64 qsc_, u64 ksc_, int heads, int seq, int d, int nb, int te) {
-    __shared__ float red[2][4];
+    __shared__ float red[2][8];
     __shared__ float sc[2];
     const bf16_t *q = (const bf16_t*)q_, *k = (const bf16_t*)k_;
     const unsigned *slot = (const unsigned*)slot_, *bsz = (const unsigned*)bsz_;
@@ -1344,47 +1346,54 @@ extern "C" __global__ void __launch_bounds__(128) fw_vsa_qk8(u64 q_, u64 k_, u64
     const int t = blockIdx.x, h = blockIdx.y, tid = threadIdx.x, warp = tid >> 5, lane = tid & 31;
     const unsigned n = bsz[t];
     const int d4 = d >> 2;
-    float qm = 0.0f, km = 0.0f;
-    if (lane < d4) {
-        for (unsigned i = warp; i < n; i += 4) {
-            const long row = ((long)h * seq + slot[(long)t * te + i]) * d + lane * 4;
-            const uint2 wq = *(const uint2*)(q + row), wk = *(const uint2*)(k + row);
-            qm = fmaxf(qm, fmaxf(fmaxf(fabsf(__uint_as_float(wq.x << 16)), fabsf(__uint_as_float(wq.x & 0xffff0000u))),
-                                 fmaxf(fabsf(__uint_as_float(wq.y << 16)), fabsf(__uint_as_float(wq.y & 0xffff0000u)))));
-            km = fmaxf(km, fmaxf(fmaxf(fabsf(__uint_as_float(wk.x << 16) - kmean[lane * 4]), fabsf(__uint_as_float(wk.x & 0xffff0000u) - kmean[lane * 4 + 1])),
-                                 fmaxf(fabsf(__uint_as_float(wk.y << 16) - kmean[lane * 4 + 2]), fabsf(__uint_as_float(wk.y & 0xffff0000u) - kmean[lane * 4 + 3]))));
+    const bool act = lane < d4;
+    float km0 = 0.0f, km1 = 0.0f, km2 = 0.0f, km3 = 0.0f;
+    if (act) { km0 = kmean[lane * 4]; km1 = kmean[lane * 4 + 1]; km2 = kmean[lane * 4 + 2]; km3 = kmean[lane * 4 + 3]; }
+    uint2 wq[16], wk[16];
+    long rows[16];
+    float qm = 0.0f, kmx = 0.0f;
+    #pragma unroll
+    for (int j = 0; j < 16; ++j) {
+        const unsigned i = warp + 8u * j;
+        rows[j] = -1;
+        wq[j] = make_uint2(0u, 0u); wk[j] = make_uint2(0u, 0u);
+        if (act && i < n) {
+            rows[j] = ((long)h * seq + slot[(long)t * te + i]) * d + lane * 4;
+            wq[j] = *(const uint2*)(q + rows[j]); wk[j] = *(const uint2*)(k + rows[j]);
+            qm = fmaxf(qm, fmaxf(fmaxf(fabsf(__uint_as_float(wq[j].x << 16)), fabsf(__uint_as_float(wq[j].x & 0xffff0000u))),
+                                 fmaxf(fabsf(__uint_as_float(wq[j].y << 16)), fabsf(__uint_as_float(wq[j].y & 0xffff0000u)))));
+            kmx = fmaxf(kmx, fmaxf(fmaxf(fabsf(__uint_as_float(wk[j].x << 16) - km0), fabsf(__uint_as_float(wk[j].x & 0xffff0000u) - km1)),
+                                   fmaxf(fabsf(__uint_as_float(wk[j].y << 16) - km2), fabsf(__uint_as_float(wk[j].y & 0xffff0000u) - km3))));
         }
     }
-    for (int o = 16; o > 0; o >>= 1) { qm = fmaxf(qm, __shfl_xor_sync(0xffffffffu, qm, o)); km = fmaxf(km, __shfl_xor_sync(0xffffffffu, km, o)); }
-    if (lane == 0) { red[0][warp] = qm; red[1][warp] = km; }
+    for (int o = 16; o > 0; o >>= 1) { qm = fmaxf(qm, __shfl_xor_sync(0xffffffffu, qm, o)); kmx = fmaxf(kmx, __shfl_xor_sync(0xffffffffu, kmx, o)); }
+    if (lane == 0) { red[0][warp] = qm; red[1][warp] = kmx; }
     __syncthreads();
     if (tid == 0) {
-        const float qmax = fmaxf(fmaxf(red[0][0], red[0][1]), fmaxf(red[0][2], red[0][3]));
-        const float kmax = fmaxf(fmaxf(red[1][0], red[1][1]), fmaxf(red[1][2], red[1][3]));
+        float qmax = red[0][0], kmax = red[1][0];
+        for (int w = 1; w < 8; ++w) { qmax = fmaxf(qmax, red[0][w]); kmax = fmaxf(kmax, red[1][w]); }
         sc[0] = qmax / 127.0f; sc[1] = kmax / 127.0f;
         ((float*)qsc_)[(long)h * nb + t] = sc[0];
         ((float*)ksc_)[(long)h * nb + t] = sc[1];
     }
     __syncthreads();
     const float qi = sc[0] > 0.0f ? 1.0f / sc[0] : 0.0f, ki = sc[1] > 0.0f ? 1.0f / sc[1] : 0.0f;
-    if (lane < d4) {
-        for (unsigned i = warp; i < n; i += 4) {
-            const long row = ((long)h * seq + slot[(long)t * te + i]) * d + lane * 4;
-            const uint2 wq = *(const uint2*)(q + row), wk = *(const uint2*)(k + row);
-            const float qv[4] = {__uint_as_float(wq.x << 16), __uint_as_float(wq.x & 0xffff0000u), __uint_as_float(wq.y << 16), __uint_as_float(wq.y & 0xffff0000u)};
-            const float kv[4] = {__uint_as_float(wk.x << 16) - kmean[lane * 4], __uint_as_float(wk.x & 0xffff0000u) - kmean[lane * 4 + 1],
-                                 __uint_as_float(wk.y << 16) - kmean[lane * 4 + 2], __uint_as_float(wk.y & 0xffff0000u) - kmean[lane * 4 + 3]};
-            unsigned pq = 0u, pk = 0u;
-            #pragma unroll
-            for (int j = 0; j < 4; ++j) {
-                const int cq = max(-127, min(127, __float2int_rn(qv[j] * qi)));
-                const int ck = max(-127, min(127, __float2int_rn(kv[j] * ki)));
-                pq |= ((unsigned)cq & 0xffu) << (8 * j);
-                pk |= ((unsigned)ck & 0xffu) << (8 * j);
-            }
-            *(unsigned*)(q8 + row) = pq;
-            *(unsigned*)(k8 + row) = pk;
+    #pragma unroll
+    for (int j = 0; j < 16; ++j) {
+        if (rows[j] < 0) continue;
+        const float qv[4] = {__uint_as_float(wq[j].x << 16), __uint_as_float(wq[j].x & 0xffff0000u), __uint_as_float(wq[j].y << 16), __uint_as_float(wq[j].y & 0xffff0000u)};
+        const float kv[4] = {__uint_as_float(wk[j].x << 16) - km0, __uint_as_float(wk[j].x & 0xffff0000u) - km1,
+                             __uint_as_float(wk[j].y << 16) - km2, __uint_as_float(wk[j].y & 0xffff0000u) - km3};
+        unsigned pq = 0u, pk = 0u;
+        #pragma unroll
+        for (int c = 0; c < 4; ++c) {
+            const int cq = max(-127, min(127, __float2int_rn(qv[c] * qi)));
+            const int ck = max(-127, min(127, __float2int_rn(kv[c] * ki)));
+            pq |= ((unsigned)cq & 0xffu) << (8 * c);
+            pk |= ((unsigned)ck & 0xffu) << (8 * c);
         }
+        *(unsigned*)(q8 + rows[j]) = pq;
+        *(unsigned*)(k8 + rows[j]) = pk;
     }
 }
 
