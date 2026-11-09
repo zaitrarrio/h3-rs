@@ -1,0 +1,24 @@
+20G	/w/regen
+MERGE_VERIFY.json
+lora_config.json
+module_ranks.json
+open_h3_regenerate_2k_lora.safetensors
+sharp_curve_branches.safetensors
+-rw-r--r-- 1 root root 32800 Nov  9 01:23 /w/assets/adaln_t_table.bin
+== Open-H3-Regenerate-2K from the 768p fox draft (3 Euler forwards at 2560x1440)
+Error: weights: missing tensor `blocks.0.attn.to_q.weight`
+real	2m5.324s
+user	17m48.676s
+sys	0m45.910s
+[in#0 @ 0x584f2a8d5380] Error opening input: No such file or directory
+Error opening input file /w/regen.y4m.
+Error opening input files: No such file or directory
+curl: Can't open '/w/regen-grid.png'
+curl: try 'curl --help' or 'curl --manual' for more information
+[in#0 @ 0x5a3a590f33c0] Error opening input: No such file or directory
+Error opening input file /w/regen.y4m.
+Error opening input files: No such file or directory
+curl: Can't open '/w/regen.mp4'
+curl: try 'curl --help' or 'curl --manual' for more information
+exit 26
+

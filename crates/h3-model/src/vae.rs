@@ -1047,4 +1047,37 @@ mod tests {
         assert_eq!((out.c, out.t, out.h, out.w), (3, 5, 32, 48));
         assert!(out.data.iter().all(|v| (0.0..=1.0).contains(v)));
     }
+
+    /// A source in the original `vae_fast` layout stores one fused `to_qkv`
+    /// per decoder block; the loader must read it as q | k | v.
+    struct FusedQkv(Synthetic);
+    impl h3_core::weights::WeightSource for FusedQkv {
+        fn contains(&self, name: &str) -> bool {
+            !name.contains(".attn.to_q.") && !name.contains(".attn.to_k.") && !name.contains(".attn.to_v.") && self.0.contains(name)
+        }
+        fn get(&self, name: &str, shape: &[usize]) -> h3_core::Result<Vec<f32>> {
+            if let Some((p, rest)) = name.split_once(".attn.to_qkv.") {
+                let per: Vec<usize> = std::iter::once(shape[0] / 3).chain(shape[1..].iter().copied()).collect();
+                let mut v = Vec::new();
+                for m in ["to_q", "to_k", "to_v"] {
+                    v.extend(self.0.get(&format!("{p}.attn.{m}.{rest}"), &per)?);
+                }
+                return Ok(v);
+            }
+            self.0.get(name, shape)
+        }
+    }
+
+    #[test]
+    fn decoder_reads_a_fused_to_qkv() {
+        let be = Cpu;
+        let cfg = VideoVaeConfig::tiny();
+        let split = VideoVae::load(&be, cfg.clone(), &Synthetic { seed: 2 }, false, true).unwrap();
+        let fused = VideoVae::load(&be, cfg, &FusedQkv(Synthetic { seed: 2 }), false, true).unwrap();
+        let mut r = Rng::new(5);
+        let z = Volume::from_data(4, 2, 2, 3, r.uniform(4 * 2 * 2 * 3, 1.0));
+        let a = split.decode_clip(&be, &z, None).unwrap();
+        let b = fused.decode_clip(&be, &z, None).unwrap();
+        assert_eq!(a.data, b.data);
+    }
 }
