@@ -12,8 +12,8 @@ uploading `<run>/out/N.log` after each (rr.py out N). Weights are fetched by
 commands built with fetch_plan.py (idempotent, size-checked, add-only on the
 volume). The boot log is `<run>/boot.log` (rr.py log). The pod never exits
 on its own: a command terminates it through the REST API with the key in its
-env (`terminate` below), and `H3_POD_HOURS` (default 4) arms a backstop that
-does the same.
+env (`terminate` below, which first uploads the command's output so far), and
+`H3_POD_HOURS` (default 4) arms a backstop that does the same.
 """
 import os, shlex, sys
 exec(open(os.path.join(os.path.dirname(__file__), "..", "vast", "r2.py")).read())
@@ -25,8 +25,10 @@ N = 40
 L = ["#!/bin/bash", "set -u", "LOG=/root/boot.log", "exec >>$LOG 2>&1",
      f"LOGPUT={shlex.quote(put(run + '/boot.log'))}",
      'up() { curl -s -X PUT --upload-file "$1" "$2" >/dev/null; }',
-     'terminate() { curl -sS -X DELETE -A h3-rs-pod/1 -H "Authorization: Bearer $RUNPOD_API_KEY" "https://rest.runpod.io/v1/pods/$RUNPOD_POD_ID"; }',
-     'export -f terminate',
+     # A command that terminates the pod would lose its own output: upload the in-flight out.log first.
+     'terminate() { [ -n "${OUT_URL:-}" ] && up /root/out.log "$OUT_URL"; up $LOG "$LOGPUT"; '
+     'curl -sS -X DELETE -A h3-rs-pod/1 -H "Authorization: Bearer $RUNPOD_API_KEY" "https://rest.runpod.io/v1/pods/$RUNPOD_POD_ID"; }',
+     'export -f up terminate; export LOG LOGPUT',
      f'(sleep {int(hours * 3600)}; echo "backstop: terminating after {hours} h"; while :; do terminate; sleep 120; done) &',
      '(while true; do sleep 20; up $LOG "$LOGPUT"; done) &',
      'echo "== boot $(date -u) pod $RUNPOD_POD_ID"', "nvidia-smi", "free -g; nproc; df -h / /workspace",
@@ -42,7 +44,7 @@ L = ["#!/bin/bash", "set -u", "LOG=/root/boot.log", "exec >>$LOG 2>&1",
      f"for i in $(seq 0 {N - 1}); do",
      '  until curl -sf -o /root/cmd.sh "${CMD[$i]}"; do sleep 10; done',
      '  echo "== cmd $((i+1)) $(date -u)"',
-     '  (cd /w && timeout 7200 bash /root/cmd.sh) > /root/out.log 2>&1; echo "exit $?" >> /root/out.log',
+     '  export OUT_URL="${OUT[$i]}"; (cd /w && timeout 7200 bash /root/cmd.sh) > /root/out.log 2>&1; echo "exit $?" >> /root/out.log',
      '  up /root/out.log "${OUT[$i]}"; up $LOG "$LOGPUT"', "done",
      "echo 'all 40 commands ran'; terminate; sleep 600"]
 path = "/tmp/h3-runpod-boot.sh"
