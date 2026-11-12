@@ -103,6 +103,16 @@ State and invariants only; the reasoning is in `docs/design.md`.
   mistake) and arm the destroy timer on the box (`nohup setsid … sleep …
   DELETE /api/v0/instances/<id>/` with the instance key) plus a final
   self-destroy command: a timer in the controlling session dies with it.
+  RunPod (`scripts/runpod/`, same R2 command channel): the EU network
+  volume `fv-weights-h3-ltx-500` (500 GB, EU-RO-1, shared with fastvideo-rs,
+  add-only, `/workspace/weights/<tree>/` with `.complete` / `.fv-revision`)
+  holds h3-base, h3-ref2va, the 4-step LoRA, pika-h3-flex,
+  open-h3-regenerate-2k, the base and Pika AdaLN tables and the fox assets
+  (`h3-rs/`), 451 of 500 GB; V2, Omni, Trim NVFP4 and a stored MXFP8 do not
+  fit. It is a network filesystem: weight-streaming loads read at
+  ~0.5 GB/s (Pika load 490–566 s, AdaLN tables 2–4× slower than on local
+  NVMe); clip times are unaffected. Pods self-terminate through the REST
+  API (the boot's `terminate`, `H3_POD_HOURS` backstop).
 - WebGPU binds any activation over `max_storage_buffer_binding_size` (2 GiB
   on NVIDIA; the fused QKV is 3.3 GB at 38k tokens) as aligned row
   sub-ranges in `linear` / `head_split`; the FFN chunk is capped by
@@ -141,9 +151,12 @@ State and invariants only; the reasoning is in `docs/design.md`.
   600 W Server Edition (`docs/runs/2026-11-08-vast-pro6000-server-variants`):
   base T2VA (49 × 10.7 s), FL2VA (49 × 12.7 s), Ref2VA (49 × 18.3 s: the
   reference image is 7176 Qwen3-VL tokens at the contract's 2048 short
-  edge), Omni Ref2VA (8 × 14.1 s); Pika Flex and Regen-2K loaded and built
-  their tables but their clips have not run on a GPU since the fixes below.
-  Frames floor: 124 (Pika 120). Backends keep f32 tables and bf16
+  edge), Omni Ref2VA (8 × 14.1 s); on RunPod's Server Edition with the EU
+  weights volume (`docs/runs/2026-11-12-runpod-pro6000-variants`): Pika
+  Flex FL2VA (6 × 12.9 s) and Ref2VA (6 × 18.6 s), Regen-2K (3 × 99 s at
+  2560×1440, base-VAE decode 30.7 s), all coherent. Frames floor: 124
+  (Pika 120). Pika Ref2VA needs `transformer_ref` beside the base
+  components (`--model-dir` of symlinks when they live in two trees). Backends keep f32 tables and bf16
   activations apart: `copy` never mixes them (the vision tower's per-frame
   rope tables are uploaded, not copied). Renoise noise buffers span the
   conditioning rows (`flow_step` reads noise at the rows' offset).

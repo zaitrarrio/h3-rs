@@ -46,10 +46,13 @@ are unaffected. The Hugging Face fetch ran at ~170 MB/s (18.6 GiB in
 | variant, task | load | prompt rows (host) | denoise | decode | status |
 |---|---|---|---|---|---|
 | `pika-flex` FL2VA, 768p bucket, first + last keyframe | 490 s | 2065 in 225 s | **77.1 s** = 6 × 12.75–12.93 s | 8.1 s | clip (`pika-fl2va-frames.png`): the fox approaches between the keyframes, no artifacts |
-| `pika-flex` Ref2VA, one image reference | | | | | first attempt: `transformer_ref` must sit beside the base components (`/w/h3-base` has none); re-run with `h3-rs/h3/` below |
+| `pika-flex` Ref2VA, one image reference | 566 s | 7209 in 542 s | **111.5 s** = 6 × 18.41–18.68 s | 8.5 s | clip (`pika-ref2va-frames.png`), after a first attempt that failed because `transformer_ref` must sit beside the base components (`/w/h3-base` has none): `h3-rs/h3/` composes them |
 | `regen-2k` from the 768p draft, base-VAE decode at 2560×1440 | 397 s | | 3 × 98.8–99.6 s (+ 160 s prepare: draft encode, upscale, tables) | **30.7 s** (36-block decoder, 7 chunks of 100 k rows) | 121 clean frames (`regen-2k-frames.png`, `regen-2k-crop-640x360.png` at 1:1): no 16-pixel grid, needles and fur resolved |
 
-The Pika FL2VA clip is the first conditioned renoise run after 9a5bf77
+Pod cost: 01:27–02:44 UTC, $3.19 ($16.83 → $13.64 on the account; the
+volume's $35/month is separate).
+
+The Pika clips are the first conditioned renoise runs after 9a5bf77
 (the noise rows): the Vast round's `renoise needs noise` panic is gone.
 Regen-2K through the base VAE (4c12af4) replaces the Vast round's grid
 with a clean 2K frame; the decode costs 30.7 s against the broken fast

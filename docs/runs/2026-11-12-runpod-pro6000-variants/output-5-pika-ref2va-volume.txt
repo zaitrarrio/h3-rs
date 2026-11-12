@@ -1,0 +1,41 @@
+total 2960
+drwxrwxrwx 2 root root   26600 Nov 12 02:20 .
+drwxrwxrwx 5 root root 3000119 Nov 12 02:20 ..
+== Pika Ref2VA, one image reference (transformer_ref from h3-ref2va)
+load 565.5s
+prompt: 7209 rows in 541.5s
+run 0: total 131.59s  prepare 0.16s  adaln 0.00s  denoise 111.46s (["18.41", "18.49", "18.58", "18.63", "18.66", "18.68"])  decode 8.52s  audio 0.19s
+30K	/workspace/h3-rs/h3
+195M	/workspace/h3-rs/assets
+362M	/workspace/weights/auxiliary
+374M	/workspace/weights/h3-to-ltx
+663M	/workspace/weights/upscaler
+1.1G	/workspace/h3-rs/tables
+1.3G	/workspace/weights/ltx25-ic-lora-ingredients
+5.2G	/workspace/weights/pika-h3-flex
+6.4G	/workspace/weights/FastH3-4-step-Preview-v1-LoRA
+14G	/workspace/weights/open-h3-regenerate-2k
+36G	/workspace/weights/ltx25-dev
+65G	/workspace/weights/h3-ref2va
+117G	/workspace/weights/ltx25
+206G	/workspace/weights/h3-base
+451G	/workspace
+/workspace/h3-rs/assets:
+total 201820
+drwxrwxrwx 2 root root   2019230 Nov 12 01:30 .
+drwxrwxrwx 5 root root   3000119 Nov 12 02:20 ..
+-rw-rw-rw- 1 root root     32800 Nov 12 01:30 adaln_t_table.bin
+-rw-rw-rw- 1 root root   1865499 Nov 12 01:30 first.png
+-rw-rw-rw- 1 root root   5959746 Nov 12 01:30 fox.mp4
+-rw-rw-rw- 1 root root 191988517 Nov 12 01:30 fox.y4m
+-rw-rw-rw- 1 root root   1795589 Nov 12 01:30 last.png
+
+/workspace/h3-rs/tables:
+total 1066622
+drwxrwxrwx 2 root root   3000101 Nov 12 01:47 .
+drwxrwxrwx 5 root root   3000119 Nov 12 02:20 ..
+-rw-rw-rw- 1 root root 960136844 Nov 12 01:47 base.tables
+-rw-rw-rw- 1 root root 126082292 Nov 12 01:40 pika.tables
+all done; terminating pod jt5y7a5g9mvf45
+exit 0
+

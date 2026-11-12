@@ -120,10 +120,12 @@ time); when the tables do not fit, they are uploaded per step.
    2 GiB binding limits also cap clips above ~38k tokens until activations
    are chunked more widely).
 7. Block streaming with overlapped uploads (now serial); a 24 GB card run.
-8. Variants: re-run Pika Flex FL2VA / Ref2VA and Regen-2K on a Server
-   Edition after the renoise-row and decoder fixes
-   (`docs/runs/2026-11-08-vast-pro6000-server-variants`; the account is
-   out of credit). Ref2VA / Omni prompts are 7.2 k rows and the host
+8. Variants: all of them run (Pika Flex and Regen-2K on RunPod,
+   `docs/runs/2026-11-12-runpod-pro6000-variants`). The RunPod volume
+   lacks V2 / Omni / Trim (45 GB free of 500). Loads from the network
+   volume read at ~0.5 GB/s: a stored MXFP8 DiT (26 GB) would load in
+   ~1 min there against 10 min for the bf16 tree, once it fits.
+   Ref2VA / Omni prompts are 7.2 k rows and the host
    Qwen3-VL takes two minutes: a device text encoder is the next host
    cost. Optional: the Sol-H3-VAE windowed decoder (`vae_fast/`, 24
    blocks, ComfyUI decodes it in ~⅓ of the full decoder's time) needs a row

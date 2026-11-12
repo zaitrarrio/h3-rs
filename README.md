@@ -22,9 +22,10 @@ is a `--variant`:
 Run with the released weights on an RTX PRO 6000 Server Edition
 (`docs/runs/2026-11-08-vast-pro6000-server-variants`): `h3` T2VA / FL2VA /
 Ref2VA, `fasth3-omni` Ref2VA, and `fasth3-v2` / `fasth3-trim` (earlier
-records). `pika-flex` and `regen-2k` load and build their tables; their
-clips hit two CUDA-only bugs there (fixed since: renoise noise rows, the
-Regen decoder choice) and have not been re-run on a GPU yet.
+records). `pika-flex` FL2VA / Ref2VA and `regen-2k` ran on RunPod's Server Edition
+after two fixes (renoise noise rows, the Regen decoder choice;
+`docs/runs/2026-11-12-runpod-pro6000-variants`). Every variant of the
+table has produced a coherent clip from the released weights.
 
 The MLX recipes of the cookbook use the same checkpoints; on Apple GPUs the
 WebGPU backend runs them through Metal.
