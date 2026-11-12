@@ -108,8 +108,8 @@ State and invariants only; the reasoning is in `docs/design.md`.
   with fastvideo-rs, add-only, `/workspace/weights/<tree>/` with
   `.complete` / `.fv-revision` / `.fv-source`) holds h3-base, h3-ref2va,
   h3-8step (V2), fasth3-omni-8step-v1, fasth3-trim-8step-nvfp4, the 4-step
-  LoRA, pika-h3-flex, open-h3-regenerate-2k, the AdaLN tables and the fox
-  assets (`h3-rs/`), the V2 / Omni / base / Pika AdaLN tables
+  LoRA, pika-h3-flex, open-h3-regenerate-2k, the fox assets (`h3-rs/`),
+  the V2 / Omni / base / Pika AdaLN tables
   (`h3-rs/tables/`) and the stored MXFP8 V2 (`h3-8step-mxfp8/`): 689 GB
   (`docs/runs/2026-11-12-runpod-volume-fill`). It is a network
   filesystem: weight-streaming loads read at ~0.5 GB/s (Pika load
