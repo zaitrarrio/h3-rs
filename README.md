@@ -25,7 +25,12 @@ Ref2VA, `fasth3-omni` Ref2VA, and `fasth3-v2` / `fasth3-trim` (earlier
 records). `pika-flex` FL2VA / Ref2VA and `regen-2k` ran on RunPod's Server Edition
 after two fixes (renoise noise rows, the Regen decoder choice;
 `docs/runs/2026-11-12-runpod-pro6000-variants`). Every variant of the
-table has produced a coherent clip from the released weights.
+table has produced a coherent clip from the released weights. The RunPod
+volume now holds every variant's weights (V2, Omni and the Trim NVFP4 file
+added 2026-11-12, plus a stored MXFP8 V2 and the AdaLN tables), and the
+fastest recipe reproduces from it: V2 denoise 37.9 s, decode 5.8 s,
+44.3 s after load on a Server Edition
+(`docs/runs/2026-11-12-runpod-pro6000-v2-omni-trim`).
 
 The MLX recipes of the cookbook use the same checkpoints; on Apple GPUs the
 WebGPU backend runs them through Metal.

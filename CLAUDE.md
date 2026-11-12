@@ -109,7 +109,8 @@ State and invariants only; the reasoning is in `docs/design.md`.
   `.complete` / `.fv-revision` / `.fv-source`) holds h3-base, h3-ref2va,
   h3-8step (V2), fasth3-omni-8step-v1, fasth3-trim-8step-nvfp4, the 4-step
   LoRA, pika-h3-flex, open-h3-regenerate-2k, the AdaLN tables and the fox
-  assets (`h3-rs/`): 665 GB before the tables and the stored MXFP8 V2
+  assets (`h3-rs/`), the V2 / Omni / base / Pika AdaLN tables
+  (`h3-rs/tables/`) and the stored MXFP8 V2 (`h3-8step-mxfp8/`): 689 GB
   (`docs/runs/2026-11-12-runpod-volume-fill`). It is a network
   filesystem: weight-streaming loads read at ~0.5 GB/s (Pika load
   490–566 s, AdaLN tables 2–4× slower than on local NVMe), fetches write
@@ -159,7 +160,11 @@ State and invariants only; the reasoning is in `docs/design.md`.
   edge), Omni Ref2VA (8 × 14.1 s); on RunPod's Server Edition with the EU
   weights volume (`docs/runs/2026-11-12-runpod-pro6000-variants`): Pika
   Flex FL2VA (6 × 12.9 s) and Ref2VA (6 × 18.6 s), Regen-2K (3 × 99 s at
-  2560×1440, base-VAE decode 30.7 s), all coherent. Frames floor: 124
+  2560×1440, base-VAE decode 30.7 s), all coherent; from the filled volume
+  (`docs/runs/2026-11-12-runpod-pro6000-v2-omni-trim`) the V2 best recipe
+  (stored MXFP8, MXFP8 decoder, `--vsa-qk8`, tables) gives denoise 37.9 s /
+  decode 5.8 s / 44.3 s after load (load 129 s, prompt 190 s from the
+  volume) and Omni Ref2VA 8 × 14.1–14.4 s. Frames floor: 124
   (Pika 120). Pika Ref2VA needs `transformer_ref` beside the base
   components (`--model-dir` of symlinks when they live in two trees). Backends keep f32 tables and bf16
   activations apart: `copy` never mixes them (the vision tower's per-frame
