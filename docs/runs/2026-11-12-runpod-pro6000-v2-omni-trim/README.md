@@ -19,9 +19,9 @@ products (timestamps from `ls -la`):
 
 | path | size | written |
 |---|---|---|
-| `h3-rs/tables/v2.tables` (FastH3-V2's 8 DMD knots) | 175 MB | 17:58 |
+| `h3-rs/tables/v2.tables` (FastH3-V2's rung schedule) | 175 MB | 17:58 |
 | `weights/h3-8step-mxfp8/transformer.safetensors` (`h3 quantize --weights mxfp8 --skip-adaln` of V2; `.complete` / `.fv-revision` `3da2ddfe…-mxfp8` / `.fv-source` `h3-rs`) | 25.6 GB | 18:01 |
-| `h3-rs/tables/omni.tables` (Omni's 17 PDD knots) | 165 MB | 18:07 |
+| `h3-rs/tables/omni.tables` (Omni's PDD schedule) | 165 MB | 18:07 |
 
 **689 GB** of 750 in use; `h3-rs/` (tables 1.4 GB, assets 195 MB, the
 `h3/` symlink model directory) beside the weight trees.
@@ -36,9 +36,9 @@ products (timestamps from `ls -la`):
 
 Against the Vast Server Edition numbers for the same recipe
 (`../2026-11-08-vast-pro6000-server-variants`, quantized at load:
-denoise 37.18 s, decode 5.83 s, 43.56 s after load) this pod is 2 %
-slower across the board: the band between two Server Edition boxes
-(cuBLASLt candidate timing, clocks). Omni: 112.4 s = 8 × 14.07 s on Vast,
+denoise 37.18 s, decode 5.83 s, 43.56 s after load) this pod's denoise is
+2 % slower and its decode 1 % faster: the band between two Server
+Edition boxes (cuBLASLt candidate timing, clocks). Omni: 112.4 s = 8 × 14.07 s on Vast,
 114.4 s here. The recipe's numbers hold from the stored file on a network
 volume; what the volume changes is the time before the first step:
 
