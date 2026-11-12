@@ -104,15 +104,20 @@ State and invariants only; the reasoning is in `docs/design.md`.
   DELETE /api/v0/instances/<id>/` with the instance key) plus a final
   self-destroy command: a timer in the controlling session dies with it.
   RunPod (`scripts/runpod/`, same R2 command channel): the EU network
-  volume `fv-weights-h3-ltx-500` (500 GB, EU-RO-1, shared with fastvideo-rs,
-  add-only, `/workspace/weights/<tree>/` with `.complete` / `.fv-revision`)
-  holds h3-base, h3-ref2va, the 4-step LoRA, pika-h3-flex,
-  open-h3-regenerate-2k, the base and Pika AdaLN tables and the fox assets
-  (`h3-rs/`), 451 of 500 GB; V2, Omni, Trim NVFP4 and a stored MXFP8 do not
-  fit. It is a network filesystem: weight-streaming loads read at
-  ~0.5 GB/s (Pika load 490–566 s, AdaLN tables 2–4× slower than on local
-  NVMe); clip times are unaffected. Pods self-terminate through the REST
-  API (the boot's `terminate`, `H3_POD_HOURS` backstop).
+  volume `fv-weights-h3-ltx-500` (750 GB since 2026-11-12, EU-RO-1, shared
+  with fastvideo-rs, add-only, `/workspace/weights/<tree>/` with
+  `.complete` / `.fv-revision` / `.fv-source`) holds h3-base, h3-ref2va,
+  h3-8step (V2), fasth3-omni-8step-v1, fasth3-trim-8step-nvfp4, the 4-step
+  LoRA, pika-h3-flex, open-h3-regenerate-2k, the AdaLN tables and the fox
+  assets (`h3-rs/`): 665 GB before the tables and the stored MXFP8 V2
+  (`docs/runs/2026-11-12-runpod-volume-fill`). It is a network
+  filesystem: weight-streaming loads read at ~0.5 GB/s (Pika load
+  490–566 s, AdaLN tables 2–4× slower than on local NVMe), fetches write
+  at ~300 MB/s; clip times are unaffected. Pods self-terminate through the
+  REST API (the boot's `terminate`, which uploads the running command's
+  output first; `H3_POD_HOURS` backstop). EU-RO-1 stock is intermittent
+  for every card: hunt with a retry loop, never two pods on the volume at
+  once.
 - WebGPU binds any activation over `max_storage_buffer_binding_size` (2 GiB
   on NVIDIA; the fused QKV is 3.3 GB at 38k tokens) as aligned row
   sub-ranges in `linear` / `head_split`; the FFN chunk is capped by
