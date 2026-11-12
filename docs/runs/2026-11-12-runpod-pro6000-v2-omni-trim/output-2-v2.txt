@@ -1,0 +1,42 @@
++ T=/workspace/h3-rs/tables
++ O=/root/out
++ mkdir -p /root/out /workspace/h3-rs/tables
++ echo '== V2 AdaLN tables'
+== V2 AdaLN tables
++ '[' -f /workspace/h3-rs/tables/v2.tables ']'
++ echo '== stored MXFP8 V2 (h3 quantize --skip-adaln)'
+== stored MXFP8 V2 (h3 quantize --skip-adaln)
++ mkdir -p /workspace/weights/h3-8step-mxfp8
++ '[' -f /workspace/weights/h3-8step-mxfp8/transformer.safetensors ']'
++ d=/workspace/weights/h3-8step-mxfp8
++ '[' -f /workspace/weights/h3-8step-mxfp8/.complete ']'
++ ls -la /workspace/weights/h3-8step-mxfp8
+total 25005812
+drwxrwxrwx  2 root root     3002384 Nov 12 18:01 .
+drwxrwxrwx 17 root root     3068719 Nov 12 17:58 ..
+-rw-rw-rw-  1 root root          81 Nov 12 18:01 .complete
+-rw-rw-rw-  1 root root          47 Nov 12 18:01 .fv-revision
+-rw-rw-rw-  1 root root           6 Nov 12 18:01 .fv-source
+-rw-rw-rw-  1 root root 25599877328 Nov 12 18:01 transformer.safetensors
++ echo '== V2 clip: stored MXFP8 + MXFP8 decoder + --vsa-qk8 from the volume'
+== V2 clip: stored MXFP8 + MXFP8 decoder + --vsa-qk8 from the volume
++ grep -E '^run |^load|prompt:|rror|panick' /root/out/v2.log
+load 129.0s
+prompt: 33 rows in 189.8s
+run 0: total 44.27s  prepare 0.26s  adaln 0.00s  denoise 37.94s (["4.88", "4.70", "4.71", "4.72", "4.73", "4.73", "4.74", "4.74"])  decode 5.79s  audio 0.19s
++ grid /root/out/v2.y4m /root/out/v2-grid.png
++ ffmpeg -loglevel error -y -i /root/out/v2.y4m -vf 'select='\''eq(n\,0)+eq(n\,40)+eq(n\,80)+eq(n\,120)'\'',scale=448:-1,tile=2x2' -vframes 1 /root/out/v2-grid.png
++ curl -s -X PUT --upload-file /root/out/v2.log 'https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/runpod-20261112-1632/results/v2-best.log?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261112%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261112T193755Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=ad9d5364c3f6f5c96afa19bc1b6d18bd29f86a635f2d5e229508a34acad80113'
++ curl -s -X PUT --upload-file /root/out/v2-grid.png 'https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/runpod-20261112-1632/results/v2-best-grid.png?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261112%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261112T193755Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=39f76bfb458887aa827265626f4887aaecc8bb88477a74bf44ce067ac92dd369'
++ ffmpeg -loglevel error -y -i /root/out/v2.y4m -i /root/out/v2.wav -c:v libx264 -crf 18 -pix_fmt yuv420p -c:a aac -b:a 192k -shortest /root/out/v2.mp4
++ curl -s -X PUT --upload-file /root/out/v2.mp4 'https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/runpod-20261112-1632/results/v2-best.mp4?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261112%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261112T193755Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=ec21eb5b467219877ea42627236315ae729e7a27ad3b5a4e3676477ddd78e5e3'
++ ls -la /workspace/h3-rs/tables
+total 1398116
+drwxrwxrwx 2 root root   3000132 Nov 12 18:07 .
+drwxrwxrwx 5 root root   3000151 Nov 12 02:20 ..
+-rw-rw-rw- 1 root root 960136844 Nov 12 01:47 base.tables
+-rw-rw-rw- 1 root root 164875540 Nov 12 18:07 omni.tables
+-rw-rw-rw- 1 root root 126082292 Nov 12 01:40 pika.tables
+-rw-rw-rw- 1 root root 174573856 Nov 12 17:58 v2.tables
+exit 0
+
