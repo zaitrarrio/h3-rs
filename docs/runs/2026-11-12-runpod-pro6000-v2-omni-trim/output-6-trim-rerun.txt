@@ -1,0 +1,34 @@
++ O=/root/out
++ mkdir -p /root/out
++ nvidia-smi --query-gpu=name,driver_version,power.limit --format=csv,noheader
+NVIDIA RTX PRO 6000 Blackwell Server Edition, 595.91.07, 600.00 W
++ df -h /workspace
++ cat
+Filesystem                Size  Used Avail Use% Mounted on
+mfs#euro.runpod.net:9421  2.3P  1.9P  406T  83% /workspace
++ F=/w/fasth3-trim-8step-nvfp4/diffusion_models/fastvideo_fasth3_trim_8step_nvfp4.safetensors
++ ls -la /w/fasth3-trim-8step-nvfp4/diffusion_models/fastvideo_fasth3_trim_8step_nvfp4.safetensors
+-rw-rw-rw- 1 root root 11894623166 Nov 12 17:52 /w/fasth3-trim-8step-nvfp4/diffusion_models/fastvideo_fasth3_trim_8step_nvfp4.safetensors
++ echo '== Trim NVFP4 clip from the ComfyUI single file (volume)'
+== Trim NVFP4 clip from the ComfyUI single file (volume)
++ grep -E '^cuda|^run |^load|prompt:|rror|panick|layout' /root/out/trim.log
+cuda NVIDIA RTX PRO 6000 Blackwell Server Edition (sm_120)
+/w/fasth3-trim-8step-nvfp4/diffusion_models/fastvideo_fasth3_trim_8step_nvfp4.safetensors: ComfyUI single-file layout
+load 119.2s
+prompt: 33 rows in 205.9s
+run 0: total 55.80s  prepare 0.34s  adaln 2.93s  denoise 44.05s (["5.46", "5.48", "5.49", "5.51", "5.52", "5.52", "5.53", "5.54"])  decode 8.19s  audio 0.19s
++ grid /root/out/trim.y4m /root/out/trim-grid.png
++ ffmpeg -loglevel error -y -i /root/out/trim.y4m -vf 'select='\''eq(n\,0)+eq(n\,40)+eq(n\,80)+eq(n\,120)'\'',scale=448:-1,tile=2x2' -vframes 1 /root/out/trim-grid.png
++ curl -s -X PUT --upload-file /root/out/trim.log 'https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/runpod-20261112-trim/results/trim.log?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261112%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261112T195936Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=c70c285ecb0bbaf0b5371e6e9ce9353e167a1ae695c9642c2b1e393c7eacaa22'
++ curl -s -X PUT --upload-file /root/out/trim-grid.png 'https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/runpod-20261112-trim/results/trim-grid.png?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261112%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261112T195936Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=eef639d991ec414f5e61ceecd15a6e674c375faf6a91a406ede0c74b3fe7225b'
++ ffmpeg -loglevel error -y -i /root/out/trim.y4m -i /root/out/trim.wav -c:v libx264 -crf 18 -pix_fmt yuv420p -c:a aac -b:a 192k -shortest /root/out/trim.mp4
++ curl -s -X PUT --upload-file /root/out/trim.mp4 'https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/runpod-20261112-trim/results/trim.mp4?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261112%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261112T195937Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=cbc13d7e9a0b2edcd41c542b88a139ea3b44237373c305dda0581a91d24ed439'
++ du -sh /workspace
+689G	/workspace
++ echo 'trim done; terminating pod thrng4zrvktbyy'
+trim done; terminating pod thrng4zrvktbyy
++ terminate
++ '[' -n 'https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/runpod-20261112-trim/out/1.log?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261112%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261112T195942Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=7d673e10eb7439f794999d125425accb150eb9d33c5b9ac83e640421ae0a0f0a' ']'
++ up /root/out.log 'https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/runpod-20261112-trim/out/1.log?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261112%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261112T195942Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=7d673e10eb7439f794999d125425accb150eb9d33c5b9ac83e640421ae0a0f0a'
++ curl -s -X PUT --upload-file /root/out.log 'https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/runpod-20261112-trim/out/1.log?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261112%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261112T195942Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=7d673e10eb7439f794999d125425accb150eb9d33c5b9ac83e640421ae0a0f0a'
+

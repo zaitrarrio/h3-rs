@@ -29,8 +29,8 @@ table has produced a coherent clip from the released weights. The RunPod
 volume now holds every variant's weights (V2, Omni and the Trim NVFP4 file
 added 2026-11-12, plus a stored MXFP8 V2 and the AdaLN tables), and the
 fastest recipe reproduces from it: V2 denoise 37.9 s, decode 5.8 s,
-44.3 s after load on a Server Edition
-(`docs/runs/2026-11-12-runpod-pro6000-v2-omni-trim`).
+44.3 s after load on a Server Edition; Omni Ref2VA 8 × 14.2 s and Trim
+NVFP4 8 × 5.5 s there (`docs/runs/2026-11-12-runpod-pro6000-v2-omni-trim`).
 
 The MLX recipes of the cookbook use the same checkpoints; on Apple GPUs the
 WebGPU backend runs them through Metal.

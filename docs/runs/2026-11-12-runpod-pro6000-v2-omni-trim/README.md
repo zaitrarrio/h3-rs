@@ -52,4 +52,23 @@ volume; what the volume changes is the time before the first step:
 
 ## Trim NVFP4 (follow-up pod)
 
-(filled in below once the follow-up pod has run)
+Pod `thrng4zrvktbyy` (same card class, $2.69/h, 20:26–20:33 UTC, after 17
+refused creates): `--variant fasth3-trim --model-dir /w/h3-base
+--transformer …/diffusion_models/fastvideo_fasth3_trim_8step_nvfp4.safetensors`
+(`output-6-trim-rerun.txt`, `trim-nvfp4.log`):
+
+| load | prompt rows | AdaLN (`adaln_t_table` lerp) | denoise | decode | status |
+|---|---|---|---|---|---|
+| 119.2 s | 33 in 205.9 s | 2.93 s | **44.05 s** = 5.46, then 5.48–5.54 s × 7 | 8.19 s (26-block Trim decoder) | 55.80 s after load; clip `trim-nvfp4-frames.png`: the Trim scene (fox crossing a sunlit snowy forest), coherent |
+
+First Trim number on a 600 W Server Edition (the Max-Q ran 67.8 s denoise,
+8.2–8.6 s per forward). 42 NVFP4 blocks at 5.5 s per forward against V2's
+47 MXFP8 blocks at 4.7 s: Trim's NVFP4 codes are expanded into bf16
+scratch per GEMM (no FP4 tensor-core path yet), so its weight format
+costs more than its five fewer blocks save.
+
+## Cost
+
+Three pods on this account today: the fill (4090, ~$1.7), the V2 / Omni
+pod (~20 min, ~$0.9) and the Trim pod (~7 min, ~$0.3). The volume is
+$52.50/month at 750 GB.

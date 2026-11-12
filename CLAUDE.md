@@ -164,7 +164,9 @@ State and invariants only; the reasoning is in `docs/design.md`.
   (`docs/runs/2026-11-12-runpod-pro6000-v2-omni-trim`) the V2 best recipe
   (stored MXFP8, MXFP8 decoder, `--vsa-qk8`, tables) gives denoise 37.9 s /
   decode 5.8 s / 44.3 s after load (load 129 s, prompt 190 s from the
-  volume) and Omni Ref2VA 8 × 14.1–14.4 s. Frames floor: 124
+  volume), Omni Ref2VA 8 × 14.1–14.4 s and Trim NVFP4 from the ComfyUI
+  file 8 × 5.5 s (denoise 44.1 s, decode 8.2 s: NVFP4 is expanded per
+  GEMM, no FP4 tensor-core path). Frames floor: 124
   (Pika 120). Pika Ref2VA needs `transformer_ref` beside the base
   components (`--model-dir` of symlinks when they live in two trees). Backends keep f32 tables and bf16
   activations apart: `copy` never mixes them (the vision tower's per-frame
