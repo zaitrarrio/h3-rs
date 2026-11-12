@@ -1,0 +1,53 @@
+"""Write and upload a RunPod pod's bootstrap script; print the start line.
+
+    H3_RUN=runpod-20261112-1200 python3 make_boot.py BIN_KEY
+
+The pod runs `bash -c "<start line>"` (rp.py create) on
+nvidia/cuda:12.8.1-runtime-ubuntu24.04 with the weights volume at
+/workspace. The bootstrap installs curl / Vulkan / X11-GL libs / ffmpeg,
+fetches the h3 binary from `<run>/BIN_KEY` in the h3-runs bucket, links
+/w/<tree> to /workspace/weights/<tree> for every tree there, then runs
+`<run>/cmd/N.sh` for N = 1..40 as they appear (rr.py cmd N FILE),
+uploading `<run>/out/N.log` after each (rr.py out N). Weights are fetched by
+commands built with fetch_plan.py (idempotent, size-checked, add-only on the
+volume). The boot log is `<run>/boot.log` (rr.py log). The pod never exits
+on its own: a command terminates it through the REST API with the key in its
+env (`terminate` below), and `H3_POD_HOURS` (default 4) arms a backstop that
+does the same.
+"""
+import os, shlex, sys
+exec(open(os.path.join(os.path.dirname(__file__), "..", "vast", "r2.py")).read())
+run = os.environ["H3_RUN"]; B = os.environ.get("H3_BUCKET", "h3-runs"); EXP = 6 * 3600
+hours = float(os.environ.get("H3_POD_HOURS", "4"))
+get = lambda b, k: s3.generate_presigned_url("get_object", Params={"Bucket": b, "Key": k}, ExpiresIn=EXP)
+put = lambda k: s3.generate_presigned_url("put_object", Params={"Bucket": B, "Key": k}, ExpiresIn=EXP)
+N = 40
+L = ["#!/bin/bash", "set -u", "LOG=/root/boot.log", "exec >>$LOG 2>&1",
+     f"LOGPUT={shlex.quote(put(run + '/boot.log'))}",
+     'up() { curl -s -X PUT --upload-file "$1" "$2" >/dev/null; }',
+     'terminate() { curl -sS -X DELETE -A h3-rs-pod/1 -H "Authorization: Bearer $RUNPOD_API_KEY" "https://rest.runpod.io/v1/pods/$RUNPOD_POD_ID"; }',
+     'export -f terminate',
+     f'(sleep {int(hours * 3600)}; echo "backstop: terminating after {hours} h"; while :; do terminate; sleep 120; done) &',
+     '(while true; do sleep 20; up $LOG "$LOGPUT"; done) &',
+     'echo "== boot $(date -u) pod $RUNPOD_POD_ID"', "nvidia-smi", "free -g; nproc; df -h / /workspace",
+     "export DEBIAN_FRONTEND=noninteractive",
+     "apt-get update -qq && apt-get install -y -qq curl ca-certificates libvulkan1 vulkan-tools ffmpeg "
+     "libx11-6 libxext6 libegl1 libgl1 libglvnd0 >/dev/null && echo 'apt ok'",
+     "mkdir -p /w /workspace/weights /workspace/h3-rs",
+     'for t in /workspace/weights/*/; do t=${t%/}; ln -sfn "$t" "/w/$(basename "$t")"; done; ls -la /w',
+     f"curl -sf -o /w/h3-bin {shlex.quote(get(B, run + '/' + sys.argv[1]))} && chmod +x /w/h3-bin && echo 'binary ok'",
+     'up $LOG "$LOGPUT"', "echo READY",
+     "CMD=(" + " ".join(shlex.quote(get(B, f"{run}/cmd/{i}.sh")) for i in range(1, N + 1)) + ")",
+     "OUT=(" + " ".join(shlex.quote(put(f"{run}/out/{i}.log")) for i in range(1, N + 1)) + ")",
+     f"for i in $(seq 0 {N - 1}); do",
+     '  until curl -sf -o /root/cmd.sh "${CMD[$i]}"; do sleep 10; done',
+     '  echo "== cmd $((i+1)) $(date -u)"',
+     '  (cd /w && timeout 7200 bash /root/cmd.sh) > /root/out.log 2>&1; echo "exit $?" >> /root/out.log',
+     '  up /root/out.log "${OUT[$i]}"; up $LOG "$LOGPUT"', "done",
+     "echo 'all 40 commands ran'; terminate; sleep 600"]
+path = "/tmp/h3-runpod-boot.sh"
+open(path, "w").write("\n".join(L) + "\n")
+s3.upload_file(path, B, run + "/boot.sh")
+url = get(B, run + "/boot.sh")
+print("export DEBIAN_FRONTEND=noninteractive; (apt-get update -qq && apt-get install -y -qq curl ca-certificates) >/root/pre.log 2>&1; "
+      f"curl -sf -o /root/boot.sh '{url}' && bash /root/boot.sh; sleep 3600")
