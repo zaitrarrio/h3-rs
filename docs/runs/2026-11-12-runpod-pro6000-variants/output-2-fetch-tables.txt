@@ -1,0 +1,29 @@
+fetch done in 110s
+5.2G	/workspace/weights/pika-h3-flex
+14G	/workspace/weights/open-h3-regenerate-2k
+362M	/workspace/weights/auxiliary
+374M	/workspace/weights/h3-to-ltx
+663M	/workspace/weights/upscaler
+1.3G	/workspace/weights/ltx25-ic-lora-ingredients
+5.2G	/workspace/weights/pika-h3-flex
+6.4G	/workspace/weights/FastH3-4-step-Preview-v1-LoRA
+14G	/workspace/weights/open-h3-regenerate-2k
+36G	/workspace/weights/ltx25-dev
+65G	/workspace/weights/h3-ref2va
+117G	/workspace/weights/ltx25
+206G	/workspace/weights/h3-base
+== Pika Flex AdaLN tables
+adapter: /w/pika-h3-flex/fl2va/adapter.safetensors
+13 timesteps [0.0, 0.02702701, 0.07692307, 0.100000024, 0.19999999, 0.25, 0.4285714, 0.5, 0.6666667, 0.75, 0.8888889, 0.999, 1.0] → /workspace/h3-rs/tables/pika.tables (126.1 MB) in 575.6s
+
+real	9m43.761s
+user	4m31.002s
+sys	1m14.730s
+== base H3 AdaLN tables (50 uniform points, for future runs)
+99 timesteps [0.0, 0.0017331243, 0.0035335422, 0.0054053664, 0.0068965554, 0.007352948, 0.009380877, 0.011494219, 0.013698697, 0.0139859915, 0.015999973, 0.01840496, 0.020920575, 0.021276593, 0.023554623, 0.026315868, 0.028777063, 0.029213548, 0.032258153, 0.03546101, 0.0364964, 0.03883493, 0.042393982, 0.0444445, 0.046153843, 0.050131917, 0.052631617, 0.054347813, 0.058823586, 0.061068773, 0.0635
+
+real	7m19.048s
+user	1m20.728s
+sys	1m25.307s
+exit 0
+
