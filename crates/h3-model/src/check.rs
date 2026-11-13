@@ -69,6 +69,7 @@ pub trait ErasedBackend {
     fn layer_norm(&self, x: &[f32], rows: usize, dim: usize, w: Option<&[f32]>, b: Option<&[f32]>, eps: f32) -> Vec<f32>;
     fn head_split(&self, src: &[f32], rows: usize, stride: usize, col: usize, heads: usize, hd: usize, norm: Option<(Option<&[f32]>, f32)>, rope: Option<(&[f32], &[f32], usize)>) -> Vec<f32>;
     fn attention(&self, q: &[f32], k: &[f32], v: &[f32], heads: usize, kv: usize, sq: usize, sk: usize, d: usize, causal: bool) -> Vec<f32>;
+    fn attention_qk8(&self, q: &[f32], k: &[f32], v: &[f32], heads: usize, kv: usize, sq: usize, sk: usize, d: usize, causal: bool) -> Vec<f32>;
     fn vsa(&self, q: &[f32], k: &[f32], v: &[f32], gate: Option<&[f32]>, spec: &VsaSpec) -> Vec<f32>;
     fn patchify(&self, latent: &[f32], c: usize, t: usize, h: usize, w: usize, patch: (usize, usize, usize), out_rows: usize, out_row: usize) -> Vec<f32>;
     fn unpatchify(&self, x: &[f32], x_row: usize, stride: usize, col: usize, c: usize, t: usize, h: usize, w: usize, patch: (usize, usize, usize)) -> Vec<f32>;
@@ -232,6 +233,12 @@ impl<B: Backend> ErasedBackend for BackendRunner<'_, B> {
         let be = self.0;
         let o = be.alloc(sq * heads * d);
         be.attention(&be.upload(q), &be.upload(k), &be.upload(v), heads, kv, sq, sk, d, causal, &o);
+        be.download(&o)
+    }
+    fn attention_qk8(&self, q: &[f32], k: &[f32], v: &[f32], heads: usize, kv: usize, sq: usize, sk: usize, d: usize, causal: bool) -> Vec<f32> {
+        let be = self.0;
+        let o = be.alloc(sq * heads * d);
+        be.attention_qk8(&be.upload(q), &be.upload(k), &be.upload(v), heads, kv, sq, sk, d, causal, &o);
         be.download(&o)
     }
     fn vsa(&self, q: &[f32], k: &[f32], v: &[f32], gate: Option<&[f32]>, spec: &VsaSpec) -> Vec<f32> {
@@ -520,6 +527,10 @@ fn ops<B: Backend>(p: &mut Pair<'_, B>, rng: &mut Rng) {
         let k = rng.normal(kv * sk * d);
         let v = rng.normal(kv * sk * d);
         p.op(format!("attention h{heads} kv{kv} {sq}x{sk} d{d} causal={causal}"), |r| r.attention(&q, &k, &v, heads, kv, sq, sk, d, causal));
+        // INT8 Q·Kᵀ: K shifted on one channel so the mean subtraction matters;
+        // the int8 kernels exist for d 64 / 128, the others emulate.
+        let kshift: Vec<f32> = k.iter().enumerate().map(|(i, x)| if i % d == 1 { x + 3.0 } else { *x }).collect();
+        p.op(format!("attention qk8 h{heads} kv{kv} {sq}x{sk} d{d} causal={causal}"), |r| r.attention_qk8(&q, &kshift, &v, heads, kv, sq, sk, d, causal));
     }
     // VSA: a dense prefix, two regions (one sparse, one dense), partial tiles, with and without gate.
     for &(tile, d, odd) in &[(64usize, 32usize, false), (128, 64, false), (64, 128, true)] {
@@ -705,9 +716,10 @@ pub fn synth_nvfp4(w: &[f32], rows: usize, cols: usize) -> Nvfp4 {
 
 fn models<B: Backend>(p: &mut Pair<'_, B>) {
     for quant in [WeightQuant::Native, WeightQuant::Int8, WeightQuant::Int4 { group: 32, hqq: true, ffn_only: false }] {
-        dit_check(p, Attention::Dense, quant, false);
+        dit_check(p, Attention::Dense { qk8: false }, quant, false);
         dit_check(p, Attention::Vsa { sparsity: 0.5, tile: 64, ref_sparsity: 0.5, qk8: false }, quant, true);
     }
+    dit_check(p, Attention::Dense { qk8: true }, WeightQuant::Native, false);
     vae_check(p);
     audio_check(p);
     tae_check(p);

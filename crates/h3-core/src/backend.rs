@@ -512,6 +512,25 @@ pub trait Backend {
         causal: bool,
         out: &Self::Buf,
     );
+    /// [`Backend::attention`] with INT8 Q·Kᵀ: must equal `attention` of
+    /// [`crate::vsa::attn_qk8_round`]'s copies of Q and K up to the backend's
+    /// rounding (CUDA runs int8 tensor cores on the same codes; the CPU and
+    /// WebGPU round and run the exact kernel). P·V stays in the activation
+    /// precision.
+    #[allow(clippy::too_many_arguments)]
+    fn attention_qk8(
+        &self,
+        q: &Self::Buf,
+        k: &Self::Buf,
+        v: &Self::Buf,
+        heads: usize,
+        kv_heads: usize,
+        sq: usize,
+        sk: usize,
+        head_dim: usize,
+        causal: bool,
+        out: &Self::Buf,
+    );
 
     /// Whether [`Backend::vsa_attention`] can run at this head dim.
     fn vsa_supported(&self, _head_dim: usize) -> bool {

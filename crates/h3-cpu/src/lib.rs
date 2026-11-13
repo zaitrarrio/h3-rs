@@ -649,6 +649,14 @@ impl Backend for Cpu {
         });
     }
 
+    fn attention_qk8(&self, q: &CpuBuf, k: &CpuBuf, v: &CpuBuf, heads: usize, kv_heads: usize, sq: usize, sk: usize, d: usize, causal: bool, out: &CpuBuf) {
+        let (q8, k8) = {
+            let (q, k) = (q.r(), k.r());
+            h3_core::vsa::attn_qk8_round(&q[..heads * sq * d], &k[..kv_heads * sk * d], heads, kv_heads, sq, sk, d)
+        };
+        self.attention(&self.upload(&q8), &self.upload(&k8), v, heads, kv_heads, sq, sk, d, causal, out);
+    }
+
     fn vsa_prepare(&self, spec: &VsaSpec) -> VsaSpec {
         spec.clone()
     }

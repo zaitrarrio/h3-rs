@@ -1436,12 +1436,19 @@ extern "C" __global__ void fw_vsa_pair(u64 sel_, u64 nsel_, u64 usel_, u64 nusel
 // VSA tiles of 128 / 256, 2 (64 rows) for 64-token VSA tiles.
 #define MMA2_BK 32
 
-template <int D, int WARPS>
+// Q8 (mode 0 only): INT8 Q·Kᵀ as in the VSA fine stage. q8 / k8 hold the int8
+// codes of Q and of K − mean(K) ([heads][sq][D] / [kv_heads][sk][D] bytes),
+// qsc / ksc one scale per (head, 64-row tile); K chunks stage as int8 (ks8,
+// 16-byte chunks swizzled by the row) and the scores come out of mma.s8 as
+// int32, scaled by the two tiles' qsc·ksc. P·V stays bf16.
+template <int D, int WARPS, bool Q8 = false>
 __device__ __forceinline__ void attn_mma2_body(int mode, const bf16_t* q, const bf16_t* k, const bf16_t* v, bf16_t* out,
         int heads, int kv_heads, int sq, int sk, int causal, float scale,
         const unsigned* slot, const unsigned* sel, const unsigned* nsel, const float* pooled, const bf16_t* gate,
         int has_gate, int nb, int np, int dense_all, int te, int maxsel,
-        bf16_t* ks, bf16_t* vs, unsigned char* kvalid) {
+        bf16_t* ks, bf16_t* vs, unsigned char* kvalid,
+        const signed char* q8 = 0, const signed char* k8 = 0, const float* qsc = 0, const float* ksc = 0,
+        unsigned char* ks8 = 0) {
     constexpr int KS_STRIDE = D + 8;
     constexpr int KK = D / 16;        // k-steps of Q·Kᵀ
     constexpr int DT = D / 8;         // 8-wide dim tiles of the output
@@ -1476,19 +1483,44 @@ __device__ __forceinline__ void attn_mma2_body(int mode, const bf16_t* q, const 
     }
     const float sl2 = scale * 1.4426950408889634f;
 
-    unsigned qa[2][KK][4];
-    #pragma unroll
-    for (int mt = 0; mt < 2; ++mt) {
-        const unsigned* q0 = (const unsigned*)(q + ((long)h * sq + (tok[mt][0] < 0 ? 0 : tok[mt][0])) * D);
-        const unsigned* q1 = (const unsigned*)(q + ((long)h * sq + (tok[mt][1] < 0 ? 0 : tok[mt][1])) * D);
+    unsigned qa[2][Q8 ? 1 : KK][4];
+    if constexpr (!Q8) {
         #pragma unroll
-        for (int kk = 0; kk < KK; ++kk) {
-            const int c = (kk * 16 + t * 2) >> 1;
-            qa[mt][kk][0] = tok[mt][0] >= 0 ? q0[c] : 0u;
-            qa[mt][kk][1] = tok[mt][1] >= 0 ? q1[c] : 0u;
-            qa[mt][kk][2] = tok[mt][0] >= 0 ? q0[c + 4] : 0u;
-            qa[mt][kk][3] = tok[mt][1] >= 0 ? q1[c + 4] : 0u;
+        for (int mt = 0; mt < 2; ++mt) {
+            const unsigned* q0 = (const unsigned*)(q + ((long)h * sq + (tok[mt][0] < 0 ? 0 : tok[mt][0])) * D);
+            const unsigned* q1 = (const unsigned*)(q + ((long)h * sq + (tok[mt][1] < 0 ? 0 : tok[mt][1])) * D);
+            #pragma unroll
+            for (int kk = 0; kk < KK; ++kk) {
+                const int c = (kk * 16 + t * 2) >> 1;
+                qa[mt][kk][0] = tok[mt][0] >= 0 ? q0[c] : 0u;
+                qa[mt][kk][1] = tok[mt][1] >= 0 ? q1[c] : 0u;
+                qa[mt][kk][2] = tok[mt][0] >= 0 ? q0[c + 4] : 0u;
+                qa[mt][kk][3] = tok[mt][1] >= 0 ? q1[c + 4] : 0u;
+            }
         }
+    }
+    // INT8: k32 steps; a thread's A fragment of step kk is bytes kk·32 + 4t.. of
+    // its two rows (two 32-bit words each, 16 bytes apart).
+    constexpr int KK8 = D / 32, CH8 = D / 16, RP8 = NTHR / CH8, NJ8 = MMA2_BK / RP8;
+    auto at8 = [](int row, int chunk) -> int { return row * D + ((chunk ^ (row & (CH8 - 1))) << 4); };
+    unsigned qa8[2][Q8 ? KK8 : 1][4];
+    float qs8 = 1.0f;
+    if constexpr (Q8) {
+        #pragma unroll
+        for (int mt = 0; mt < 2; ++mt) {
+            const unsigned* q80 = (const unsigned*)(q8 + ((long)h * sq + (tok[mt][0] < 0 ? 0 : tok[mt][0])) * D);
+            const unsigned* q81 = (const unsigned*)(q8 + ((long)h * sq + (tok[mt][1] < 0 ? 0 : tok[mt][1])) * D);
+            #pragma unroll
+            for (int kk = 0; kk < KK8; ++kk) {
+                qa8[mt][kk][0] = tok[mt][0] >= 0 ? q80[kk * 8 + t] : 0u;
+                qa8[mt][kk][1] = tok[mt][1] >= 0 ? q81[kk * 8 + t] : 0u;
+                qa8[mt][kk][2] = tok[mt][0] >= 0 ? q80[kk * 8 + 4 + t] : 0u;
+                qa8[mt][kk][3] = tok[mt][1] >= 0 ? q81[kk * 8 + 4 + t] : 0u;
+            }
+        }
+        // The warp's 32 rows lie inside one 64-row scale tile.
+        const int nqt = (sq + 63) / 64;
+        qs8 = qsc[(long)h * nqt + min((qt * QR + warp * 32) / 64, nqt - 1)];
     }
     float o[2][DT][4];
     #pragma unroll
@@ -1529,8 +1561,19 @@ __device__ __forceinline__ void attn_mma2_body(int mode, const bf16_t* q, const 
             if (valid && ch == 0) valid[key] = tk >= 0;
         }
     };
+    // int8 K rows of chunk c into ks8 (zero-filled padding), with the valid mask.
+    const int ch8 = tid % CH8, krow8 = tid / CH8;
+    const signed char* k8base = Q8 ? k8 + (long)kh * sk * D : 0;
+    auto load8 = [&](int c, unsigned char* valid) {
+        #pragma unroll
+        for (int j = 0; j < (Q8 ? NJ8 : 1); ++j) {
+            const int key = krow8 + RP8 * j, tk = key_tok(c, key);
+            cp_async16(ks8 + at8(key, ch8), k8base + (long)(tk < 0 ? 0 : tk) * D + ch8 * 16, tk >= 0);
+            if (valid && ch8 == 0) valid[key] = tk >= 0;
+        }
+    };
     if (nchunks > 0) {
-        load(ks, kbase, 0, kvalid);
+        if constexpr (Q8) load8(0, kvalid); else load(ks, kbase, 0, kvalid);
         cp_async_commit();
         load(vs, vbase, 0, 0);
         cp_async_commit();
@@ -1541,17 +1584,39 @@ __device__ __forceinline__ void attn_mma2_body(int mode, const bf16_t* q, const 
         cp_async_wait1();          // K_c landed (V_c may still be in flight)
         __syncthreads();
         float s[2][NT][4];
-        #pragma unroll
-        for (int nt = 0; nt < NT; ++nt) {
-            s[0][nt][0] = s[0][nt][1] = s[0][nt][2] = s[0][nt][3] = 0.0f;
-            s[1][nt][0] = s[1][nt][1] = s[1][nt][2] = s[1][nt][3] = 0.0f;
-            const bf16_t* kr = ks + (nt * 8 + g) * KS_STRIDE;
+        if constexpr (Q8) {
+            // The chunk's 32 keys lie inside one 64-row K scale tile.
+            const int nkt = (sk + 63) / 64;
+            const float f8 = qs8 * ksc[(long)kh * nkt + min((c * MMA2_BK) / 64, nkt - 1)];
+            const unsigned k8base_l = (unsigned)__cvta_generic_to_shared(ks8) + (lane & 7) * D;
+            const int rsw = (lane & 7) & (CH8 - 1), mhalf = (lane >> 3) & 1;
             #pragma unroll
-            for (int kk = 0; kk < KK; ++kk) {
-                const unsigned b0 = *(const unsigned*)(kr + kk * 16 + t * 2);
-                const unsigned b1 = *(const unsigned*)(kr + kk * 16 + 8 + t * 2);
-                mma_bf16(s[0][nt], qa[0][kk][0], qa[0][kk][1], qa[0][kk][2], qa[0][kk][3], b0, b1);
-                mma_bf16(s[1][nt], qa[1][kk][0], qa[1][kk][1], qa[1][kk][2], qa[1][kk][3], b0, b1);
+            for (int nt = 0; nt < NT; ++nt) {
+                int a0[4] = {0, 0, 0, 0}, a1[4] = {0, 0, 0, 0};
+                #pragma unroll
+                for (int kk = 0; kk < KK8; ++kk) {
+                    const unsigned addr = k8base_l + nt * 8 * D + (((2 * kk + mhalf) ^ rsw) << 4);
+                    unsigned b0, b1;
+                    asm volatile("ldmatrix.sync.aligned.m8n8.x2.shared.b16 {%0,%1}, [%2];\n" : "=r"(b0), "=r"(b1) : "r"(addr));
+                    mma_s8(a0, qa8[0][kk][0], qa8[0][kk][1], qa8[0][kk][2], qa8[0][kk][3], b0, b1);
+                    mma_s8(a1, qa8[1][kk][0], qa8[1][kk][1], qa8[1][kk][2], qa8[1][kk][3], b0, b1);
+                }
+                #pragma unroll
+                for (int i = 0; i < 4; ++i) { s[0][nt][i] = (float)a0[i] * f8; s[1][nt][i] = (float)a1[i] * f8; }
+            }
+        } else {
+            #pragma unroll
+            for (int nt = 0; nt < NT; ++nt) {
+                s[0][nt][0] = s[0][nt][1] = s[0][nt][2] = s[0][nt][3] = 0.0f;
+                s[1][nt][0] = s[1][nt][1] = s[1][nt][2] = s[1][nt][3] = 0.0f;
+                const bf16_t* kr = ks + (nt * 8 + g) * KS_STRIDE;
+                #pragma unroll
+                for (int kk = 0; kk < KK; ++kk) {
+                    const unsigned b0 = *(const unsigned*)(kr + kk * 16 + t * 2);
+                    const unsigned b1 = *(const unsigned*)(kr + kk * 16 + 8 + t * 2);
+                    mma_bf16(s[0][nt], qa[0][kk][0], qa[0][kk][1], qa[0][kk][2], qa[0][kk][3], b0, b1);
+                    mma_bf16(s[1][nt], qa[1][kk][0], qa[1][kk][1], qa[1][kk][2], qa[1][kk][3], b0, b1);
+                }
             }
         }
         float mx[2][2];
@@ -1577,7 +1642,9 @@ __device__ __forceinline__ void attn_mma2_body(int mode, const bf16_t* q, const 
             }
         }
         __syncthreads();           // every warp is done with ks
-        if (c + 1 < nchunks) load(ks, kbase, c + 1, kvalid + ((c + 1) & 1) * MMA2_BK);
+        if (c + 1 < nchunks) {
+            if constexpr (Q8) load8(c + 1, kvalid + ((c + 1) & 1) * MMA2_BK); else load(ks, kbase, c + 1, kvalid + ((c + 1) & 1) * MMA2_BK);
+        }
         cp_async_commit();
         #pragma unroll
         for (int mt = 0; mt < 2; ++mt) {
@@ -1684,6 +1751,55 @@ extern "C" __global__ void __launch_bounds__(128) fw_vsa_fine_mma2_##D##_w4(u64 
 }
 ATTN_MMA2_KERNELS(64)
 ATTN_MMA2_KERNELS(128)
+
+#define ATTN_QK8_KERNEL(D)                                                                                           \
+extern "C" __global__ void __launch_bounds__(128) fw_attention_qk8_##D(u64 q_, u64 k_, u64 v_, u64 out_, int heads, \
+        int kv_heads, int sq, int sk, int causal, float scale, u64 q8_, u64 k8_, u64 qsc_, u64 ksc_) {              \
+    __shared__ __align__(16) unsigned char ks8[MMA2_BK * D];                                                         \
+    __shared__ __align__(16) bf16_t vs[MMA2_BK * (D + 8)];                                                           \
+    __shared__ unsigned char kvalid[2 * MMA2_BK];                                                                    \
+    attn_mma2_body<D, 4, true>(0, (const bf16_t*)q_, (const bf16_t*)k_, (const bf16_t*)v_, (bf16_t*)out_, heads,    \
+                         kv_heads, sq, sk, causal, scale, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, (bf16_t*)0, vs, kvalid,   \
+                         (const signed char*)q8_, (const signed char*)k8_, (const float*)qsc_, (const float*)ksc_,   \
+                         ks8);                                                                                       \
+}
+ATTN_QK8_KERNEL(64)
+ATTN_QK8_KERNEL(128)
+
+// h3_core::vsa::attn_qk8_round: one 64-row tile of X ([heads][seq][d] bf16)
+// per block (tile, head), 256 threads: the tile's scale max|x − mean| / 127
+// (mean = kmean[head] for K, none for Q) to sc[head][tile], then the int8
+// codes (round to nearest even, clamped to ±127) to x8.
+extern "C" __global__ void __launch_bounds__(256) fw_attn_qk8_quant(u64 x_, u64 kmean_, u64 x8_, u64 sc_, int seq, int d, int has_mean) {
+    __shared__ float red[8];
+    __shared__ float scs;
+    const bf16_t* x = (const bf16_t*)x_;
+    const int t = blockIdx.x, h = blockIdx.y, tid = threadIdx.x, warp = tid >> 5, lane = tid & 31;
+    const float* km = has_mean ? (const float*)kmean_ + (long)h * d : 0;
+    signed char* x8 = (signed char*)x8_;
+    const int row0 = t * 64, rows = min(64, seq - row0), n = rows * d;
+    const long base = ((long)h * seq + row0) * d;
+    float mx = 0.0f;
+    for (int i = tid; i < n; i += 256) {
+        const float v = ld(x, base + i) - (km ? km[i % d] : 0.0f);
+        mx = fmaxf(mx, fabsf(v));
+    }
+    for (int o = 16; o > 0; o >>= 1) mx = fmaxf(mx, __shfl_xor_sync(0xffffffffu, mx, o));
+    if (lane == 0) red[warp] = mx;
+    __syncthreads();
+    if (tid == 0) {
+        float m = red[0];
+        for (int w = 1; w < 8; ++w) m = fmaxf(m, red[w]);
+        scs = m / 127.0f;
+        ((float*)sc_)[(long)h * gridDim.x + t] = scs;
+    }
+    __syncthreads();
+    const float inv = scs > 0.0f ? 1.0f / scs : 0.0f;
+    for (int i = tid; i < n; i += 256) {
+        const float v = ld(x, base + i) - (km ? km[i % d] : 0.0f);
+        x8[base + i] = (signed char)max(-127, min(127, __float2int_rn(v * inv)));
+    }
+}
 
 // ---------------------------------------------------------------- VSA
 

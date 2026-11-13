@@ -111,7 +111,8 @@ pub struct PddHeads {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Attention {
-    Dense,
+    /// Full attention; `qk8` runs INT8 Q·Kᵀ ([`Backend::attention_qk8`]).
+    Dense { qk8: bool },
     /// Video sparse attention: target-region sparsity, tile size (64 / 128 /
     /// 256 tokens) and reference-region sparsity.
     Vsa { sparsity: f64, tile: usize, ref_sparsity: f64, qk8: bool },
@@ -570,7 +571,7 @@ impl<B: Backend> H3Dit<B> {
         let chunk = ffn_chunk.min(chunk_cap).clamp(1, s);
         let rope = h3_rope(&layout.position_ids, c.rope_freq_dim, c.rope_theta);
         let (vsa, vsa_dense) = match attention {
-            Attention::Dense => (None, None),
+            Attention::Dense { .. } => (None, None),
             Attention::Vsa { sparsity, tile, ref_sparsity, qk8 } => {
                 if !be.vsa_supported(c.head_dim) {
                     return Err(Error::Msg(format!("backend {} cannot run VSA at head_dim {}", be.name(), c.head_dim)));
@@ -673,6 +674,9 @@ impl<B: Backend> H3Dit<B> {
                     });
                     let st = if mods.dense { ws.vsa_dense.as_ref().unwrap() } else { vsa };
                     be.vsa_attention(&ws.q, &ws.k, &ws.v, g, st, &ws.attn);
+                }
+                (None, _) if matches!(ws.attention, Attention::Dense { qk8: true }) => {
+                    be.attention_qk8(&ws.q, &ws.k, &ws.v, c.heads, c.heads, s, s, c.head_dim, false, &ws.attn)
                 }
                 (None, _) => be.attention(&ws.q, &ws.k, &ws.v, c.heads, c.heads, s, s, c.head_dim, false, &ws.attn),
             }

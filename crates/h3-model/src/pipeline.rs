@@ -637,7 +637,7 @@ mod tests {
                 video: Schedule::from_rungs(&PIKA_KNOTS, 12.0, StepRule::Renoise).unwrap(),
                 audio: Schedule::from_rungs(&PIKA_KNOTS, 12.0, StepRule::Renoise).unwrap(),
             },
-            attention: Attention::Dense,
+            attention: Attention::Dense { qk8: false },
             dense_first_steps: 0,
             ffn_chunk: usize::MAX,
             tiling: None,

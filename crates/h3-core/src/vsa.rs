@@ -267,6 +267,54 @@ pub fn qk8_round(q: &[f32], k: &[f32], spec: &VsaSpec) -> (Vec<f32>, Vec<f32>) {
     (qo, ko)
 }
 
+/// Rows per INT8 scale tile of dense attention (`attn_qk8_round`).
+pub const QK8_TILE: usize = 64;
+
+/// The INT8 Q·Kᵀ rounding of dense attention (SageAttention's recipe, the
+/// dense twin of [`qk8_round`]): per head, Q rows in tiles of [`QK8_TILE`]
+/// share one scale `max|q| / 127`; per KV head, K is shifted by its mean over
+/// the keys and rounded per tile with `max|k − mean| / 127`. Both come back
+/// as f32 copies (K without the mean: a per-query constant softmax ignores)
+/// so that `attention(q', k', v)` is the oracle of the int8 kernels. Layouts
+/// `[heads][sq][d]` and `[kv_heads][sk][d]`.
+pub fn attn_qk8_round(q: &[f32], k: &[f32], heads: usize, kv_heads: usize, sq: usize, sk: usize, d: usize) -> (Vec<f32>, Vec<f32>) {
+    let round = |x: &[f32], out: &mut [f32], rows: usize, mean: Option<&[f32]>| {
+        for t0 in (0..rows).step_by(QK8_TILE) {
+            let t1 = (t0 + QK8_TILE).min(rows);
+            let mut mx = 0f32;
+            for r in t0..t1 {
+                for c in 0..d {
+                    mx = mx.max((x[r * d + c] - mean.map_or(0.0, |m| m[c])).abs());
+                }
+            }
+            let sc = mx / 127.0;
+            for r in t0..t1 {
+                for c in 0..d {
+                    let v = x[r * d + c] - mean.map_or(0.0, |m| m[c]);
+                    out[r * d + c] = if sc > 0.0 { (v / sc).round_ties_even().clamp(-127.0, 127.0) * sc } else { 0.0 };
+                }
+            }
+        }
+    };
+    let mut qo = vec![0f32; heads * sq * d];
+    for h in 0..heads {
+        round(&q[h * sq * d..][..sq * d], &mut qo[h * sq * d..][..sq * d], sq, None);
+    }
+    let mut ko = vec![0f32; kv_heads * sk * d];
+    for h in 0..kv_heads {
+        let kh = &k[h * sk * d..][..sk * d];
+        let mut mean = vec![0f64; d];
+        for r in 0..sk {
+            for c in 0..d {
+                mean[c] += kh[r * d + c] as f64;
+            }
+        }
+        let mean: Vec<f32> = mean.iter().map(|m| (m / sk.max(1) as f64) as f32).collect();
+        round(kh, &mut ko[h * sk * d..][..sk * d], sk, Some(&mean));
+    }
+    (qo, ko)
+}
+
 /// Select the key tiles of query tile `qt` from a row of pooled scores
 /// (`scores[kt]` for all tiles), the host oracle of the selection rule. Ties
 /// go to the lower tile index (PyTorch `topk` on CUDA is not specified for
