@@ -40,14 +40,16 @@ resident recipe needs more than 32 GB):
 
 | 1344×768, seed 1 | ComfyUI total / sampler | h3-rs denoise + decode / denoise |
 |---|---|---|
-| FastH3-V2, 8 steps, 124 frames | 54.1 s / 45.2 s | 58.1 s / 52.0 s |
+| FastH3-V2, 8 steps, 124 frames | 54.1 s / 45.2 s | 58.1 s / 52.0 s; **55.3 s / 49.2 s** with `--pv8` |
 | FastH3 v1, 4 steps, 124 frames | 33.3 s / 23.9 s | 30.1 s / 24.0 s |
 | FastH3-V2, 362 frames (15 s) | 213.6 s / 185.6 s | 208.9 s / 190.8 s |
-| raw H3, 25 euler steps, dense | 181.7 s / 169.0 s | 255.0 s / 248.8 s (`--qk8`; 336 s bf16) |
+| raw H3, 25 euler steps, dense | 181.7 s / 169.0 s | **203.5 s / 197.5 s** (`--qk8 --pv8`; 244 s `--qk8`, 328 s bf16) |
 
-The dense row is INT8 Q·Kᵀ attention (`--qk8`) against ComfyUI's Kitchen
-int8; the remaining dense gap is the attention kernel (112 ms per call
-against an implied ~80 ms).
+The dense row is INT8 Q·Kᵀ + FP8 P·V attention (`--qk8 --pv8`,
+SageAttention2's recipe) against ComfyUI's Kitchen int8: the attention
+call is 82 ms, the ~80 ms ComfyUI's step implies, and the remaining
+1.15–1.27× is on the GEMM side (`docs/runs/2026-11-13-runpod-5090-fp8-pv`;
+the two numbers are the two 5090 pod kinds, 8 % apart on identical code).
 
 The MLX recipes of the cookbook use the same checkpoints; on Apple GPUs the
 WebGPU backend runs them through Metal.
@@ -88,7 +90,14 @@ On the **RTX PRO 6000 Server Edition (600 W)**, fastvideo-rs's gold GPU
 recipe; `docs/runs/2026-11-08-vast-pro6000-server-variants`): the fine
 stage goes 35.4 → 30.6 ms per call including its helpers, the clip keeps
 the scene (17.5 dB against bf16 attention, the same band as MXFP8 against
-bf16 weights).
+bf16 weights). `--pv8` adds FP8 P·V (SageAttention2's second half: E4M3
+V and P, the row maximum rounded up to an integer so the CPU oracle
+reproduces the kernel's rounding): on an RTX 5090 the fine stage goes
+34.2 → 27.6 ms per call and the V2 denoise 51.5 → 49.2 s, the dense base
+attention call 112–120 → 82 ms and its step 9.5–10.4 → 7.8–8.7 s, at the
+same ~22 dB band against the INT8-only clips
+(`docs/runs/2026-11-13-runpod-5090-fp8-pv`). Unmeasured on the Server
+Edition.
 
 `--weights mxfp8` runs blocks 2–46 as W8A8 on the FP8 tensor cores
 (cuBLASLt `VEC32_UE8M0`, sm_100+; emulated in bf16 elsewhere); the clip

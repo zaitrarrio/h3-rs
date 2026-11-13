@@ -1,7 +1,7 @@
 // fw_attn_qk8: the INT8 Q·Kᵀ rounding of dense attention, emulated in f32
 // (h3_core::vsa::attn_qk8_round). mode 0: one workgroup per KV head,
 // kmean[h][c] = mean of K over the keys. mode 1: one workgroup per (64-row
-// tile, head) of Q: qs = max|q| / 127 over the tile, q8 = round(q / qs)·qs.
+// tile, head) of Q: qs = max|q| / 127 over the tile, q8 = round(q · (1/qs))·qs (the CUDA kernels' form; `/` is not).
 // mode 2: the same for K per (tile, KV head) on k − kmean (the mean is not
 // added back: softmax ignores a per-query constant). Rounding ties to even,
 // clamped to ±127, as the int8 tensor cores see it.
@@ -121,7 +121,7 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>, @builtin(workgroup_id) wid
         var v = 0.0;
         if (p.mode == 1u) { v = q[base + i]; } else { v = k[base + i] - kmean[h * p.d + c]; }
         var r = 0.0;
-        if (sc > 0.0) { r = clamp_code(v / sc) * sc; }
+        if (sc > 0.0) { r = clamp_code(v * (1.0 / sc)) * sc; }
         if (p.mode == 1u) { q8[base + i] = r; } else { k8[base + i] = r; }
     }
 }

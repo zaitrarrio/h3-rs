@@ -40,7 +40,12 @@ State and invariants only; the reasoning is in `docs/design.md`.
   6.6 s); FastH3 v1 4-step 30.1 s against 33.3 s (ahead); the 15 s clip
   (362 frames) 208.9 s against 213.6 s (ahead) at 31.2 GB peak; the raw
   model at 25 dense euler steps 13.2 s per step bf16, 9.95 s with
-  `--qk8`, against ComfyUI's 6.8 s.
+  `--qk8`, against ComfyUI's 6.8 s. With FP8 P·V (`--pv8`,
+  `docs/runs/2026-11-13-runpod-5090-fp8-pv`, the slower 5090 pod kind:
+  its bf16 base step is 13.9 s, pod-3 numbers in parentheses): V2 forward
+  6.46 s (6.11), denoise 52.0 s (49.2) + decode 6.6 s against 54.1 /
+  45.2 s; dense base step 8.66 s (7.84) against 6.8 s, the attention
+  call 82 ms, 52 % of the step; the remaining dense gap is the GEMM side.
 - MXFP8 (`--weights mxfp8`, `quant::Mxfp8`): W8A8, E4M3 codes with one E8M0
   scale per 32 input columns in cuBLASLt's `VEC32_UE8M0` swizzle
   (`mx_scale_offset`, rows padded to 128, groups to 4), the E4M3 / E8M0
@@ -117,6 +122,35 @@ State and invariants only; the reasoning is in `docs/design.md`.
   the 25-step clip 330 → 249 s; PSNR 20.5 dB against the bf16-attention
   clip (same scene, the 8-bit band), ComfyUI's Kitchen int8 step is 6.8 s
   (`docs/runs/2026-11-13-runpod-5090-vs-comfy`, pod 3). Opt-in.
+  FP8 P·V on top of either INT8 path (`--pv8`, implies the INT8 Q·Kᵀ;
+  `Attention::{Dense, Vsa} { pv8 }`, `VsaSpec::with_pv8`; the recipe is
+  `docs/design.md` 7c): V minus its per-head mean as E4M3 codes with one
+  scale per KV head (`vsa::attn_v8_round`), the row maximum rounded **up
+  to an integer in log2 units** so the kernels' running rescales are
+  exact powers of two and round P like the oracle's final maximum,
+  `p = exp2(s − ⌈m⌉ + 6)` rounded to E4M3 for the product and exact for
+  the denominator (`vsa::attention_pv8_reference`, `PV8_SHIFT`); V is
+  transposed once per call into `[d][keys]` in mma B-fragment order
+  (`fw_attn_v8_quant` + `fw_attn_v8_max`, VSA in tile-slot order) so the
+  P·V half is one k32 FP8 mma per 32 keys with `ldmatrix.x2` and no
+  shared-memory transpose. Kernels `fw_attention_pv8_{64,128}` and
+  `fw_vsa_fine3g_mma{64,128}` (`H3_CUDA_VSA_FINE=g`), sm_89+
+  (`cvt.rn.satfinite.e4m3x2`); WebGPU emulates (`attn_qk8.wgsl`,
+  `vsa_fine.wgsl`). 143 checks. On the 5090
+  (`docs/runs/2026-11-13-runpod-5090-fp8-pv`, the slower pod kind): the
+  dense call 119.5 → **82.1 ms** (1.46×), the dense base step 10.35 →
+  **8.66 s** (pod 3: 7.84 s; ComfyUI 6.8 s), the 25-step denoise 258 →
+  216 s, 24.7 dB against bf16 attention (`--qk8` alone 22.1 dB); the VSA
+  fine stage 34.2 → **27.6 ms** per call (+1.3 ms of V helpers), the V2
+  forward 6.46 s (pod 3: 6.11), denoise 54.4 → **52.0 s** (51.5 →
+  49.2), 21.7 dB against the `--vsa-qk8` clip; +576 MiB (V2) / +160 MiB
+  (base) of V staging. Opt-in like `--qk8`. The checker gives the pv8
+  cases bf16-representable inputs (the device rounds uploads to bf16,
+  and E4M3 codes taken from f32 and from bf16 values differ one time in
+  32) and the oracle reports where its P rounding sits within a few f32
+  ulps of an E4M3 boundary, so a kernel is not charged for a flip its
+  own exp2 produces; without both, the pv8 cases sit at 2–3.4e-2 of the
+  oracle on a 5090 and one of them crosses 3e-2.
 - `--stream-blocks` (small cards): block weights stay in host memory in
   their device form; the DiT uploads block l + 1 on the backend's side
   queue while block l computes (`Backend::prefetch_begin / end / wait /

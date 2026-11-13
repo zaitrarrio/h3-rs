@@ -193,7 +193,19 @@ impl GateView<'_> {
 /// lower tile index, fine attention with an online softmax, the gated pooled
 /// branch added last.
 pub fn vsa_reference(q: &[f32], k: &[f32], v: &[f32], gate: Option<&[f32]>, spec: &VsaSpec, out: &mut [f32]) {
+    vsa_reference_impl(q, k, v, gate, spec, out, None);
+}
+
+/// [`vsa_reference`] that also fills `slack` (same shape as `out`) with the
+/// FP8 P·V rounding slack of `h3_core::vsa::attention_pv8_reference_slack`
+/// over the selected keys; zero without `spec.pv8`.
+pub fn vsa_reference_slack(q: &[f32], k: &[f32], v: &[f32], gate: Option<&[f32]>, spec: &VsaSpec, out: &mut [f32], slack: &mut [f32]) {
+    vsa_reference_impl(q, k, v, gate, spec, out, Some(slack));
+}
+
+fn vsa_reference_impl(q: &[f32], k: &[f32], v: &[f32], gate: Option<&[f32]>, spec: &VsaSpec, out: &mut [f32], mut slack: Option<&mut [f32]>) {
     let (plan, heads, d) = (&spec.plan, spec.heads, spec.head_dim);
+    let want_slack = slack.is_some();
     let (seq, nb, te) = (plan.seq, plan.num_tiles(), plan.tile_elems);
     let scale = spec.scale as f64;
     // INT8 Q·Kᵀ: the fine stage sees the rounded Q / shifted-and-rounded K;
@@ -208,7 +220,7 @@ pub fn vsa_reference(q: &[f32], k: &[f32], v: &[f32], gate: Option<&[f32]>, spec
     // integer (h3_core::vsa::attention_pv8_reference's recipe, over the
     // selected tiles).
     let v8 = spec.pv8.then(|| h3_core::vsa::attn_v8_round(v, heads, seq, d));
-    let per_head: Vec<Vec<(usize, Vec<f32>)>> = (0..heads)
+    let per_head: Vec<Vec<(usize, Vec<f32>, Option<Vec<f32>>)>> = (0..heads)
         .into_par_iter()
         .map(|h| {
             fn slice<'b>(b: &'b [f32], off: usize, d: usize) -> &'b [f32] {
@@ -255,7 +267,7 @@ pub fn vsa_reference(q: &[f32], k: &[f32], v: &[f32], gate: Option<&[f32]>, spec
                 keep[qt] = sel.iter().enumerate().filter(|&(_, &k)| k).map(|(i, _)| i).collect();
             }
             // 4. Fine attention, 5. combine.
-            let mut rows = Vec::with_capacity(seq);
+            let mut rows: Vec<(usize, Vec<f32>, Option<Vec<f32>>)> = Vec::with_capacity(seq);
             for qt in 0..nb {
                 for qs in 0..plan.block_sizes[qt] as usize {
                     let qtok = plan.slot_src[qt * te + qs] as usize;
@@ -278,6 +290,7 @@ pub fn vsa_reference(q: &[f32], k: &[f32], v: &[f32], gate: Option<&[f32]>, spec
                         let mi = mx.ceil();
                         let mut l = 0f32;
                         let mut a = vec![0f32; d];
+                        let mut sl = want_slack.then(|| vec![0f32; d]);
                         for &(ktok, s) in &s2 {
                             let pr = (s - mi + h3_core::vsa::PV8_SHIFT).exp2();
                             l += pr;
@@ -285,6 +298,14 @@ pub fn vsa_reference(q: &[f32], k: &[f32], v: &[f32], gate: Option<&[f32]>, spec
                             let vr = &codes[(h * seq + ktok) * d..][..d];
                             for c in 0..d {
                                 a[c] += p8 * vr[c];
+                            }
+                            if let Some(sl) = sl.as_mut() {
+                                let w = h3_core::vsa::e4m3_flip_slack(pr, h3_core::vsa::PV8_FLIP_EPS);
+                                if w > 0.0 {
+                                    for c in 0..d {
+                                        sl[c] += w * vr[c].abs();
+                                    }
+                                }
                             }
                         }
                         let inv = if l > 0.0 { vs[h] / l } else { 0.0 };
@@ -295,7 +316,10 @@ pub fn vsa_reference(q: &[f32], k: &[f32], v: &[f32], gate: Option<&[f32]>, spec
                                 o[c] += pooled[qt * d + c] * gr[c];
                             }
                         }
-                        rows.push((qtok, o));
+                        if let Some(sl) = sl.as_mut() {
+                            sl.iter_mut().for_each(|x| *x *= inv);
+                        }
+                        rows.push((qtok, o, sl));
                         continue;
                     }
                     for &kt in &keep[qt] {
@@ -324,15 +348,18 @@ pub fn vsa_reference(q: &[f32], k: &[f32], v: &[f32], gate: Option<&[f32]>, spec
                             o[c] += pooled[qt * d + c] * gr[c];
                         }
                     }
-                    rows.push((qtok, o));
+                    rows.push((qtok, o, None));
                 }
             }
             rows
         })
         .collect();
     for (h, rows) in per_head.into_iter().enumerate() {
-        for (tok, o) in rows {
+        for (tok, o, sl) in rows {
             out[(tok * heads + h) * d..][..d].copy_from_slice(&o);
+            if let (Some(sl), Some(slack)) = (sl, slack.as_deref_mut()) {
+                slack[(tok * heads + h) * d..][..d].copy_from_slice(&sl);
+            }
         }
     }
 }

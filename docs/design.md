@@ -149,8 +149,20 @@ time); when the tables do not fit, they are uploaded per step.
    per eight channels and no shared-memory transpose: one k32 FP8 mma
    replaces two k16 bf16 ones and the V staging halves. `cvt.rn.satfinite
    .e4m3x2` packs P (sm_89+; the host oracle's `e4m3_satfinite` is its
-   twin, the same one MXFP8 uses). Measured on a 5090: see
-   `docs/runs/2026-11-13-runpod-5090-fp8-pv`.
+   twin, the same one MXFP8 uses). On a 5090
+   (`docs/runs/2026-11-13-runpod-5090-fp8-pv`): the dense call 119.5 →
+   82.1 ms on one pod (the ~80 ms ComfyUI's step implies), the dense base
+   step 10.35 → 8.66 s (7.84 on the faster pod kind) against ComfyUI's
+   6.8 s, the VSA fine stage 34.2 → 27.6 ms per call and the V2 forward
+   6.39 → 6.11 s (denoise 49.2 s against the 45.2 s sampler); 22–25 dB
+   against the INT8-only clips, the 8-bit band. Attention is 52 % of the
+   dense step now and the rest of the gap is the MXFP8 GEMM side (478
+   TFLOP/s with per-call activation quantisation) plus the small kernels
+   between them. The checker's lesson: an E4M3 quantiser is sensitive to
+   whether its input was already bf16, so the pv8 cases feed both sides
+   bf16-representable values, and the oracle reports the outputs whose P
+   rounding sits within a few f32 ulps of a boundary as slack, so an
+   exp2 that differs from libm's in the last bits does not fail a kernel.
 8. Variants: all of them run (Pika Flex and Regen-2K on RunPod,
    `docs/runs/2026-11-12-runpod-pro6000-variants`). The RunPod volume
    (750 GB) holds every variant's weights, the AdaLN tables and a stored

@@ -7,7 +7,9 @@
                                        secure-cloud pod on the volume (mounted at
                                        /workspace), image nvidia/cuda:12.8.1-runtime-
                                        ubuntu24.04, START_LINE as `bash -c`, the API
-                                       key in its env for self-termination
+                                       key in its env for self-termination. DC `-`
+                                       lets RunPod pick the data center, VOLUME_ID `-`
+                                       mounts no volume (a kernel-check pod)
     rp.py get POD | list | stop POD | start POD | terminate POD
 """
 import json, os, sys, urllib.request
@@ -47,12 +49,15 @@ elif op == "create":
     disk = int(sys.argv[7]) if len(sys.argv) > 7 else 50
     body = {
         "name": name, "imageName": IMAGE, "cloudType": "SECURE", "computeType": "GPU",
-        "gpuTypeIds": [gpu], "gpuCount": 1, "dataCenterIds": [dc],
-        "networkVolumeId": vol, "volumeMountPath": "/workspace",
+        "gpuTypeIds": [gpu], "gpuCount": 1,
         "containerDiskInGb": disk, "volumeInGb": 0, "ports": [],
         "dockerStartCmd": ["bash", "-c", start],
         "env": {"RUNPOD_API_KEY": KEY, "NVIDIA_DRIVER_CAPABILITIES": "all"},
     }
+    if dc != "-":
+        body["dataCenterIds"] = [dc]
+    if vol != "-":
+        body.update(networkVolumeId=vol, volumeMountPath="/workspace")
     r = rest("POST", "/pods", body)
     print(json.dumps({k: r.get(k) for k in ("id", "name", "desiredStatus", "costPerHr", "machine", "networkVolume")}))
 elif op == "get":

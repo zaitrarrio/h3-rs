@@ -265,11 +265,15 @@ pub fn qk8_round(q: &[f32], k: &[f32], spec: &VsaSpec) -> (Vec<f32>, Vec<f32>) {
                 }
             }
             let (qs, ks) = (qmax / 127.0, kmax / 127.0);
+            // `x * (1 / scale)`, the kernels' form (`__float2int_rn(v * inv)`):
+            // `x / scale` differs in the last bit one time in a million, and
+            // a code flip moves a score by ~3e-3, enough to re-round P.
+            let (qi, ki) = (if qs > 0.0 { 1.0 / qs } else { 0.0 }, if ks > 0.0 { 1.0 / ks } else { 0.0 });
             for &tok in &toks {
                 for c in 0..d {
                     let i = base + tok * d + c;
-                    qo[i] = if qs > 0.0 { (q[i] / qs).round_ties_even().clamp(-127.0, 127.0) * qs } else { 0.0 };
-                    ko[i] = if ks > 0.0 { ((k[i] - kmean[c]) / ks).round_ties_even().clamp(-127.0, 127.0) * ks } else { 0.0 };
+                    qo[i] = (q[i] * qi).round_ties_even().clamp(-127.0, 127.0) * qs;
+                    ko[i] = ((k[i] - kmean[c]) * ki).round_ties_even().clamp(-127.0, 127.0) * ks;
                 }
             }
         }
@@ -298,10 +302,11 @@ pub fn attn_qk8_round(q: &[f32], k: &[f32], heads: usize, kv_heads: usize, sq: u
                 }
             }
             let sc = mx / 127.0;
+            let inv = if sc > 0.0 { 1.0 / sc } else { 0.0 }; // the kernels' `v * inv`
             for r in t0..t1 {
                 for c in 0..d {
                     let v = x[r * d + c] - mean.map_or(0.0, |m| m[c]);
-                    out[r * d + c] = if sc > 0.0 { (v / sc).round_ties_even().clamp(-127.0, 127.0) * sc } else { 0.0 };
+                    out[r * d + c] = (v * inv).round_ties_even().clamp(-127.0, 127.0) * sc;
                 }
             }
         }
@@ -369,6 +374,21 @@ pub fn attn_v8_round(v: &[f32], kv_heads: usize, sk: usize, d: usize) -> (Vec<f3
 /// are exact powers of two and round the same way.
 pub const PV8_SHIFT: f32 = 6.0;
 
+/// Relative distance within which the checker treats a P value as sitting
+/// on an E4M3 rounding boundary (2⁻¹⁴): the kernels' scores and `ex2`
+/// differ from the oracle's f32 arithmetic by a few ulps, ~1e-6 relative
+/// in P, and a flip of the largest P of a row is 1/16 of that row.
+pub const PV8_FLIP_EPS: f32 = 6.103_515_6e-5;
+
+/// The width of the E4M3 rounding step at `x` when `x` lies within `eps`
+/// (relative) of a boundary between two codes, else 0: the slack a kernel
+/// that rounds `x·(1 ± eps)` may be given against the oracle's rounding.
+pub fn e4m3_flip_slack(x: f32, eps: f32) -> f32 {
+    let lo = crate::quant::e4m3_decode(crate::quant::e4m3_satfinite(x * (1.0 - eps)));
+    let hi = crate::quant::e4m3_decode(crate::quant::e4m3_satfinite(x * (1.0 + eps)));
+    (hi - lo).abs()
+}
+
 /// The 8-bit attention oracle: INT8 Q·Kᵀ ([`attn_qk8_round`]) and FP8 P·V
 /// ([`attn_v8_round`]). Scores in log2 units; the row maximum rounded up to
 /// an integer; `p = exp2(s − ⌈m⌉ + PV8_SHIFT)` rounded to E4M3 for the
@@ -376,6 +396,22 @@ pub const PV8_SHIFT: f32 = 6.0;
 /// + mean`. Output `[sq][heads][d]`.
 #[allow(clippy::too_many_arguments)]
 pub fn attention_pv8_reference(q: &[f32], k: &[f32], v: &[f32], heads: usize, kv_heads: usize, sq: usize, sk: usize, d: usize, causal: bool) -> Vec<f32> {
+    pv8_reference(q, k, v, heads, kv_heads, sq, sk, d, causal, None)
+}
+
+/// [`attention_pv8_reference`] plus, per output element, the slack of the
+/// P roundings that sit within [`PV8_FLIP_EPS`] of an E4M3 boundary
+/// (`Σ step(p_j)·|v₈ⱼ| · scale / Σ p`): what a kernel whose scores differ
+/// from this f32 arithmetic in the last bits may legitimately differ by.
+#[allow(clippy::too_many_arguments)]
+pub fn attention_pv8_reference_slack(q: &[f32], k: &[f32], v: &[f32], heads: usize, kv_heads: usize, sq: usize, sk: usize, d: usize, causal: bool) -> (Vec<f32>, Vec<f32>) {
+    let mut slack = vec![0f32; sq * heads * d];
+    let out = pv8_reference(q, k, v, heads, kv_heads, sq, sk, d, causal, Some(&mut slack));
+    (out, slack)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn pv8_reference(q: &[f32], k: &[f32], v: &[f32], heads: usize, kv_heads: usize, sq: usize, sk: usize, d: usize, causal: bool, mut slack: Option<&mut [f32]>) -> Vec<f32> {
     let (q8, k8) = attn_qk8_round(q, k, heads, kv_heads, sq, sk, d);
     let (v8, mean, vs) = attn_v8_round(v, kv_heads, sk, d);
     let group = heads / kv_heads;
@@ -396,6 +432,7 @@ pub fn attention_pv8_reference(q: &[f32], k: &[f32], v: &[f32], heads: usize, kv
             let mi = m.ceil();
             let mut l = 0f32;
             let mut acc = vec![0f32; d];
+            let mut sl = slack.as_ref().map(|_| vec![0f32; d]);
             for (j, &sj) in s2[..limit].iter().enumerate() {
                 let p = (sj - mi + PV8_SHIFT).exp2();
                 l += p;
@@ -404,11 +441,25 @@ pub fn attention_pv8_reference(q: &[f32], k: &[f32], v: &[f32], heads: usize, kv
                 for c in 0..d {
                     acc[c] += p8 * vj[c];
                 }
+                if let Some(sl) = sl.as_mut() {
+                    let w = e4m3_flip_slack(p, PV8_FLIP_EPS);
+                    if w > 0.0 {
+                        for c in 0..d {
+                            sl[c] += w * vj[c].abs();
+                        }
+                    }
+                }
             }
             let inv = if l > 0.0 { vs[kh] / l } else { 0.0 };
             let o = &mut out[(i * heads + h) * d..][..d];
             for c in 0..d {
                 o[c] = acc[c] * inv + mean[kh * d + c];
+            }
+            if let (Some(sl), Some(slack)) = (sl, slack.as_deref_mut()) {
+                let so = &mut slack[(i * heads + h) * d..][..d];
+                for c in 0..d {
+                    so[c] = sl[c] * inv;
+                }
             }
         }
     }
@@ -448,6 +499,69 @@ pub fn select(plan: &TilePlan, qt: usize, scores: &[f32]) -> Vec<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn e4m3_slack_marks_boundaries_only() {
+        // 1.0625 is the midpoint of the codes 1.0 and 1.125.
+        assert_eq!(e4m3_flip_slack(1.0625, PV8_FLIP_EPS), 0.125);
+        assert_eq!(e4m3_flip_slack(1.05, PV8_FLIP_EPS), 0.0);
+        assert_eq!(e4m3_flip_slack(40.0, PV8_FLIP_EPS), 0.0);
+        // 34 is the midpoint of the codes 32 and 36 (step 4 in [32, 64)).
+        assert_eq!(e4m3_flip_slack(34.0, PV8_FLIP_EPS), 4.0);
+        assert_eq!(e4m3_flip_slack(36.0, PV8_FLIP_EPS), 0.0);
+        assert_eq!(e4m3_flip_slack(0.0, PV8_FLIP_EPS), 0.0);
+    }
+
+    #[test]
+    fn pv8_slack_bounds_a_boundary_flip() {
+        // The slack output leaves the reference unchanged, is non-negative,
+        // and bounds the effect of re-rounding the near-boundary P values
+        // the other way (what a kernel's exp2 may do).
+        let mut rng = crate::rng::Rng::new(7);
+        let (heads, kv, sq, sk, d) = (2usize, 1usize, 40usize, 72usize, 32usize);
+        let (q, k, v) = (rng.normal(heads * sq * d), rng.normal(kv * sk * d), rng.normal(kv * sk * d));
+        let plain = attention_pv8_reference(&q, &k, &v, heads, kv, sq, sk, d, true);
+        let (out, slack) = attention_pv8_reference_slack(&q, &k, &v, heads, kv, sq, sk, d, true);
+        assert_eq!(plain, out);
+        assert!(slack.iter().all(|&s| s >= 0.0 && s.is_finite()));
+        // Re-derive with every P nudged by +eps/2 and by −eps/2: the outputs
+        // move only where slack was granted, and by no more than it.
+        let (q8, k8) = attn_qk8_round(&q, &k, heads, kv, sq, sk, d);
+        let (v8, mean, vs) = attn_v8_round(&v, kv, sk, d);
+        let sl2 = std::f32::consts::LOG2_E / (d as f32).sqrt();
+        let mut flips = 0;
+        for i in 0..sq {
+            let limit = (i + 1 + sk - sq).min(sk);
+            for h in 0..heads {
+                let qi = &q8[(h * sq + i) * d..][..d];
+                let s: Vec<f32> = (0..limit).map(|j| qi.iter().zip(&k8[j * d..][..d]).map(|(a, b)| a * b).sum::<f32>() * sl2).collect();
+                let mi = s.iter().cloned().fold(f32::NEG_INFINITY, f32::max).ceil();
+                for sign in [-1.0f32, 1.0] {
+                    let mut l = 0f32;
+                    let mut acc = vec![0f32; d];
+                    for (j, &sj) in s.iter().enumerate() {
+                        let p = (sj - mi + PV8_SHIFT).exp2();
+                        l += p;
+                        let p8 = crate::quant::e4m3_decode(crate::quant::e4m3_satfinite(p * (1.0 + sign * PV8_FLIP_EPS * 0.5)));
+                        for c in 0..d {
+                            acc[c] += p8 * v8[j * d + c];
+                        }
+                    }
+                    for c in 0..d {
+                        let o = acc[c] * vs[0] / l + mean[c];
+                        let idx = (i * heads + h) * d + c;
+                        let diff = (o - out[idx]).abs();
+                        if diff > 0.0 {
+                            flips += 1;
+                            assert!(diff <= slack[idx] * (1.0 + 1e-5) + 1e-6, "row {i} head {h} ch {c}: moved {diff} with slack {}", slack[idx]);
+                        }
+                    }
+                }
+            }
+        }
+        // Boundaries are rare at this eps; the seed is chosen so a few are hit.
+        assert!(flips > 0, "no near-boundary P in this draw; choose another seed");
+    }
 
     #[test]
     fn t2va_plan_768p() {

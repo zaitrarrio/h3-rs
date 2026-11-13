@@ -2,7 +2,7 @@
 // (h3_core::vsa::qk8_round). mode 0: one workgroup per head, kmean[h][c] =
 // mean of K over the sequence. mode 1: one workgroup per (tile, head): the
 // scales max|q| / 127 and max|k − kmean| / 127 over the tile's real tokens,
-// then q8 = round(q / qs)·qs and k8 = round((k − kmean) / ks)·ks (ties to
+// then q8 = round(q · (1/qs))·qs and k8 = round((k − kmean) · (1/ks))·ks (ties to
 // even, clamped to ±127) for those tokens. CUDA runs int8 tensor cores on
 // the same codes.
 struct P { heads: u32, seq: u32, d: u32, nb: u32, te: u32, mode: u32, _a: u32, _b: u32 }
@@ -64,8 +64,8 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>, @builtin(workgroup_id) wid
         let idx = (h * p.seq + tok) * p.d + c;
         var qv = 0.0;
         var kv = 0.0;
-        if (qs > 0.0) { qv = clamp_code(q[idx] / qs) * qs; }
-        if (ks > 0.0) { kv = clamp_code((k[idx] - kmean[h * p.d + c]) / ks) * ks; }
+        if (qs > 0.0) { qv = clamp_code(q[idx] * (1.0 / qs)) * qs; }
+        if (ks > 0.0) { kv = clamp_code((k[idx] - kmean[h * p.d + c]) * (1.0 / ks)) * ks; }
         q8[idx] = qv;
         k8[idx] = kv;
     }

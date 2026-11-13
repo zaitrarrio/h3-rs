@@ -32,10 +32,19 @@ pub struct CheckResult {
 }
 
 fn rel(a: &[f32], b: &[f32]) -> f32 {
+    rel_slack(a, b, None)
+}
+
+/// [`rel`] with a per-element allowance taken off each difference first:
+/// the FP8 cases pass the oracle's rounding-boundary slack here.
+fn rel_slack(a: &[f32], b: &[f32], slack: Option<&[f32]>) -> f32 {
     assert_eq!(a.len(), b.len(), "output lengths differ");
+    if let Some(s) = slack {
+        assert_eq!(s.len(), b.len(), "slack length differs");
+    }
     let scale = b.iter().fold(0f32, |m, v| m.max(v.abs())) + 1e-6;
-    let worst = a.iter().zip(b).fold(0f32, |m, (x, y)| {
-        let d = (x - y).abs();
+    let worst = a.iter().zip(b).enumerate().fold(0f32, |m, (i, (x, y))| {
+        let d = (x - y).abs() - slack.map_or(0.0, |s| s[i]);
         if d.is_nan() { f32::INFINITY } else { m.max(d) }
     });
     worst / scale
@@ -407,6 +416,21 @@ impl<B: Backend> Pair<'_, B> {
         let want = BackendRunner(&Cpu).run(&mut g);
         self.record(name, got, want);
     }
+
+    /// An op whose reference comes with a per-element slack (the FP8 P·V
+    /// oracles): `want` is what the CPU backend computes for the same call.
+    fn op_slack(&mut self, name: impl Into<String>, f: impl Fn(&dyn ErasedBackend) -> Vec<f32>, want: Vec<f32>, slack: Vec<f32>) {
+        let mut g = |r: &dyn ErasedBackend| f(r);
+        let got = BackendRunner(self.be).run(&mut g);
+        let e = rel_slack(&got, &want, Some(&slack));
+        self.out.push(CheckResult { name: name.into(), rel_err: e, ok: e <= self.tol });
+    }
+}
+
+/// f32 → bf16 → f32 over a slice: the FP8 cases hand both sides values the
+/// device's bf16 upload keeps, so both quantise the same numbers.
+fn bf16_all(x: &[f32]) -> Vec<f32> {
+    x.iter().map(|&v| h3_core::quant::bf16_round(v)).collect()
 }
 
 pub fn run_all<B: Backend>(be: &B, tol: f32) -> Vec<CheckResult> {
@@ -531,19 +555,25 @@ fn ops<B: Backend>(p: &mut Pair<'_, B>, rng: &mut Rng) {
         // the int8 kernels exist for d 64 / 128, the others emulate.
         let kshift: Vec<f32> = k.iter().enumerate().map(|(i, x)| if i % d == 1 { x + 3.0 } else { *x }).collect();
         p.op(format!("attention qk8 h{heads} kv{kv} {sq}x{sk} d{d} causal={causal}"), |r| r.attention_qk8(&q, &kshift, &v, heads, kv, sq, sk, d, causal, false));
-        // FP8 P·V on top: V shifted on one channel so its mean matters. The
-        // causal cases get 32 more keys than queries so every row sees at
-        // least 33: P is rounded to E4M3 (steps of 1/8), and a row with one
-        // or two keys turns a single rounding flip, which any kernel whose
-        // f32 scores differ from the oracle's in the last bits can produce,
-        // into 6 % of that row and of this max-abs metric (5e-2 on a 5090
-        // for the one-key rows of 70x70 and 33x33; the mask is exercised
-        // either way).
+        // FP8 P·V on top: V shifted on one channel so its mean matters.
+        // E4M3 has 3 mantissa bits, so this metric is sensitive to single
+        // rounding flips between the oracle and a kernel: (1) the inputs
+        // are bf16-representable, since the device rounds its uploads to
+        // bf16 and a V code taken from the f32 value differs from the one
+        // taken from the bf16 value once in 32 elements (2–3.4e-2 of this
+        // metric on a 5090); (2) the oracle reports the P roundings that sit
+        // within a few f32 ulps of a boundary as slack, so a kernel's own
+        // `ex2` and score arithmetic are not charged for them; (3) the
+        // causal cases get 32 more keys than queries, so no row averages one
+        // or two keys where one flip is 6 % of the row (the mask is
+        // exercised either way).
         let psk = if causal { sk + 32 } else { sk };
         let (k2, v2) = if causal { (rng.normal(kv * psk * d), rng.normal(kv * psk * d)) } else { (k.clone(), v.clone()) };
-        let kshift2: Vec<f32> = k2.iter().enumerate().map(|(i, x)| if i % d == 1 { x + 3.0 } else { *x }).collect();
-        let vshift: Vec<f32> = v2.iter().enumerate().map(|(i, x)| if i % d == 2 { x + 2.0 } else { *x }).collect();
-        p.op(format!("attention qk8+pv8 h{heads} kv{kv} {sq}x{psk} d{d} causal={causal}"), |r| r.attention_qk8(&q, &kshift2, &vshift, heads, kv, sq, psk, d, causal, true));
+        let q16 = bf16_all(&q);
+        let kshift2: Vec<f32> = bf16_all(&k2.iter().enumerate().map(|(i, x)| if i % d == 1 { x + 3.0 } else { *x }).collect::<Vec<_>>());
+        let vshift: Vec<f32> = bf16_all(&v2.iter().enumerate().map(|(i, x)| if i % d == 2 { x + 2.0 } else { *x }).collect::<Vec<_>>());
+        let (want, slack) = h3_core::vsa::attention_pv8_reference_slack(&q16, &kshift2, &vshift, heads, kv, sq, psk, d, causal);
+        p.op_slack(format!("attention qk8+pv8 h{heads} kv{kv} {sq}x{psk} d{d} causal={causal}"), |r| r.attention_qk8(&q16, &kshift2, &vshift, heads, kv, sq, psk, d, causal, true), want, slack);
     }
     // VSA: a dense prefix, two regions (one sparse, one dense), partial tiles, with and without gate.
     for &(tile, d, odd) in &[(64usize, 32usize, false), (128, 64, false), (64, 128, true)] {
@@ -566,11 +596,19 @@ fn ops<B: Backend>(p: &mut Pair<'_, B>, rng: &mut Rng) {
         let kshift: Vec<f32> = k.iter().enumerate().map(|(i, x)| if i % d == 1 { x + 3.0 } else { *x }).collect();
         p.op(format!("vsa tile{tile} d{d} qk8 gate"), |r| r.vsa(&q, &kshift, &v, Some(&g), &spec8));
         p.op(format!("vsa tile{tile} d{d} qk8 no-gate"), |r| r.vsa(&q, &kshift, &v, None, &spec8));
-        // FP8 P·V on top: V shifted on one channel so its mean matters.
+        // FP8 P·V on top: V shifted on one channel so its mean matters;
+        // bf16-representable inputs and the oracle's rounding slack as in
+        // the dense pv8 cases above.
         let spec88 = spec.clone().with_pv8(true);
-        let vshift: Vec<f32> = v.iter().enumerate().map(|(i, x)| if i % d == 2 { x + 2.0 } else { *x }).collect();
-        p.op(format!("vsa tile{tile} d{d} qk8+pv8 gate"), |r| r.vsa(&q, &kshift, &vshift, Some(&g), &spec88));
-        p.op(format!("vsa tile{tile} d{d} qk8+pv8 no-gate"), |r| r.vsa(&q, &kshift, &vshift, None, &spec88));
+        let (q16, k16, g16) = (bf16_all(&q), bf16_all(&kshift), bf16_all(&g));
+        let vshift: Vec<f32> = bf16_all(&v.iter().enumerate().map(|(i, x)| if i % d == 2 { x + 2.0 } else { *x }).collect::<Vec<_>>());
+        for gated in [true, false] {
+            let gate = gated.then_some(&g16[..]);
+            let (mut want, mut slack) = (vec![0f32; n], vec![0f32; n]);
+            h3_cpu::vsa_reference_slack(&q16, &k16, &vshift, gate, &spec88, &mut want, &mut slack);
+            let name = format!("vsa tile{tile} d{d} qk8+pv8 {}", if gated { "gate" } else { "no-gate" });
+            p.op_slack(name, |r| r.vsa(&q16, &k16, &vshift, gate, &spec88), want, slack);
+        }
     }
     // patchify / unpatchify with offsets.
     {
