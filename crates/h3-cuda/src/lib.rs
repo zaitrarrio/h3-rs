@@ -1120,7 +1120,8 @@ impl Backend for Cuda {
     fn prefetch_begin(&self) {
         if let Some(ev) = self.fence.lock().unwrap().as_ref() {
             // The previous prefetch's copies (some from the bounce buffer) are
-            // done before the buffer is reused; normally already the case.
+            // done before the buffer is reused: the host blocks here until the
+            // copy stream has run them, which is at most two blocks behind.
             ev.synchronize().expect("event");
         }
         if let Some((_, used)) = self.bounce.lock().unwrap().as_mut() {
@@ -1168,8 +1169,17 @@ impl Backend for Cuda {
     }
 
     fn prefetch_wait(&self) {
-        if let Some(ev) = self.fence.lock().unwrap().take() {
-            self.stream.wait(&ev).expect("wait");
+        // The fence stays until the next `prefetch_end` replaces it:
+        // `prefetch_begin` synchronises it on the host before the bounce
+        // buffer is reused. Taking it here let the next prefetch overwrite
+        // bounce slots whose copies were still queued behind a release wait
+        // on the copy stream (a few of a block's weights then came from the
+        // block after it, and the clip went black a step or two later; it
+        // depends on how far the host runs ahead of the GPU, so one 5090
+        // pod produced byte-identical clips and three later hosts never
+        // produced a frame).
+        if let Some(ev) = self.fence.lock().unwrap().as_ref() {
+            self.stream.wait(ev).expect("wait");
         }
     }
 
