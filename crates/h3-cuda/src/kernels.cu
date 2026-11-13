@@ -630,6 +630,17 @@ __device__ __forceinline__ void mma_e4m3(float* c, unsigned a0, unsigned a1, uns
     asm volatile("trap;");
 #endif
 }
+// Two f32 → packed E4M3 (cvt.rn.satfinite, sm_89+; the twin of mx_e4m3 and
+// of quant::e4m3_satfinite), hi in the upper byte.
+__device__ __forceinline__ unsigned pack_e4m3x2(float lo, float hi) {
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 890
+    unsigned short r;
+    asm("cvt.rn.satfinite.e4m3x2.f32 %0, %1, %2;" : "=h"(r) : "f"(hi), "f"(lo));
+    return r;
+#else
+    return mx_e4m3(lo) | (mx_e4m3(hi) << 8);
+#endif
+}
 __device__ __forceinline__ unsigned pack_bf16(float lo, float hi) {
     unsigned r;
     asm("cvt.rn.bf16x2.f32 %0, %1, %2;" : "=r"(r) : "f"(hi), "f"(lo));   // hi lands in the upper half
@@ -1721,10 +1732,10 @@ __device__ __forceinline__ void attn_mma2_body(int mode, const bf16_t* q, const 
                 }
                 l[mt][0] += p[0][0] + p[0][1] + p[1][0] + p[1][1] + p[2][0] + p[2][1] + p[3][0] + p[3][1];
                 l[mt][1] += p[0][2] + p[0][3] + p[1][2] + p[1][3] + p[2][2] + p[2][3] + p[3][2] + p[3][3];
-                a[mt][0] = mx_e4m3(p[0][0]) | (mx_e4m3(p[0][1]) << 8) | (mx_e4m3(p[1][0]) << 16) | (mx_e4m3(p[1][1]) << 24);
-                a[mt][1] = mx_e4m3(p[0][2]) | (mx_e4m3(p[0][3]) << 8) | (mx_e4m3(p[1][2]) << 16) | (mx_e4m3(p[1][3]) << 24);
-                a[mt][2] = mx_e4m3(p[2][0]) | (mx_e4m3(p[2][1]) << 8) | (mx_e4m3(p[3][0]) << 16) | (mx_e4m3(p[3][1]) << 24);
-                a[mt][3] = mx_e4m3(p[2][2]) | (mx_e4m3(p[2][3]) << 8) | (mx_e4m3(p[3][2]) << 16) | (mx_e4m3(p[3][3]) << 24);
+                a[mt][0] = pack_e4m3x2(p[0][0], p[0][1]) | (pack_e4m3x2(p[1][0], p[1][1]) << 16);
+                a[mt][1] = pack_e4m3x2(p[0][2], p[0][3]) | (pack_e4m3x2(p[1][2], p[1][3]) << 16);
+                a[mt][2] = pack_e4m3x2(p[2][0], p[2][1]) | (pack_e4m3x2(p[3][0], p[3][1]) << 16);
+                a[mt][3] = pack_e4m3x2(p[2][2], p[2][3]) | (pack_e4m3x2(p[3][2], p[3][3]) << 16);
             }
             const unsigned vs8_l = (unsigned)__cvta_generic_to_shared(vs8);
             const int lr = lane & 7, lhalf = (lane >> 3) & 1;
