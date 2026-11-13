@@ -17,7 +17,7 @@ h3-rs ran the same prompt, canvas, frame count and seed on RunPod
 595.91.07, 3150 MHz max SM clock, 32 607 MiB), weights staged onto the
 container disk (`H3_STAGE`), release binary of fb78a6b (`h3-bin7`, the
 serial block streaming) for pod `nmvicb3scqaun8` (04:01–04:44 UTC) and
-of a8fd30a (prefetched streaming, below) for the follow-up. Our numbers:
+of a8fd30a (prefetched streaming) for pod 2. Our numbers:
 `load` (weights to the device), `prompt` (Qwen3-VL on the device, 462
 rows for this prompt: the step ComfyUI caches away), `denoise`, `decode`,
 and `peak VRAM` from `nvidia-smi` sampled every 0.5 s. The comparable
@@ -58,6 +58,62 @@ dense base forward 21.3 s where ComfyUI's int8 attention + int8 GEMMs do
 a step in 6.8 s. Trim, the one recipe that fits resident, runs 7.95 s per
 forward (5.5 s on the Server Edition) with its per-GEMM NVFP4 expansion.
 
-## Follow-up pod (a8fd30a): prefetched streaming
+## Pod 2 (a8fd30a): prefetched streaming, same prompt, same card class
 
-(filled in below from the second pod)
+Pod `2ly33bst3f26zj` (05:01–05:34 UTC, same offer class and driver).
+7383401 made byte-coded weights (int8 / int4 / NVFP4 / MXFP8 codes and
+scales) upload straight from the host bytes and the DiT prefetch block
+l + 1 on a non-blocking side stream while block l computes (two blocks
+resident, event-ordered frees); a8fd30a added streamed twins of the tiny
+DiT cases to the checker. On this pod: `h3 check --backend cuda` **121 /
+121** at 3e-2 (`check-cuda-5090.log`), and the streamed V2 clip from the
+new binary is **byte-identical** to the old binary's on the same pod
+(`cmp`, both with `H3_CUDA_LT_NTH=0` so cuBLASLt picks the same kernel).
+
+| | ComfyUI total / sampler | h3-rs config (all streamed unless noted) | load | prompt | **denoise** | decode | **denoise + decode** | peak VRAM |
+|---|---|---|---|---|---|---|---|---|
+| FastH3-V2, 8 steps | **54.1 s / 45.2 s** | stored MXFP8, MXFP8 decoder, `--vsa-qk8`, tables, VSA 0.8 | 27.2 s | 68.6 s | **54.9 s** = 6.70, then 6.80–6.92 s × 7 (second run 55.7 s) | 6.6 s | **61.5 s** | 18.0 GB |
+| | | same binary, old serial path (`h3-bin-old`, fb78a6b) | 27.2 s | 65.6 s | 114.8 s = 14.3–14.4 s × 8 | 6.4 s | 121.2 s | 17.5 GB |
+| | | ComfyUI's budget: `--vsa-sparsity 0.9 --dense-first-steps 2` | 26.3 s | 68.7 s | 62.8 s = 12.9, 12.6 (dense), then 6.20–6.22 s × 6 | 6.5 s | 69.2 s | 17.9 GB |
+| FastH3 v1, 4 steps | **33.3 s / 23.9 s** | base + VSA LoRA, MXFP8 at load, `--vsa-qk8`, VSA 0.9 | 75.8 s | 68.6 s | **24.9 s** = 6.40, 6.13–6.17 s | 6.4 s | **31.3 s** | 17.9 GB |
+| raw H3, 25 euler steps | **181.7 s / 169.0 s** | `--steps 25`, MXFP8 at load, dense, tables | 61.5 s | 68.9 s | **349.6 s** = 13.8–14.05 s × 25 | 6.5 s | 356.1 s | 15.9 GB |
+| FastH3-V2, the 15 s prompt (362 frames) | **213.6 s / 185.6 s** (cold 225.5 s, 30.0 GB) | as the V2 row, `--ffn-chunk 16384` | 26.7 s | 569 rows, 67.5 s | **211.4 s** = 26.2–26.6 s × 8 | 19.4 s (+ 0.5 s audio) | **230.8 s** | **31.2 GB** |
+
+Frames: `v2-new-frames.png`, `v1-vsa-new-frames.png`, `base25-new-frames.png`,
+`v2-15s-frames.png` (frames 0 / 40 / 80 / 120: the night market, the
+cook at the wok, the macaque's snatch). Clips coherent throughout.
+
+## Where this leaves h3-rs on a 32 GB card
+
+- **Streaming is no longer the story.** Prefetching took the V2 forward
+  from 15.4 s to 6.9 s on the same card (the Server Edition runs it
+  resident in 4.7 s; a 5090 at 600 W has ~0.8× its tensor throughput, so
+  the remaining streaming cost is small and unmeasured here). The same
+  change took the V1 forward 14.4 → 6.15 s and the dense base step 21.3
+  → 14.0 s. Nothing about the output changed: identical bytes.
+- **FastH3 v1, 4 steps: on par** with the page's row (31.3 s denoise +
+  decode against ComfyUI's 33.3 s warm total; 24.9 s against the 23.9 s
+  sampler).
+- **FastH3-V2, 8 steps: 14 % behind** (61.5 s against 54.1 s; denoise
+  54.9 s against the 45.2 s sampler). ComfyUI's row also keeps 10 % of
+  the key tiles with two dense steps; at that budget we are slower
+  (62.8 s), so the gap is in the kernels, not the attention budget: their
+  Kitchen int8 attention for the dense steps and whatever its VSA engine
+  does per key tile, against our bf16 dense attention and `fw_vsa_fine3e`.
+- **The 15 s clip: 8 % behind** (230.8 s against 213.6 s; denoise
+  211.4 s against 185.6 s), at 31.2 GB peak against their 30.0 GB: the
+  FFN chunk kept it inside 32 GB, with nothing to spare.
+- **The raw model at 25 dense steps: 2.1× behind** (14.0 s per step
+  against 6.8 s). This is the dense attention: 38k tokens × 47 blocks in
+  bf16 `attn_mma2` against ComfyUI's INT8 Kitchen attention. The INT8
+  Q·Kᵀ recipe that already runs in the VSA fine stage (`--vsa-qk8`) is
+  the obvious next kernel for the dense path, and what the base model,
+  Pika and Regen-2K (all dense) would gain from most.
+- The prompt step (Qwen3-VL on the device, 68 s for 462 rows) is outside
+  the page's "total" because ComfyUI caches the conditioning between its
+  cold and warm render; `h3 encode` does the same for us, and the Server
+  Edition record's 189–278 s prompt steps were the network volume, not
+  the encoder.
+
+Cost: two pods, ~$1.8 (04:01–04:44, 05:01–05:34 at $1.39/h);
+$27.70 → $25.68 on the account.

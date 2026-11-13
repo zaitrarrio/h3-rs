@@ -1,0 +1,60 @@
+-rwxr-xr-x 1 root root 20157704 Nov 13 05:02 /w/h3-bin
+-rwxr-xr-x 1 root root 20149184 Nov 13 05:04 /w/h3-bin-old
+NVIDIA GeForce RTX 5090, 595.91.07, 575.00 W, 32607 MiB
+Filesystem      Size  Used Avail Use% Mounted on
+overlay         250G  166G   85G  67% /
+== conformance with the new uploads
+real	0m8.568s
+user	0m9.083s
+sys	0m0.629s
+== v2-new (/w/h3-bin): --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --tables /workspace/h3-rs/tables/v2.tables --stream-blocks
+peak VRAM MiB: 17964; exit 0
+cuda NVIDIA GeForce RTX 5090 (sm_120)
+load 27.2s
+prompt: 462 rows in 68.6s
+run 0: total 61.97s  prepare 0.21s  adaln 0.00s  denoise 54.85s (["6.70", "6.80", "6.87", "6.88", "6.89", "6.90", "6.91", "6.92"])  decode 6.64s  audio 0.19s
+real	2m43.742s
+== v2-old (/w/h3-bin-old): --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --tables /workspace/h3-rs/tables/v2.tables --stream-blocks
+peak VRAM MiB: 17484; exit 0
+cuda NVIDIA GeForce RTX 5090 (sm_120)
+load 27.2s
+prompt: 462 rows in 65.6s
+run 0: total 121.74s  prepare 0.27s  adaln 0.00s  denoise 114.77s (["14.38", "14.33", "14.31", "14.34", "14.34", "14.34", "14.38", "14.36"])  decode 6.42s  audio 0.19s
+real	3m40.599s
+streamed clips IDENTICAL (new vs old binary)
+== v2-comfy-new (/w/h3-bin): --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --tables /workspace/h3-rs/tables/v2.tables --stream-blocks --vsa-sparsity 0.9 --dense-first-steps 2
+peak VRAM MiB: 17900; exit 0
+cuda NVIDIA GeForce RTX 5090 (sm_120)
+load 26.3s
+prompt: 462 rows in 68.7s
+run 0: total 69.72s  prepare 0.23s  adaln 0.00s  denoise 62.76s (["12.88", "12.62", "6.20", "6.22", "6.20", "6.21", "6.22", "6.20"])  decode 6.47s  audio 0.19s
+real	2m51.207s
+== v1-vsa-new (/w/h3-bin): --variant fasth3-v1 --model-dir /w/h3-base --adapter /w/FastH3-4-step-Preview-v1-LoRA/vsa-datafree/adapter_model.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --stream-blocks --tables /workspace/h3-rs/tables/v1-vsa.tables
+peak VRAM MiB: 17868; exit 0
+cuda NVIDIA GeForce RTX 5090 (sm_120)
+load 75.8s
+prompt: 462 rows in 68.6s
+run 0: total 31.74s  prepare 0.22s  adaln 0.00s  denoise 24.85s (["6.40", "6.13", "6.15", "6.17"])  decode 6.42s  audio 0.19s
+real	3m2.401s
+== base25-new (/w/h3-bin): --variant h3 --steps 25 --model-dir /w/h3-base --weights mxfp8 --decoder-weights mxfp8 --attention dense --stream-blocks --tables /workspace/h3-rs/tables/base25.tables
+peak VRAM MiB: 15948; exit 0
+cuda NVIDIA GeForce RTX 5090 (sm_120)
+load 61.5s
+prompt: 462 rows in 68.9s
+run 0: total 356.36s  prepare 0.02s  adaln 0.00s  denoise 349.61s (["13.96", "13.77", "13.82", "13.85", "13.89", "13.94", "13.94", "13.97", "14.00", "13.99", "14.01", "14.02", "14.02", "14.01", "14.02", "14.04", "14.03", "14.03", "14.04", "14.05", "14.03", "14.05", "14.04", "14.05", "14.03"])  decode 6.47s  audio 0.19s
+real	8m12.975s
+== v2-new-2 (/w/h3-bin): --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --tables /workspace/h3-rs/tables/v2.tables --stream-blocks
+peak VRAM MiB: 17932; exit 0
+cuda NVIDIA GeForce RTX 5090 (sm_120)
+load 27.0s
+prompt: 462 rows in 68.8s
+run 0: total 62.62s  prepare 0.24s  adaln 0.00s  denoise 55.70s (["7.19", "6.89", "6.94", "6.91", "6.93", "6.94", "6.96", "6.94"])  decode 6.42s  audio 0.19s
+real	2m44.652s
+== v2-15s (/w/h3-bin): --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --tables /workspace/h3-rs/tables/v2.tables --stream-blocks --ffn-chunk 16384
+peak VRAM MiB: 31212; exit 0
+cuda NVIDIA GeForce RTX 5090 (sm_120)
+load 26.7s
+prompt: 569 rows in 67.5s
+run 0: total 232.80s  prepare 1.26s  adaln 0.00s  denoise 211.37s (["26.63", "26.20", "26.30", "26.40", "26.41", "26.46", "26.48", "26.49"])  decode 19.40s  audio 0.54s
+real	5m34.460s
+5090b done; terminating pod 2ly33bst3f26zj

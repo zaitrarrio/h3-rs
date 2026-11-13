@@ -119,7 +119,13 @@ time); when the tables do not fit, they are uploaded per step.
    tensor-core-friendly GEMM tiling are the two levers (the 4 GiB buffer /
    2 GiB binding limits also cap clips above ~38k tokens until activations
    are chunked more widely).
-7. Block streaming with overlapped uploads (now serial); a 24 GB card run.
+7. ~~Block streaming with overlapped uploads~~: done (prefetch on a side
+   stream, byte uploads; 5090 record). A 24 GB card run is still open:
+   the 5090 peaks at 15.9–18 GB streamed at 124 frames.
+7b. INT8 dense attention (the VSA fine stage's `--vsa-qk8` recipe for the
+   dense path): ComfyUI's Kitchen int8 attention does a dense 25-step
+   base forward in 6.8 s on a 5090 where ours takes 14.0 s; the base
+   model, Pika and Regen-2K are all dense.
 8. Variants: all of them run (Pika Flex and Regen-2K on RunPod,
    `docs/runs/2026-11-12-runpod-pro6000-variants`). The RunPod volume
    (750 GB) holds every variant's weights, the AdaLN tables and a stored

@@ -30,6 +30,15 @@ State and invariants only; the reasoning is in `docs/design.md`.
   110 ms / block and clip denoise **45.0 s** before the FFN-up split
   (fastvideo-rs's MXFP8 recipe: 45.8 s), 96.5 ms / block after it (clip not
   re-measured), peak 41 GB (`docs/runs/2026-11-07-vast-pro6000-server-mxfp8`).
+  **RTX 5090 (32 GB, 600 W on RunPod)** against ComfyUI's template on
+  the same card class, prompt, canvas and seed (the h3-speedups page,
+  `docs/runs/2026-11-13-runpod-5090-vs-comfy`): the V2 recipe does not
+  fit resident (OOM at 31.7 GB), streamed it runs 6.9 s per forward,
+  denoise 54.9 s + decode 6.6 s against ComfyUI's 54.1 s total / 45.2 s
+  sampler (14 % behind); FastH3 v1 4-step 31.3 s against 33.3 s (on
+  par); the 15 s clip (362 frames) 230.8 s against 213.6 s at 31.2 GB
+  peak; the raw model at 25 dense euler steps 14.0 s per step against
+  6.8 s (bf16 dense attention against Kitchen int8: the next kernel).
 - MXFP8 (`--weights mxfp8`, `quant::Mxfp8`): W8A8, E4M3 codes with one E8M0
   scale per 32 input columns in cuBLASLt's `VEC32_UE8M0` swizzle
   (`mx_scale_offset`, rows padded to 128, groups to 4), the E4M3 / E8M0
@@ -95,6 +104,17 @@ State and invariants only; the reasoning is in `docs/design.md`.
   guessing: `H3_PTX_OUT=f cargo test -p h3-cuda dump_ptx`, then `ptxas -v`
   (pip `nvidia-cuda-nvcc-cu12`) and `nvdisasm` (NVIDIA's apt `.deb`).
   Q fragments must never be re-read from L1 per mma (2.5× slower).
+- `--stream-blocks` (small cards): block weights stay in host memory in
+  their device form; the DiT uploads block l + 1 on the backend's side
+  queue while block l computes (`Backend::prefetch_begin / end / wait /
+  release`, a non-blocking CUDA stream with events ordering the frees; two
+  blocks resident). Byte-coded weights upload as bytes: the old path
+  re-encoded them on the CPU each step and copied on the compute stream
+  (5090: V2 forward 15.4 → 6.9 s, V1 14.4 → 6.15 s, dense base 21.3 →
+  14.0 s; clips byte-identical, `h3 check` has streamed twins of the DiT
+  cases, 121 / 121 on the 5090). `--steps N` sets the base model's
+  uniform Euler ladder (ComfyUI's 25-step template); distilled variants
+  refuse it.
 - NVFP4 on CUDA stays 4-bit on the device (codes + E4M3 scales, expanded
   into the bf16 scratch per GEMM like int8 / int4): the 42-block Trim runs in
   24.3 GB peak on an L40S; expanding at load needs 36 GB and OOMs a 48 GB
