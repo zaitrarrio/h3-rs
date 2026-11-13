@@ -388,6 +388,17 @@ pub trait Backend {
     fn weight_mxfp8(&self, q: &Mxfp8) -> Self::Weight;
     /// Bytes a weight occupies on the device.
     fn weight_bytes(&self, w: &Self::Weight) -> usize;
+    // ---- streamed weights ----------------------------------------------
+    /// Uploads between `prefetch_begin` and `prefetch_end` may land on a side
+    /// queue that overlaps the compute queue; they are usable only after
+    /// [`Backend::prefetch_wait`]. Backends with one queue do nothing.
+    fn prefetch_begin(&self) {}
+    fn prefetch_end(&self) {}
+    /// The compute queue waits for the last prefetch.
+    fn prefetch_wait(&self) {}
+    /// The side queue waits for the compute queue's work so far: call before
+    /// dropping prefetched weights the compute queue may still be reading.
+    fn prefetch_release(&self) {}
     /// Wait for queued work (timing only; downloads synchronise themselves).
     fn sync(&self);
     /// Per-kernel device time since the last [`Backend::profile_reset`], when

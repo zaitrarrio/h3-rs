@@ -97,6 +97,12 @@ pub struct Cuda {
     #[allow(dead_code)]
     ctx: Arc<CudaContext>,
     stream: Arc<CudaStream>,
+    /// Non-blocking side stream for prefetched (streamed block) weights.
+    copy: Arc<CudaStream>,
+    /// Uploads go to `copy` between `prefetch_begin` and `prefetch_end`.
+    staging: std::sync::atomic::AtomicBool,
+    /// The end of the last prefetch, for `prefetch_wait`.
+    fence: std::sync::Mutex<Option<cudarc::driver::CudaEvent>>,
     blas: CudaBlas,
     /// cuBLASLt with the bias (+ tanh-GELU) epilogue fused into the GEMM;
     /// `None` when unavailable or `H3_CUDA_NO_LT=1`.
@@ -471,12 +477,16 @@ impl Cuda {
             conv3d_mma: get("fw_conv3d_mma")?,
         };
         let stream = ctx.default_stream();
+        let copy = ctx.new_stream().map_err(err)?;
         let blas = CudaBlas::new(stream.clone()).map_err(err)?;
         let lt = if env1("H3_CUDA_NO_LT") { None } else { Lt::new(&stream).ok() };
         let name = format!("cuda {} (sm_{maj}{min})", ctx.name().unwrap_or_default());
         Ok(Self {
             ctx,
             stream,
+            copy,
+            staging: std::sync::atomic::AtomicBool::new(false),
+            fence: std::sync::Mutex::new(None),
             blas,
             lt,
             module,
@@ -513,6 +523,44 @@ impl Cuda {
     fn ptr(&self, b: &CuBuf) -> u64 {
         let (p, _sync) = b.s.device_ptr(&self.stream);
         p
+    }
+
+    /// The stream uploads run on: the side stream while a prefetch is open.
+    fn ustream(&self) -> &Arc<CudaStream> {
+        if self.staging.load(std::sync::atomic::Ordering::Relaxed) { &self.copy } else { &self.stream }
+    }
+
+    /// `data` uploaded as is (bf16 or f32 pairs, as `f32` says). Allocated on
+    /// the upload stream; the copy is complete when this returns.
+    fn upload_u16(&self, data: &[u16], f32: bool, len: usize) -> CuBuf {
+        let st = self.ustream();
+        let n = data.len().max(1);
+        // SAFETY: fully overwritten below (or a one-word pad nothing reads).
+        let s = unsafe { st.alloc::<u16>(n) }.expect("cuda alloc");
+        if !data.is_empty() {
+            let (p, _g) = s.device_ptr(st);
+            // SAFETY: `data` outlives the copy: the stream is synchronised before returning.
+            unsafe { cudarc::driver::result::memcpy_htod_async(p, data, st.cu_stream()).expect("upload") };
+            st.synchronize().expect("sync");
+        }
+        CuBuf { s: Arc::new(s), len, f32 }
+    }
+
+    /// Byte-coded weights (int8 / int4 / NVFP4 / MXFP8 codes and scales) as a
+    /// 16-bit buffer, copied straight from the host bytes: a streamed block's
+    /// weights used to go through a `u8 → u16` pass on the CPU every step.
+    fn upload_bytes(&self, bytes: &[u8]) -> CuBuf {
+        let st = self.ustream();
+        let words = bytes.len().div_ceil(2).max(1);
+        // Zeroed so an odd trailing byte (or the empty pad) reads as zero.
+        let s = st.alloc_zeros::<u16>(words).expect("cuda alloc");
+        if !bytes.is_empty() {
+            let (p, _g) = s.device_ptr(st);
+            // SAFETY: as in `upload_u16`.
+            unsafe { cudarc::driver::result::memcpy_htod_async(p, bytes, st.cu_stream()).expect("upload") };
+            st.synchronize().expect("sync");
+        }
+        CuBuf { s: Arc::new(s), len: words, f32: false }
     }
 
     fn opt(&self, b: Option<&CuBuf>) -> u64 {
@@ -821,8 +869,7 @@ impl Backend for Cuda {
 
     fn upload(&self, data: &[f32]) -> CuBuf {
         let h: Vec<u16> = data.iter().map(|&v| bf16::from_f32(v).to_bits()).collect();
-        let h = if h.is_empty() { vec![0] } else { h };
-        CuBuf { s: Arc::new(self.stream.clone_htod(&h).expect("upload")), len: data.len(), f32: false }
+        self.upload_u16(&h, false, data.len())
     }
 
     fn upload_table(&self, data: &[f32]) -> CuBuf {
@@ -833,8 +880,10 @@ impl Backend for Cuda {
                 [(b & 0xffff) as u16, (b >> 16) as u16]
             })
             .collect();
-        let h = if h.is_empty() { vec![0, 0] } else { h };
-        CuBuf { s: Arc::new(self.stream.clone_htod(&h).expect("upload")), len: data.len(), f32: true }
+        if h.is_empty() {
+            return self.upload_u16(&[0, 0], true, 0);
+        }
+        self.upload_u16(&h, true, data.len())
     }
 
     fn upload_u32(&self, data: &[u32]) -> CuBuf {
@@ -911,31 +960,15 @@ impl Backend for Cuda {
     }
 
     fn weight_q8(&self, q: &Q8) -> CuWeight {
-        let mut words: Vec<u16> = q.q.chunks(2).map(|c| c[0] as u8 as u16 | (c.get(1).map_or(0, |&v| v as u8 as u16) << 8)).collect();
-        if words.is_empty() {
-            words.push(0);
-        }
-        CuWeight {
-            buf: CuBuf { s: Arc::new(self.stream.clone_htod(&words).expect("upload")), len: words.len(), f32: false },
-            rows: q.rows,
-            cols: q.cols,
-            quant: Some((Quant::Q8, Backend::upload_table(self, &q.scales), q.group)),
-        }
+        // SAFETY: `i8` and `u8` share size and alignment; the device reads the bit pattern.
+        let bytes: &[u8] = unsafe { std::slice::from_raw_parts(q.q.as_ptr() as *const u8, q.q.len()) };
+        CuWeight { buf: self.upload_bytes(bytes), rows: q.rows, cols: q.cols, quant: Some((Quant::Q8, Backend::upload_table(self, &q.scales), q.group)) }
     }
 
     fn weight_q4(&self, q: &Q4) -> CuWeight {
         let bytes = q.packed();
-        let mut words: Vec<u16> = bytes.chunks(2).map(|c| c[0] as u16 | (c.get(1).map_or(0, |&v| v as u16) << 8)).collect();
-        if words.is_empty() {
-            words.push(0);
-        }
         let sz: Vec<f32> = q.scales.iter().zip(&q.zeros).flat_map(|(&s, &z)| [s, z]).collect();
-        CuWeight {
-            buf: CuBuf { s: Arc::new(self.stream.clone_htod(&words).expect("upload")), len: words.len(), f32: false },
-            rows: q.rows,
-            cols: q.cols,
-            quant: Some((Quant::Q4, Backend::upload_table(self, &sz), q.group)),
-        }
+        CuWeight { buf: self.upload_bytes(&bytes), rows: q.rows, cols: q.cols, quant: Some((Quant::Q4, Backend::upload_table(self, &sz), q.group)) }
     }
 
     /// NVFP4 stays 4-bit on the device (codes + E4M3 scales, 0.53 B per
@@ -944,28 +977,33 @@ impl Backend for Cuda {
     /// Expanding at load instead costs 2 B per weight: 36 GB for the 42-block
     /// Trim, which is what ran the L40S out of memory.
     fn weight_nvfp4(&self, q: &Nvfp4) -> CuWeight {
-        let mut codes: Vec<u16> = q.packed.chunks(2).map(|c| c[0] as u16 | (c.get(1).map_or(0, |&v| v as u16) << 8)).collect();
-        if codes.is_empty() {
-            codes.push(0);
-        }
-        let mut scales: Vec<u16> = q.scales.chunks(2).map(|c| c[0] as u16 | (c.get(1).map_or(0, |&v| v as u16) << 8)).collect();
-        if scales.is_empty() {
-            scales.push(0);
-        }
-        let gc = CuBuf { s: Arc::new(self.stream.clone_htod(&codes).expect("upload")), len: codes.len(), f32: false };
-        let gs = CuBuf { s: Arc::new(self.stream.clone_htod(&scales).expect("upload")), len: scales.len(), f32: false };
+        let gc = self.upload_bytes(&q.packed);
+        let gs = self.upload_bytes(&q.scales);
         CuWeight { buf: gc, rows: q.rows, cols: q.cols, quant: Some((Quant::Nvfp4 { alpha: q.alpha, first_high: q.first_high }, gs, 16)) }
     }
 
     fn weight_mxfp8(&self, q: &Mxfp8) -> CuWeight {
-        let words = |bytes: &[u8]| -> CuBuf {
-            let mut w: Vec<u16> = bytes.chunks(2).map(|c| c[0] as u16 | (c.get(1).map_or(0, |&v| v as u16) << 8)).collect();
-            if w.is_empty() {
-                w.push(0);
-            }
-            CuBuf { s: Arc::new(self.stream.clone_htod(&w).expect("upload")), len: w.len(), f32: false }
-        };
-        CuWeight { buf: words(&q.codes), rows: q.rows, cols: q.cols, quant: Some((Quant::Mxfp8, words(&q.scales), 32)) }
+        CuWeight { buf: self.upload_bytes(&q.codes), rows: q.rows, cols: q.cols, quant: Some((Quant::Mxfp8, self.upload_bytes(&q.scales), 32)) }
+    }
+
+    fn prefetch_begin(&self) {
+        self.staging.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    fn prefetch_end(&self) {
+        self.staging.store(false, std::sync::atomic::Ordering::Relaxed);
+        *self.fence.lock().unwrap() = Some(self.copy.record_event(None).expect("event"));
+    }
+
+    fn prefetch_wait(&self) {
+        if let Some(ev) = self.fence.lock().unwrap().take() {
+            self.stream.wait(&ev).expect("wait");
+        }
+    }
+
+    fn prefetch_release(&self) {
+        let ev = self.stream.record_event(None).expect("event");
+        self.copy.wait(&ev).expect("wait");
     }
 
     fn weight_bytes(&self, w: &CuWeight) -> usize {

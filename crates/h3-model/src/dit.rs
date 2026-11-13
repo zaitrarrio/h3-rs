@@ -623,13 +623,30 @@ impl<B: Backend> H3Dit<B> {
             be.linear(audio_rows, r.offset, r.rows, &self.audio_proj_in.w, self.audio_proj_in.b.as_ref(), Act::None, &ws.h, r.start);
         }
         let rope = Some(Rope { cos: &ws.rope_cos, sin: &ws.rope_sin, rot: c.rotary_dim() });
-        for (bl, m) in self.blocks.iter().zip(&mods.blocks) {
-            let dev;
+        // Streamed blocks: block l + 1's weights are uploaded on the backend's
+        // side queue while block l computes (`prefetch_*`); at most two blocks
+        // are resident, and a block is freed only after the compute queue has
+        // passed it (`prefetch_release`).
+        let prefetch = |l: usize| -> Option<AttnFf<B>> {
+            match self.blocks.get(l) {
+                Some(Residency::Host(h)) => {
+                    be.prefetch_begin();
+                    let w = h.upload(be);
+                    be.prefetch_end();
+                    Some(w)
+                }
+                _ => None,
+            }
+        };
+        let mut staged = prefetch(0);
+        for (l, (bl, m)) in self.blocks.iter().zip(&mods.blocks).enumerate() {
+            let streamed;
             let w = match bl {
                 Residency::Device(w) => w,
-                Residency::Host(h) => {
-                    dev = h.upload(be);
-                    &dev
+                Residency::Host(_) => {
+                    be.prefetch_wait();
+                    streamed = staged.take().expect("prefetched block");
+                    &streamed
                 }
             };
             let t = ModTable { table: m, idx: &mods.adaln_idx, slots: H3Config::MOD_SLOTS };
@@ -669,6 +686,12 @@ impl<B: Backend> H3Dit<B> {
                 r0 += n;
             }
             be.gate_residual(&ws.h, &ws.tmp, s, d, Gate::Table(ModRef { table: t, slot: GATE_MLP }));
+            if matches!(bl, Residency::Host(_)) {
+                // This block's kernels are queued: fetch the next one behind them,
+                // then let the side queue free this block once the compute queue is past it.
+                staged = prefetch(l + 1);
+                be.prefetch_release();
+            }
         }
         let ht = ModTable { table: &mods.head, idx: &mods.t_idx, slots: 2 };
         be.rms_norm(&ws.h, s, d, Some(&self.norm_out_w), Modulation::Table { m: ht, scale: 1, shift: 0 }, c.final_norm_eps, &ws.normed);
