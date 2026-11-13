@@ -531,9 +531,19 @@ fn ops<B: Backend>(p: &mut Pair<'_, B>, rng: &mut Rng) {
         // the int8 kernels exist for d 64 / 128, the others emulate.
         let kshift: Vec<f32> = k.iter().enumerate().map(|(i, x)| if i % d == 1 { x + 3.0 } else { *x }).collect();
         p.op(format!("attention qk8 h{heads} kv{kv} {sq}x{sk} d{d} causal={causal}"), |r| r.attention_qk8(&q, &kshift, &v, heads, kv, sq, sk, d, causal, false));
-        // FP8 P·V on top: V shifted on one channel so its mean matters.
-        let vshift: Vec<f32> = v.iter().enumerate().map(|(i, x)| if i % d == 2 { x + 2.0 } else { *x }).collect();
-        p.op(format!("attention qk8+pv8 h{heads} kv{kv} {sq}x{sk} d{d} causal={causal}"), |r| r.attention_qk8(&q, &kshift, &vshift, heads, kv, sq, sk, d, causal, true));
+        // FP8 P·V on top: V shifted on one channel so its mean matters. The
+        // causal cases get 32 more keys than queries so every row sees at
+        // least 33: P is rounded to E4M3 (steps of 1/8), and a row with one
+        // or two keys turns a single rounding flip, which any kernel whose
+        // f32 scores differ from the oracle's in the last bits can produce,
+        // into 6 % of that row and of this max-abs metric (5e-2 on a 5090
+        // for the one-key rows of 70x70 and 33x33; the mask is exercised
+        // either way).
+        let psk = if causal { sk + 32 } else { sk };
+        let (k2, v2) = if causal { (rng.normal(kv * psk * d), rng.normal(kv * psk * d)) } else { (k.clone(), v.clone()) };
+        let kshift2: Vec<f32> = k2.iter().enumerate().map(|(i, x)| if i % d == 1 { x + 3.0 } else { *x }).collect();
+        let vshift: Vec<f32> = v2.iter().enumerate().map(|(i, x)| if i % d == 2 { x + 2.0 } else { *x }).collect();
+        p.op(format!("attention qk8+pv8 h{heads} kv{kv} {sq}x{psk} d{d} causal={causal}"), |r| r.attention_qk8(&q, &kshift2, &vshift, heads, kv, sq, psk, d, causal, true));
     }
     // VSA: a dense prefix, two regions (one sparse, one dense), partial tiles, with and without gate.
     for &(tile, d, odd) in &[(64usize, 32usize, false), (128, 64, false), (64, 128, true)] {

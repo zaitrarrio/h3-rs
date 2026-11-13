@@ -657,6 +657,23 @@ impl<B: Backend> H3Dit<B> {
                 _ => None,
             }
         };
+        // H3_TRACE=1: magnitude and non-finite count of the hidden state after
+        // every block of the first forward (then only the output), to localize
+        // a blow-up on a backend without a host oracle at this size.
+        let trace = std::env::var("H3_TRACE").is_ok_and(|v| v == "1");
+        static FORWARDS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let first = FORWARDS.fetch_add(1, std::sync::atomic::Ordering::Relaxed) == 0;
+        let stat = |tag: &str, buf: &B::Buf| {
+            if trace {
+                be.sync();
+                let v = be.download(buf);
+                let (mx, nf) = v.iter().fold((0f32, 0usize), |(m, n), &x| if x.is_finite() { (m.max(x.abs()), n) } else { (m, n + 1) });
+                eprintln!("trace {tag}: max {mx:.4e}, non-finite {nf} of {}", v.len());
+            }
+        };
+        if first {
+            stat("input h", &ws.h);
+        }
         let mut staged = prefetch(0);
         for (l, (bl, m)) in self.blocks.iter().zip(&mods.blocks).enumerate() {
             let streamed;
@@ -688,6 +705,9 @@ impl<B: Backend> H3Dit<B> {
                 }
                 (None, _) => be.attention(&ws.q, &ws.k, &ws.v, c.heads, c.heads, s, s, c.head_dim, false, &ws.attn),
             }
+            if first {
+                stat(&format!("block {l} attn"), &ws.attn);
+            }
             be.linear(&ws.attn, 0, s, &w.out.w, None, Act::None, &ws.tmp, 0);
             be.residual_rms_norm(
                 &ws.h,
@@ -709,6 +729,9 @@ impl<B: Backend> H3Dit<B> {
                 r0 += n;
             }
             be.gate_residual(&ws.h, &ws.tmp, s, d, Gate::Table(ModRef { table: t, slot: GATE_MLP }));
+            if first {
+                stat(&format!("block {l} h"), &ws.h);
+            }
             if matches!(bl, Residency::Host(_)) {
                 // This block's kernels are queued: fetch the next one behind them,
                 // then let the side queue free this block once the compute queue is past it.

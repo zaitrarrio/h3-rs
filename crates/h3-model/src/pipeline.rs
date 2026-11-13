@@ -442,6 +442,13 @@ impl<B: Backend> Pipeline<B> {
             let fa = step_of(sa, off_a, na_t, &noise_a, &mut renoise_rng);
             be.flow_step(&x_a, off_a, &a_out, off_a, Some(&noise_a), na_t, fa);
             be.sync();
+            if std::env::var("H3_TRACE").is_ok_and(|v| v == "1") {
+                for (tag, buf) in [("video", &x_v), ("audio", &x_a)] {
+                    let v = be.download(buf);
+                    let (mx, nf) = v.iter().fold((0f32, 0usize), |(m, n), &x| if x.is_finite() { (m.max(x.abs()), n) } else { (m, n + 1) });
+                    eprintln!("trace step {i} {tag}: max {mx:.4e}, non-finite {nf} of {}", v.len());
+                }
+            }
             t.steps_s.push(ts.elapsed().as_secs_f64());
             on(Event::Step { index: i, total: steps, secs: ts.elapsed().as_secs_f64() });
         }
