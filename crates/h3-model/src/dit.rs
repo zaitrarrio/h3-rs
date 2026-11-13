@@ -657,12 +657,13 @@ impl<B: Backend> H3Dit<B> {
                 _ => None,
             }
         };
-        // H3_TRACE=1: magnitude and non-finite count of the hidden state after
-        // every block of the first forward (then only the output), to localize
+        // H3_TRACE=N: magnitude and non-finite count of the hidden state after
+        // every block of the first N forwards (then only the output), to localize
         // a blow-up on a backend without a host oracle at this size.
-        let trace = std::env::var("H3_TRACE").is_ok_and(|v| v == "1");
+        let trace_n: usize = std::env::var("H3_TRACE").ok().and_then(|v| v.parse().ok()).unwrap_or(0);
+        let trace = trace_n > 0;
         static FORWARDS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-        let first = FORWARDS.fetch_add(1, std::sync::atomic::Ordering::Relaxed) == 0;
+        let first = FORWARDS.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < trace_n;
         let stat = |tag: &str, buf: &B::Buf| {
             if trace {
                 be.sync();
