@@ -64,12 +64,6 @@ pub struct HostAttnFf {
 }
 
 impl HostAttnFf {
-    fn pin<B: Backend>(&self, be: &B) {
-        for l in [&self.qkv, &self.out, &self.ff_in, &self.ff_out].into_iter().chain(self.gate.as_ref()) {
-            l.pin(be);
-        }
-    }
-
     fn upload<B: Backend>(&self, be: &B) -> AttnFf<B> {
         AttnFf {
             qkv: self.qkv.upload(be),
@@ -316,12 +310,7 @@ impl<B: Backend> H3Dit<B> {
         for l in 0..cfg.layers {
             let q = if all_blocks { opts.quant } else { opts.quant.for_block(l, cfg.layers) };
             let h = unit_host(&format!("transformer_blocks.{l}"), has_gate, q)?;
-            blocks.push(if opts.stream_blocks {
-                h.pin(be);
-                Residency::Host(h)
-            } else {
-                Residency::Device(h.upload(be))
-            });
+            blocks.push(if opts.stream_blocks { Residency::Host(h) } else { Residency::Device(h.upload(be)) });
         }
         let plain = |k: &str| -> Result<Linear<B>> {
             Ok(linear::load_host(src, &shapes, &[k], true, WeightQuant::Native, adapters)?.upload(be))
