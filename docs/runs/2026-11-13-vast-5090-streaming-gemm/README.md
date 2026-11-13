@@ -36,7 +36,13 @@ VAEs, text encoder and tokenizer from the V2 tree, which are the same
 files). V2 quantized to MXFP8 at load (no stored file on the mirror),
 AdaLN tables computed on the box.
 
-BOX_TBD
+`nvidia-smi` on the box: power limit **550 W** (default and max 600 W,
+RunPod's pods report 575 W), PCIe gen 5 ×16 current and max (gen 1 while
+idle), max SM clock 3180 MHz, 92 GB RAM, 32 threads. The boot pulled
+198 GB in 885 s (1.8 Gbps) and lost one V2 transformer shard to a
+truncated transfer (`FAILED` in the boot log; the loader refused the
+file as "incomplete metadata"), which the repair command refetched.
+`h3 check --backend cuda`: 143 / 143, the FP8 cases at 2–3e-3.
 
 ## Results
 
