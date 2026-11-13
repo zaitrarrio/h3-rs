@@ -1,0 +1,214 @@
+++ cat /root/p5.txt
++ timeout 1500 /w/h3-bin generate --backend cuda --seed 1 --width 1344 --height 768 --frames 124 --prompt 'integrated_multimodal_description: [Shot 1] Live-action, cinematic, a medium-wide shot frames an elderly Japanese samurai standing in the open stone courtyard of a temple in light, steady rain, facing the camera squarely under grey overcast daylight, framed from the knees up. He is around seventy, with a deeply lined, weathered face, a thin white beard and mustache, and a full head of thick, long, loose grey-white hair falling from the crown of his head past his shoulders, damp strands lifting and swaying in the wind; he wears a dark indigo kimono over grey hakama, with a katana and a shorter sword tucked through the sash at his left hip. Fine rain streaks fall through the whole frame and small droplets splash on the wet flagstones, while the dark wooden pillars and pale paper shoji screens of the temple hall stand behind him. Keeping his eyes on the lens, he raises both forearms and crosses them firmly at the wrists in an X in front of his chest, open hands flat with fingers together, the wide wet sleeves sliding back along his forearms, as the elderly samurai with a low, gravelly, unhurried voice (S1) says: <d>[English] No.</d> The camera pans right with small amplitude at slow speed while he holds the crossed arms, the pillars drifting across the background behind the falling rain. He lowers his arms to his sides, and the camera pushes in with large amplitude toward his face, ending on a tight close-up in which the wrinkles around his eyes, the individual white beard hairs, wet strands of long hair clinging to his cheek, and raindrops running down his skin are sharply visible, as he (S1) continues, lips moving clearly: <d>[English] A blade drawn in anger cuts its owner first.</d> He holds a steady gaze into the lens as the rain keeps falling.
+
+overall_soundscape: Light, steady rain patters on the stone courtyard and the temple roof tiles, with water trickling from the eaves and a low wind passing through. Heavy damp fabric rustles as the sleeves slide back and the forearms cross, and small droplets splash on the flagstones.
+
+non_diegetic_music: N/A' --out /root/out/v2-profile.y4m --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --tables /workspace/h3-rs/tables/v2.tables --stream-blocks
+cuda NVIDIA GeForce RTX 5090 (sm_120)
+load 26.3s
+prompt: 462 rows in 66.1s
+== profile: prompt encoding (Qwen3-VL)
+profile (CUDA, synced per op): 171.3 ms in ops; GEMMs 151.7 ms at 148.5 TFLOP/s
+  gemm n=10240 k=5120 (small)                   57.9 ms  33.8%      50 calls     1.158 ms/call
+  gemm n=51200 k=5120 (small)                   55.4 ms  32.3%      50 calls     1.108 ms/call
+  gemm n=5120 k=25600 (small)                   28.1 ms  16.4%      50 calls     0.561 ms/call
+  rms_norm (+residual, modulation)              12.3 ms   7.2%     100 calls     0.123 ms/call
+  gemm n=5120 k=8192 (small)                    10.3 ms   6.0%      50 calls     0.207 ms/call
+  attention (mma2, d128)                         3.0 ms   1.8%      50 calls     0.061 ms/call
+  swiglu                                         2.0 ms   1.2%      50 calls     0.039 ms/call
+  head_split (qk-norm + rope)                    1.7 ms   1.0%     150 calls     0.011 ms/call
+  gate_residual                                  0.6 ms   0.4%      50 calls     0.012 ms/call
+
+== profile: prepare (latent encode, AdaLN tables)
+profile (CUDA, synced per op): 3.9 ms in ops; GEMMs 3.5 ms at 210.9 TFLOP/s
+  gemm n=28672 k=5376 (small)                    1.4 ms  36.0%       2 calls     0.697 ms/call
+  gemm n=21504 k=5376 (small)                    1.0 ms  25.0%       2 calls     0.485 ms/call
+  gemm n=5376 k=14336 (small)                    0.7 ms  16.9%       2 calls     0.328 ms/call
+  gemm n=5376 k=7168 (small)                     0.3 ms   8.5%       2 calls     0.165 ms/call
+  gemm+bias n=5376 k=5120 (small)                0.1 ms   3.8%       1 calls     0.148 ms/call
+  attention (mma2, d128)                         0.1 ms   2.9%       2 calls     0.057 ms/call
+  rms_norm (+residual, modulation)               0.1 ms   2.7%       5 calls     0.021 ms/call
+  head_split (qk-norm + rope)                    0.1 ms   2.4%       6 calls     0.015 ms/call
+  swiglu                                         0.0 ms   1.2%       2 calls     0.023 ms/call
+  gate_residual                                  0.0 ms   0.6%       2 calls     0.012 ms/call
+
+step 1/8 8.76s
+step 2/8 8.45s
+step 3/8 8.45s
+step 4/8 8.49s
+step 5/8 8.46s
+step 6/8 8.46s
+step 7/8 8.46s
+step 8/8 8.49s
+== profile: denoise
+profile (CUDA, synced per op): 44677.8 ms in ops; GEMMs 24997.2 ms at 517.9 TFLOP/s
+  vsa fine (3e int8 qk, d128)                13696.8 ms  30.7%     400 calls    34.242 ms/call
+  gemm mxfp8 n=21504 k=5376                   8018.1 ms  17.9%     360 calls    22.273 ms/call
+  gemm mxfp8 n=28672 k=5376 (×2)              5922.4 ms  13.3%     360 calls    16.451 ms/call
+  gemm mxfp8 n=5376 k=14336                   3049.1 ms   6.8%     360 calls     8.470 ms/call
+  gemm n=28672 k=5376                         1855.7 ms   4.2%      40 calls    46.392 ms/call
+  gemm mxfp8 n=5376 k=7168                    1454.3 ms   3.3%     360 calls     4.040 ms/call
+  gemm mxfp8 n=7168 k=5376                    1432.8 ms   3.2%     360 calls     3.980 ms/call
+  gemm n=21504 k=5376                         1364.7 ms   3.1%      40 calls    34.118 ms/call
+  head_split (qk-norm + rope)                 1249.9 ms   2.8%    1600 calls     0.781 ms/call
+  mx quant (activations)                       971.2 ms   2.2%    1800 calls     0.540 ms/call
+  gemm n=5376 k=14336                          933.2 ms   2.1%      40 calls    23.330 ms/call
+  swiglu                                       843.0 ms   1.9%     400 calls     2.107 ms/call
+  rms_norm (+residual, modulation)             757.8 ms   1.7%     808 calls     0.938 ms/call
+  vsa coarse + top-k (4 query tiles)           734.6 ms   1.6%     400 calls     1.836 ms/call
+  gemm n=5376 k=7168                           471.2 ms   1.1%      40 calls    11.779 ms/call
+  gemm n=7168 k=5376                           465.2 ms   1.0%      40 calls    11.630 ms/call
+  gate_residual                                448.9 ms   1.0%     400 calls     1.122 ms/call
+  vsa pool                                     422.8 ms   0.9%     400 calls     1.057 ms/call
+  vsa int8 q/k quant                           406.7 ms   0.9%     400 calls     1.017 ms/call
+  vsa k mean                                   143.7 ms   0.3%     400 calls     0.359 ms/call
+  gemm+bias n=32 k=5376 (small)                 15.1 ms   0.0%       8 calls     1.892 ms/call
+  gemm+bias n=5376 k=96                         12.6 ms   0.0%       8 calls     1.574 ms/call
+  vsa k mean (fold)                              4.9 ms   0.0%     400 calls     0.012 ms/call
+  gemm+bias n=96 k=5376                          2.4 ms   0.0%       8 calls     0.303 ms/call
+  gemm+bias n=5376 k=32 (small)                  0.4 ms   0.0%       8 calls     0.052 ms/call
+  copy (dtod)                                    0.2 ms   0.0%       8 calls     0.024 ms/call
+  flow_step                                      0.2 ms   0.0%      16 calls     0.011 ms/call
+
+== profile: video decode
+profile (CUDA, synced per op): 1529.8 ms in ops; GEMMs 819.9 ms at 594.6 TFLOP/s
+  gemm mxfp8 n=16384 k=2048                    381.8 ms  25.0%    2016 calls     0.189 ms/call
+  attention (mma2, d64)                        312.6 ms  20.4%    2016 calls     0.155 ms/call
+  gemm mxfp8 n=2048 k=8192                     194.0 ms  12.7%    2016 calls     0.096 ms/call
+  gemm mxfp8 n=6144 k=2048                     163.1 ms  10.7%    2016 calls     0.081 ms/call
+  mx quant (activations)                        97.5 ms   6.4%    8064 calls     0.012 ms/call
+  swiglu                                        88.0 ms   5.8%    2016 calls     0.044 ms/call
+  head_split (qk-norm + rope)                   85.5 ms   5.6%    6048 calls     0.014 ms/call
+  rms_norm (+residual, modulation)              78.3 ms   5.1%    4032 calls     0.019 ms/call
+  gemm mxfp8 n=2048 k=2048                      73.9 ms   4.8%    2016 calls     0.037 ms/call
+  gate_residual                                 38.7 ms   2.5%    2016 calls     0.019 ms/call
+  gemm+bias n=3072 k=2048                        6.1 ms   0.4%      56 calls     0.109 ms/call
+  layer_norm                                     4.0 ms   0.3%      56 calls     0.071 ms/call
+  patchify / unpatchify                          2.7 ms   0.2%     112 calls     0.024 ms/call
+  conv3d (mma)                                   2.2 ms   0.1%      56 calls     0.040 ms/call
+  gemm+bias n=2048 k=24                          1.0 ms   0.1%      56 calls     0.018 ms/call
+  copy (dtod)                                    0.5 ms   0.0%      56 calls     0.008 ms/call
+
+== profile: video decode
+profile (CUDA, synced per op): 784.6 ms in ops; GEMMs 429.5 ms at 567.5 TFLOP/s
+  gemm mxfp8 n=16384 k=2048                    190.7 ms  24.3%    1008 calls     0.189 ms/call
+  attention (mma2, d64)                        156.5 ms  19.9%    1008 calls     0.155 ms/call
+  gemm mxfp8 n=2048 k=8192                     116.7 ms  14.9%    1008 calls     0.116 ms/call
+  gemm mxfp8 n=6144 k=2048                      81.6 ms  10.4%    1008 calls     0.081 ms/call
+  mx quant (activations)                        48.7 ms   6.2%    4032 calls     0.012 ms/call
+  swiglu                                        44.0 ms   5.6%    1008 calls     0.044 ms/call
+  head_split (qk-norm + rope)                   42.5 ms   5.4%    3024 calls     0.014 ms/call
+  rms_norm (+residual, modulation)              39.4 ms   5.0%    2016 calls     0.020 ms/call
+  gemm mxfp8 n=2048 k=2048                      37.0 ms   4.7%    1008 calls     0.037 ms/call
+  gate_residual                                 19.3 ms   2.5%    1008 calls     0.019 ms/call
+  gemm+bias n=3072 k=2048                        3.0 ms   0.4%      28 calls     0.107 ms/call
+  layer_norm                                     2.0 ms   0.3%      28 calls     0.071 ms/call
+  patchify / unpatchify                          1.3 ms   0.2%      56 calls     0.024 ms/call
+  conv3d (mma)                                   1.1 ms   0.1%      28 calls     0.040 ms/call
+  gemm+bias n=2048 k=24                          0.6 ms   0.1%      28 calls     0.021 ms/call
+  copy (dtod)                                    0.2 ms   0.0%      28 calls     0.008 ms/call
+
+== profile: video decode
+profile (CUDA, synced per op): 765.1 ms in ops; GEMMs 409.8 ms at 594.8 TFLOP/s
+  gemm mxfp8 n=16384 k=2048                    190.6 ms  24.9%    1008 calls     0.189 ms/call
+  attention (mma2, d64)                        156.5 ms  20.5%    1008 calls     0.155 ms/call
+  gemm mxfp8 n=2048 k=8192                      97.0 ms  12.7%    1008 calls     0.096 ms/call
+  gemm mxfp8 n=6144 k=2048                      81.7 ms  10.7%    1008 calls     0.081 ms/call
+  mx quant (activations)                        48.7 ms   6.4%    4032 calls     0.012 ms/call
+  swiglu                                        44.1 ms   5.8%    1008 calls     0.044 ms/call
+  head_split (qk-norm + rope)                   42.6 ms   5.6%    3024 calls     0.014 ms/call
+  rms_norm (+residual, modulation)              39.4 ms   5.2%    2016 calls     0.020 ms/call
+  gemm mxfp8 n=2048 k=2048                      36.9 ms   4.8%    1008 calls     0.037 ms/call
+  gate_residual                                 19.3 ms   2.5%    1008 calls     0.019 ms/call
+  gemm+bias n=3072 k=2048                        3.0 ms   0.4%      28 calls     0.107 ms/call
+  layer_norm                                     2.0 ms   0.3%      28 calls     0.071 ms/call
+  patchify / unpatchify                          1.3 ms   0.2%      56 calls     0.024 ms/call
+  conv3d (mma)                                   1.1 ms   0.1%      28 calls     0.040 ms/call
+  gemm+bias n=2048 k=24                          0.6 ms   0.1%      28 calls     0.021 ms/call
+  copy (dtod)                                    0.2 ms   0.0%      28 calls     0.009 ms/call
+
+== profile: video decode
+profile (CUDA, synced per op): 765.0 ms in ops; GEMMs 409.7 ms at 595.0 TFLOP/s
+  gemm mxfp8 n=16384 k=2048                    190.7 ms  24.9%    1008 calls     0.189 ms/call
+  attention (mma2, d64)                        156.5 ms  20.5%    1008 calls     0.155 ms/call
+  gemm mxfp8 n=2048 k=8192                      97.0 ms  12.7%    1008 calls     0.096 ms/call
+  gemm mxfp8 n=6144 k=2048                      81.5 ms  10.7%    1008 calls     0.081 ms/call
+  mx quant (activations)                        48.7 ms   6.4%    4032 calls     0.012 ms/call
+  swiglu                                        44.1 ms   5.8%    1008 calls     0.044 ms/call
+  head_split (qk-norm + rope)                   42.6 ms   5.6%    3024 calls     0.014 ms/call
+  rms_norm (+residual, modulation)              39.4 ms   5.2%    2016 calls     0.020 ms/call
+  gemm mxfp8 n=2048 k=2048                      36.9 ms   4.8%    1008 calls     0.037 ms/call
+  gate_residual                                 19.3 ms   2.5%    1008 calls     0.019 ms/call
+  gemm+bias n=3072 k=2048                        3.0 ms   0.4%      28 calls     0.107 ms/call
+  layer_norm                                     2.0 ms   0.3%      28 calls     0.071 ms/call
+  patchify / unpatchify                          1.3 ms   0.2%      56 calls     0.024 ms/call
+  conv3d (mma)                                   1.1 ms   0.1%      28 calls     0.040 ms/call
+  gemm+bias n=2048 k=24                          0.6 ms   0.1%      28 calls     0.021 ms/call
+  copy (dtod)                                    0.2 ms   0.0%      28 calls     0.009 ms/call
+
+== profile: video decode
+profile (CUDA, synced per op): 765.4 ms in ops; GEMMs 409.9 ms at 594.6 TFLOP/s
+  gemm mxfp8 n=16384 k=2048                    190.8 ms  24.9%    1008 calls     0.189 ms/call
+  attention (mma2, d64)                        156.5 ms  20.4%    1008 calls     0.155 ms/call
+  gemm mxfp8 n=2048 k=8192                      97.1 ms  12.7%    1008 calls     0.096 ms/call
+  gemm mxfp8 n=6144 k=2048                      81.5 ms  10.6%    1008 calls     0.081 ms/call
+  mx quant (activations)                        48.8 ms   6.4%    4032 calls     0.012 ms/call
+  swiglu                                        44.1 ms   5.8%    1008 calls     0.044 ms/call
+  head_split (qk-norm + rope)                   42.6 ms   5.6%    3024 calls     0.014 ms/call
+  rms_norm (+residual, modulation)              39.5 ms   5.2%    2016 calls     0.020 ms/call
+  gemm mxfp8 n=2048 k=2048                      37.0 ms   4.8%    1008 calls     0.037 ms/call
+  gate_residual                                 19.3 ms   2.5%    1008 calls     0.019 ms/call
+  gemm+bias n=3072 k=2048                        3.0 ms   0.4%      28 calls     0.107 ms/call
+  layer_norm                                     2.0 ms   0.3%      28 calls     0.071 ms/call
+  patchify / unpatchify                          1.3 ms   0.2%      56 calls     0.024 ms/call
+  conv3d (mma)                                   1.1 ms   0.1%      28 calls     0.040 ms/call
+  gemm+bias n=2048 k=24                          0.6 ms   0.1%      28 calls     0.020 ms/call
+  copy (dtod)                                    0.2 ms   0.0%      28 calls     0.008 ms/call
+
+== profile: video decode
+profile (CUDA, synced per op): 766.5 ms in ops; GEMMs 410.8 ms at 593.4 TFLOP/s
+  gemm mxfp8 n=16384 k=2048                    191.3 ms  25.0%    1008 calls     0.190 ms/call
+  attention (mma2, d64)                        156.7 ms  20.4%    1008 calls     0.155 ms/call
+  gemm mxfp8 n=2048 k=8192                      97.2 ms  12.7%    1008 calls     0.096 ms/call
+  gemm mxfp8 n=6144 k=2048                      81.8 ms  10.7%    1008 calls     0.081 ms/call
+  mx quant (activations)                        48.7 ms   6.4%    4032 calls     0.012 ms/call
+  swiglu                                        44.1 ms   5.8%    1008 calls     0.044 ms/call
+  head_split (qk-norm + rope)                   42.6 ms   5.6%    3024 calls     0.014 ms/call
+  rms_norm (+residual, modulation)              39.5 ms   5.2%    2016 calls     0.020 ms/call
+  gemm mxfp8 n=2048 k=2048                      37.0 ms   4.8%    1008 calls     0.037 ms/call
+  gate_residual                                 19.4 ms   2.5%    1008 calls     0.019 ms/call
+  gemm+bias n=3072 k=2048                        3.0 ms   0.4%      28 calls     0.106 ms/call
+  layer_norm                                     2.0 ms   0.3%      28 calls     0.071 ms/call
+  patchify / unpatchify                          1.3 ms   0.2%      56 calls     0.024 ms/call
+  conv3d (mma)                                   1.1 ms   0.1%      28 calls     0.040 ms/call
+  gemm+bias n=2048 k=24                          0.6 ms   0.1%      28 calls     0.020 ms/call
+  copy (dtod)                                    0.2 ms   0.0%      28 calls     0.008 ms/call
+
+== profile: video decode
+profile (CUDA, synced per op): -0.0 ms in ops; GEMMs -0.0 ms at 0.0 TFLOP/s
+
+== profile: video decode
+profile (CUDA, synced per op): -0.0 ms in ops; GEMMs -0.0 ms at 0.0 TFLOP/s
+
+== profile: audio decode
+profile (CUDA, synced per op): 176.3 ms in ops; GEMMs 0.1 ms at 0.7 TFLOP/s
+  conv1d                                       132.7 ms  75.3%     510 calls     0.260 ms/call
+  conv_transpose1d                              35.3 ms  20.0%     268 calls     0.132 ms/call
+  replicate_pad1d                                4.3 ms   2.4%     508 calls     0.008 ms/call
+  snake                                          3.2 ms   1.8%     254 calls     0.013 ms/call
+  copy (dtod)                                    0.3 ms   0.2%      42 calls     0.008 ms/call
+  axpby                                          0.3 ms   0.2%      42 calls     0.008 ms/call
+  gemm+bias n=2048 k=32 (small)                  0.1 ms   0.0%       2 calls     0.041 ms/call
+  patchify / unpatchify                          0.0 ms   0.0%       2 calls     0.010 ms/call
+  clamp                                          0.0 ms   0.0%       2 calls     0.006 ms/call
+
+run 0: total 75.36s  prepare 0.24s  adaln 0.00s  denoise 68.01s (["8.76", "8.45", "8.45", "8.49", "8.46", "8.46", "8.46", "8.49"])  decode 6.85s  audio 0.19s
+== profile: remainder
+profile (CUDA, synced per op): -0.0 ms in ops; GEMMs -0.0 ms at 0.0 TFLOP/s
+
+wrote /root/out/v2-profile.y4m (124 frames 1344x768) and /root/out/v2-profile.wav
+mux: ffmpeg -i /root/out/v2-profile.y4m -i /root/out/v2-profile.wav -c:v libx264 -pix_fmt yuv420p -c:a aac /root/out/v2-profile.mp4
+
+real	2m53.895s
+user	2m4.997s
+sys	1m9.905s

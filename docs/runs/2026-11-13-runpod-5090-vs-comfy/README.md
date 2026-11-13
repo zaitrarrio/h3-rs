@@ -117,3 +117,58 @@ cook at the wok, the macaque's snatch). Clips coherent throughout.
 
 Cost: two pods, ~$1.8 (04:01–04:44, 05:01–05:34 at $1.39/h);
 $27.70 → $25.68 on the account.
+
+## Pod 3 (8c20073): INT8 dense attention, profiles, the staging ring
+
+Pod `fagl3elupnvi43` (10:22–11:14 UTC, same offer class). Binary of
+8c20073: INT8 Q·Kᵀ dense attention (`--qk8`), the pinned staging ring
+behind `H3_CUDA_PIN=1`. (A pod before it, `r5yeb70y4nuekr`, lost every
+run to fdd287c's `cuMemHostRegister` path: registering page-rounded Vec
+ranges pinned neighbouring heap pages and later copies from buffers
+straddling them failed with `CUDA_ERROR_INVALID_VALUE`; its log is
+`output-3-…`'s sibling run and the fix is 8c20073.)
+
+`h3 check --backend cuda`: **127 / 127** at 3e-2 (`check-cuda-5090-127.log`);
+the six INT8 dense attention cases at 7e-3 to 2e-2 against the oracle.
+
+| | ComfyUI total / sampler | h3-rs config | load | prompt | **denoise** | decode | **denoise + decode** | peak VRAM |
+|---|---|---|---|---|---|---|---|---|
+| raw H3, 25 euler steps, **bf16 attention** | **181.7 s / 169.0 s** | `--steps 25`, MXFP8 at load, dense, tables, streamed | 60.1 s | 67.0 s | 330.0 s = 13.1–13.3 s × 25 | 6.2 s | 336.2 s | 15.9 GB |
+| raw H3, 25 euler steps, **INT8 Q·Kᵀ** (`--qk8`) | | same + `--qk8` | 59.6 s | 66.8 s | **248.8 s** = 10.17, then 9.86–10.01 s × 24 | 6.2 s | **255.0 s** | 16.8 GB |
+| FastH3-V2, 8 steps | **54.1 s / 45.2 s** | the V2 recipe, streamed (default path) | 50.6 s | 69.9 s | **53.2 s** = 6.86, then 6.59–6.63 s × 7 | 6.2 s | **59.3 s** | 18.0 GB |
+| | | same, `H3_CUDA_PIN=1` (two runs) | 26.7 s | 66.4 s | 53.3 s, 53.2 s | 6.1 s | 59.4 s | 17.9 GB |
+| | | ComfyUI's budget (VSA 0.9, 2 dense steps) | 26.3 s | 65.5 s | 59.9 s = 12.2, 11.9, then 5.96–5.98 s × 6 | 6.2 s | 66.1 s | 17.9 GB |
+| FastH3 v1, 4 steps | **33.3 s / 23.9 s** | V1 VSA LoRA, streamed | 74.3 s | 67.4 s | **24.0 s** = 6.17, 5.92–5.95 s | 6.1 s | **30.1 s** | 17.9 GB |
+| FastH3-V2, 15 s (362 frames) | **213.6 s / 185.6 s** | the V2 recipe, `--ffn-chunk 16384` | 26.3 s | 65.6 s | **199.6 s** = 25.3, then 24.8–25.0 s × 7 | 18.8 s | **218.4 s** | 30.8 GB |
+| | | same, `H3_CUDA_PIN=1` | 26.3 s | 65.5 s | 199.4 s | 18.9 s | 218.2 s | 30.9 GB |
+
+**INT8 dense attention**: the step goes 13.2 → 9.95 s (−25 %), the
+25-step clip 330 → 249 s. Per kernel (`pod3-base2-*-profile.log`, synced
+per op, two forwards): `attention (mma2, d128)` 181.3 ms per call, 72 %
+of the step; `attention (int8 qk, d128)` 112.3 ms, 61 %, plus 0.5 ms per
+call of quantisation and 0.37 ms of K mean. The int8 kernel runs the
+Q·Kᵀ half at the int8 rate and P·V in bf16, so 1.6× on the attention is
+in the band expected; ComfyUI's whole step (6.8 s) implies its attention
+at ~80 ms per block-call, which is where FP8 P·V and a tighter pipeline
+would go next. Output: `base25-qk8-frames.png` against
+`base25-bf16-pod3-frames.png` are the same scene (PSNR between the two
+clips 20.5 dB average, Y 18.8, U/V 38.5–38.8: the euler trajectory
+diverges in texture, as every 8-bit rounding does here; no artifacts).
+The GEMMs did not move (MXFP8 at 485–518 TFLOP/s on this card).
+
+**V2 and the streaming residue**: the V2 denoise profile
+(`pod3-v2-profile.log`) sums to 44.7 s of GPU op time over 8 forwards,
+5.6 s per forward (`vsa fine (3e int8 qk)` 34.2 ms × 400 = 13.7 s, the
+MXFP8 GEMMs 25.0 s at 518 TFLOP/s, the rest 6 s); the unprofiled forward
+takes 6.6 s. The missing ~1 s per forward is time the compute queue sits
+idle between blocks: the host spends ~50–100 ms per block copying 545 MB
+of codes (pageable `cuMemcpyHtoDAsync`, or the memcpy into the pinned
+ring: the ring changed nothing, 53.3 against 53.2 s) while the queue
+holds ~115 ms of kernels. ComfyUI's sampler at 45.2 s is 5.65 s per step,
+our pure GPU time. Removing the host copy (DMA straight from page-locked
+weight memory, which 8c20073's predecessor tried the wrong way) is the
+one thing left between the V2 numbers.
+
+**15 s**: 218.4 s against 213.6 s (2 % behind), at 30.8 GB.
+
+Cost: ~$1.3 for pod 3 plus ~$0.5 for the lost one; $25.68 → $23.15.
