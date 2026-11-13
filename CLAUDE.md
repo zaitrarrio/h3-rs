@@ -104,6 +104,13 @@ State and invariants only; the reasoning is in `docs/design.md`.
   guessing: `H3_PTX_OUT=f cargo test -p h3-cuda dump_ptx`, then `ptxas -v`
   (pip `nvidia-cuda-nvcc-cu12`) and `nvdisasm` (NVIDIA's apt `.deb`).
   Q fragments must never be re-read from L1 per mma (2.5× slower).
+  Dense attention has the same INT8 Q·Kᵀ path (`--qk8`, the `--vsa-qk8`
+  flag; `Backend::attention_qk8`, `Attention::Dense { qk8 }`): one scale
+  per 64-row tile of Q and of mean-shifted K (`vsa::attn_qk8_round` is the
+  oracle; WebGPU `attn_qk8.wgsl` emulates; CUDA `fw_attention_qk8_{64,128}`
+  stages int8 K in the `attn_mma2` structure, `fw_attn_qk8_quant` + the VSA
+  K-mean kernels prepare the codes). 127 checks with its cases; speed on
+  the dense base model: see the 5090 record once measured.
 - `--stream-blocks` (small cards): block weights stay in host memory in
   their device form; the DiT uploads block l + 1 on the backend's side
   queue while block l computes (`Backend::prefetch_begin / end / wait /
