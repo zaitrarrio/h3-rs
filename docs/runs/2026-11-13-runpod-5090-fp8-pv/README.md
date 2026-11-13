@@ -168,7 +168,12 @@ there is no FP8 fine kernel below d64 and that path had ignored `pv8`
 runs the host oracle on CUDA like the dense path does
 (`CuVsa::host_pv8`); the CUDA check of that tree is the next entry below.
 
-CUDA_RECHECK2_TBD
+**143 / 143 on that tree too** (RTX 4000 Ada, `ewkoaemz810nck`, EUR-IS-1,
+21:39–21:49 UTC; `check-ada2/`): the d32 VSA pv8 cases 2.8–3.1e-3, every
+pv8 case now 2.1–3.1e-3 of the oracle, which is the bf16 rounding of the
+device output buffer, not the arithmetic. The FP8 P·V kernels count as
+checked on sm_89 and, through the 5090 pod's 142 / 143 whose one miss was
+the checker's, on sm_120.
 
 Cost of the round: eight pods, ~$6.5 (five 5090 pods at $1.39/h, 5 min
 to 2 h each, the 4090 at $0.89/h for 27 min, the kernel-check Ada pods at
