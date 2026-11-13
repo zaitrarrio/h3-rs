@@ -126,6 +126,10 @@ pub struct Cuda {
     /// `H3_CUDA_PIN=1`: page-lock streamed weights (opt-in until the
     /// conformance suite passes with it on a GPU).
     use_pin: bool,
+    /// Pinned bounce buffer for the small uploads of a prefetch (norms, the
+    /// unlocked edge pages): copied in, then DMA'd with no host wait. Reset
+    /// at `prefetch_begin`, once the previous prefetch's copies are done.
+    bounce: std::sync::Mutex<Option<(cudarc::driver::PinnedHostSlice<u8>, usize)>>,
     pin_warned: std::sync::atomic::AtomicBool,
     blas: CudaBlas,
     /// cuBLASLt with the bias (+ tanh-GELU) epilogue fused into the GEMM;
@@ -523,6 +527,7 @@ impl Cuda {
             fence: std::sync::Mutex::new(None),
             pinned: Arc::new(std::sync::Mutex::new(Vec::new())),
             use_pin: env1("H3_CUDA_PIN"),
+            bounce: std::sync::Mutex::new(None),
             pin_warned: std::sync::atomic::AtomicBool::new(false),
             blas,
             lt,
@@ -577,11 +582,43 @@ impl Cuda {
         let s = unsafe { st.alloc::<u16>(n) }.expect("cuda alloc");
         if !data.is_empty() {
             let (p, _g) = s.device_ptr(st);
-            // SAFETY: `data` outlives the copy: the stream is synchronised before returning.
-            unsafe { cudarc::driver::result::memcpy_htod_async(p, data, st.cu_stream()).expect("upload") };
-            st.synchronize().expect("sync");
+            // SAFETY: `u16` reinterpreted as its bytes.
+            let bytes = unsafe { std::slice::from_raw_parts(data.as_ptr() as *const u8, data.len() * 2) };
+            self.htod(p, bytes, st);
         }
         CuBuf { s: Arc::new(s), len, f32 }
+    }
+
+    /// Copy `src` to the device at `dst` on the upload stream. During a
+    /// prefetch with page-locking on, small sources go through the pinned
+    /// bounce buffer and the call returns without waiting; otherwise the
+    /// pageable copy is waited for.
+    fn htod(&self, dst: u64, src: &[u8], st: &Arc<CudaStream>) {
+        const BOUNCE: usize = 64 << 20;
+        if self.use_pin && self.staging.load(std::sync::atomic::Ordering::Relaxed) {
+            let mut g = self.bounce.lock().unwrap();
+            if g.is_none() {
+                // SAFETY: written before it is read.
+                if let Ok(b) = unsafe { self.ctx.alloc_pinned_with_flags::<u8>(BOUNCE, 0) } {
+                    *g = Some((b, 0));
+                }
+            }
+            if let Some((buf, used)) = g.as_mut() {
+                let off = *used;
+                if off + src.len() <= BOUNCE {
+                    let slot = &mut buf.as_mut_slice().expect("pinned")[off..off + src.len()];
+                    slot.copy_from_slice(src);
+                    *used = (off + src.len()).div_ceil(256) * 256;
+                    // SAFETY: the bounce region stays untouched until the next
+                    // `prefetch_begin`, which waits for this prefetch's copies.
+                    unsafe { cudarc::driver::result::memcpy_htod_async(dst, &*slot, st.cu_stream()).expect("upload") };
+                    return;
+                }
+            }
+        }
+        // SAFETY: `src` outlives the copy: the stream is synchronised before returning.
+        unsafe { cudarc::driver::result::memcpy_htod_async(dst, src, st.cu_stream()).expect("upload") };
+        st.synchronize().expect("sync");
     }
 
     /// The part of `bytes` that lies in a page-locked range, as (start, end)
@@ -609,26 +646,20 @@ impl Cuda {
         if !bytes.is_empty() {
             let (p, _g) = s.device_ptr(st);
             let (i0, i1) = self.pinned_part(bytes);
-            // SAFETY (all three copies): pageable parts are waited for before
-            // returning; the page-locked part outlives the backend (`pin_host`).
-            unsafe {
-                if i1 > i0 {
-                    // The unpinned edges first (at most a page each), one wait,
-                    // then the DMA of the interior with no wait.
-                    if i0 > 0 {
-                        cudarc::driver::result::memcpy_htod_async(p, &bytes[..i0], st.cu_stream()).expect("upload");
-                    }
-                    if i1 < bytes.len() {
-                        cudarc::driver::result::memcpy_htod_async(p + i1 as u64, &bytes[i1..], st.cu_stream()).expect("upload");
-                    }
-                    if i0 > 0 || i1 < bytes.len() {
-                        st.synchronize().expect("sync");
-                    }
-                    cudarc::driver::result::memcpy_htod_async(p + i0 as u64, &bytes[i0..i1], st.cu_stream()).expect("upload");
-                } else {
-                    cudarc::driver::result::memcpy_htod_async(p, bytes, st.cu_stream()).expect("upload");
-                    st.synchronize().expect("sync");
+            if i1 > i0 {
+                // The unlocked edge pages (at most one each) through the bounce
+                // buffer, the locked interior as a DMA with no wait.
+                if i0 > 0 {
+                    self.htod(p, &bytes[..i0], st);
                 }
+                if i1 < bytes.len() {
+                    self.htod(p + i1 as u64, &bytes[i1..], st);
+                }
+                // SAFETY: the locked pages stay mapped and locked while the DiT
+                // that owns them (and their guard) lives.
+                unsafe { cudarc::driver::result::memcpy_htod_async(p + i0 as u64, &bytes[i0..i1], st.cu_stream()).expect("upload") };
+            } else {
+                self.htod(p, bytes, st);
             }
         }
         CuBuf { s: Arc::new(s), len: words, f32: false }
@@ -1061,6 +1092,14 @@ impl Backend for Cuda {
     }
 
     fn prefetch_begin(&self) {
+        if let Some(ev) = self.fence.lock().unwrap().as_ref() {
+            // The previous prefetch's copies (some from the bounce buffer) are
+            // done before the buffer is reused; normally already the case.
+            ev.synchronize().expect("event");
+        }
+        if let Some((_, used)) = self.bounce.lock().unwrap().as_mut() {
+            *used = 0;
+        }
         self.staging.store(true, std::sync::atomic::Ordering::Relaxed);
     }
 
