@@ -37,8 +37,8 @@ State and invariants only; the reasoning is in `docs/design.md`.
   denoise 54.9 s + decode 6.6 s against ComfyUI's 54.1 s total / 45.2 s
   sampler (14 % behind); FastH3 v1 4-step 31.3 s against 33.3 s (on
   par); the 15 s clip (362 frames) 230.8 s against 213.6 s at 31.2 GB
-  peak; the raw model at 25 dense euler steps 14.0 s per step against
-  6.8 s (bf16 dense attention against Kitchen int8: the next kernel).
+  peak; the raw model at 25 dense euler steps 13.2 s per step bf16, 9.95 s with
+  `--qk8`, against ComfyUI's 6.8 s.
 - MXFP8 (`--weights mxfp8`, `quant::Mxfp8`): W8A8, E4M3 codes with one E8M0
   scale per 32 input columns in cuBLASLt's `VEC32_UE8M0` swizzle
   (`mx_scale_offset`, rows padded to 128, groups to 4), the E4M3 / E8M0
@@ -109,19 +109,30 @@ State and invariants only; the reasoning is in `docs/design.md`.
   per 64-row tile of Q and of mean-shifted K (`vsa::attn_qk8_round` is the
   oracle; WebGPU `attn_qk8.wgsl` emulates; CUDA `fw_attention_qk8_{64,128}`
   stages int8 K in the `attn_mma2` structure, `fw_attn_qk8_quant` + the VSA
-  K-mean kernels prepare the codes). 127 checks with its cases; speed on
-  the dense base model: see the 5090 record once measured.
+  K-mean kernels prepare the codes). 127 checks with its cases (CUDA on a
+  5090 at 7e-3–2e-2 of the oracle). On the 5090 the dense base step goes
+  13.2 → 9.95 s (attention call 181 → 112 ms, 72 % → 61 % of the step),
+  the 25-step clip 330 → 249 s; PSNR 20.5 dB against the bf16-attention
+  clip (same scene, the 8-bit band), ComfyUI's Kitchen int8 step is 6.8 s
+  (`docs/runs/2026-11-13-runpod-5090-vs-comfy`, pod 3). Opt-in.
 - `--stream-blocks` (small cards): block weights stay in host memory in
   their device form; the DiT uploads block l + 1 on the backend's side
   queue while block l computes (`Backend::prefetch_begin / end / wait /
   release`, a non-blocking CUDA stream with events ordering the frees; two
   blocks resident). Byte-coded weights upload as bytes: the old path
   re-encoded them on the CPU each step and copied on the compute stream
-  (5090: V2 forward 15.4 → 6.9 s, V1 14.4 → 6.15 s, dense base 21.3 →
-  14.0 s; clips byte-identical, `h3 check` has streamed twins of the DiT
-  cases, 121 / 121 on the 5090). `--steps N` sets the base model's
-  uniform Euler ladder (ComfyUI's 25-step template); distilled variants
-  refuse it.
+  (5090: V2 forward 15.4 → 6.6 s, V1 14.4 → 6.0 s, dense base 21.3 →
+  13.2 s; clips byte-identical, `h3 check` has streamed twins of the DiT
+  cases). The streamed V2 forward still idles ~1 s per forward between
+  blocks against its 5.6 s of GPU op time: the host's copy of each block
+  (pageable `cuMemcpyHtoDAsync`, or a memcpy into a pinned staging ring,
+  which measured no gain and was removed) is on the critical path, so the
+  interior pages of each streamed buffer are page-locked at load
+  (`pin_host`, `cuMemHostRegister` on whole pages only: page-rounded
+  ranges locked neighbours and broke every later copy) and the DMA runs
+  without a host wait; `H3_CUDA_NO_PIN=1` compares. `--steps N` sets the
+  base model's uniform Euler ladder (ComfyUI's 25-step template);
+  distilled variants refuse it.
 - NVFP4 on CUDA stays 4-bit on the device (codes + E4M3 scales, expanded
   into the bf16 scratch per GEMM like int8 / int4): the 42-block Trim runs in
   24.3 GB peak on an L40S; expanding at load needs 36 GB and OOMs a 48 GB

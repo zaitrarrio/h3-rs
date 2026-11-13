@@ -122,13 +122,14 @@ time); when the tables do not fit, they are uploaded per step.
 7. ~~Block streaming with overlapped uploads~~: done (prefetch on a side
    stream, byte uploads; 5090 record). A 24 GB card run is still open:
    the 5090 peaks at 15.9–18 GB streamed at 124 frames.
-7b. INT8 dense attention (`--qk8`): built on the VSA fine stage's recipe
+7b. INT8 dense attention (`--qk8`): the VSA fine stage's recipe
    (per-64-row-tile int8 Q and mean-shifted K, `mma.s8` scores, bf16
    P·V) inside the dense `attn_mma2` kernel, with the CPU oracle and the
-   WebGPU emulation; being measured against ComfyUI's Kitchen int8
-   attention, which does a dense 25-step base forward in 6.8 s on a 5090
-   where our bf16 path takes 14.0 s. The base model, Pika and Regen-2K
-   are all dense.
+   WebGPU emulation. On the 5090 the attention call goes 181 → 112 ms
+   and the dense base step 13.2 → 9.95 s; ComfyUI's Kitchen int8 step is
+   6.8 s, which puts its attention near 80 ms per call: FP8 P·V and a
+   tighter pipeline are the remaining dense work. The base model, Pika
+   and Regen-2K are all dense.
 8. Variants: all of them run (Pika Flex and Regen-2K on RunPod,
    `docs/runs/2026-11-12-runpod-pro6000-variants`). The RunPod volume
    (750 GB) holds every variant's weights, the AdaLN tables and a stored
