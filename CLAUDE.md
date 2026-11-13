@@ -134,7 +134,13 @@ State and invariants only; the reasoning is in `docs/design.md`.
   5090 the V2 forward 7.2 → 6.45 s and the 15 s clip's 27.2 → 23.8 s on
   one pod, 127 / 127 checks either way; a pinned staging ring (memcpy of
   the whole block) had measured nothing and was removed.
-  `H3_CUDA_NO_PIN=1` compares. The forward is then compute-bound and
+  `H3_CUDA_NO_PIN=1` compares. The prefetch fence must outlive
+  `prefetch_wait`: `prefetch_begin` synchronises it on the host before
+  the bounce buffer is reused, and taking it early let the next block's
+  small copies overwrite slots still queued on the copy stream (clips
+  black on three hosts, byte-identical on one, 29317cb; the 4090's PCIe 4
+  link gains nothing from pinning: 14.8 s either way). The forward is
+  then compute-bound and
   5090 pods differ by ~8 % through their clocks under the 575 W limit
   (median 2445 MHz on the slower kind; the link runs PCIe 5 × 8).
   `--steps N` sets the base model's uniform Euler ladder (ComfyUI's

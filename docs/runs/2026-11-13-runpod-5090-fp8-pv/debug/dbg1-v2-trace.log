@@ -1,0 +1,141 @@
+++ cat /root/p5.txt
++ timeout 1200 /w/h3-bin generate --backend cuda --seed 1 --width 1344 --height 768 --frames 124 --prompt 'integrated_multimodal_description: [Shot 1] Live-action, cinematic, a medium-wide shot frames an elderly Japanese samurai standing in the open stone courtyard of a temple in light, steady rain, facing the camera squarely under grey overcast daylight, framed from the knees up. He is around seventy, with a deeply lined, weathered face, a thin white beard and mustache, and a full head of thick, long, loose grey-white hair falling from the crown of his head past his shoulders, damp strands lifting and swaying in the wind; he wears a dark indigo kimono over grey hakama, with a katana and a shorter sword tucked through the sash at his left hip. Fine rain streaks fall through the whole frame and small droplets splash on the wet flagstones, while the dark wooden pillars and pale paper shoji screens of the temple hall stand behind him. Keeping his eyes on the lens, he raises both forearms and crosses them firmly at the wrists in an X in front of his chest, open hands flat with fingers together, the wide wet sleeves sliding back along his forearms, as the elderly samurai with a low, gravelly, unhurried voice (S1) says: <d>[English] No.</d> The camera pans right with small amplitude at slow speed while he holds the crossed arms, the pillars drifting across the background behind the falling rain. He lowers his arms to his sides, and the camera pushes in with large amplitude toward his face, ending on a tight close-up in which the wrinkles around his eyes, the individual white beard hairs, wet strands of long hair clinging to his cheek, and raindrops running down his skin are sharply visible, as he (S1) continues, lips moving clearly: <d>[English] A blade drawn in anger cuts its owner first.</d> He holds a steady gaze into the lens as the rain keeps falling.
+
+overall_soundscape: Light, steady rain patters on the stone courtyard and the temple roof tiles, with water trickling from the eaves and a low wind passing through. Heavy damp fabric rustles as the sleeves slide back and the forearms cross, and small droplets splash on the flagstones.
+
+non_diegetic_music: N/A' --out /root/out/v2-new-trace.y4m --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --tables /workspace/h3-rs/tables/v2.tables --stream-blocks
+cuda NVIDIA GeForce RTX 5090 (sm_120)
+load 27.0s
+prompt: 462 rows in 70.6s
+trace input h: max 1.2100e2, non-finite 0 of 205212672
+trace block 0 attn: max 5.6250e1, non-finite 0 of 273616896
+trace block 0 h: max 1.0957e5, non-finite 0 of 205212672
+trace block 1 attn: max 5.9500e1, non-finite 0 of 273616896
+trace block 1 h: max 3.2973e5, non-finite 0 of 205212672
+trace block 2 attn: max 5.5250e1, non-finite 0 of 273616896
+trace block 2 h: max 3.3178e5, non-finite 0 of 205212672
+trace block 3 attn: max 2.6000e1, non-finite 0 of 273616896
+trace block 3 h: max 3.3382e5, non-finite 0 of 205212672
+trace block 4 attn: max 5.3000e1, non-finite 0 of 273616896
+trace block 4 h: max 3.4406e5, non-finite 0 of 205212672
+trace block 5 attn: max 1.1250e2, non-finite 0 of 273616896
+trace block 5 h: max 3.5021e5, non-finite 0 of 205212672
+trace block 6 attn: max 3.9250e1, non-finite 0 of 273616896
+trace block 6 h: max 3.6659e5, non-finite 0 of 205212672
+trace block 7 attn: max 5.8500e1, non-finite 0 of 273616896
+trace block 7 h: max 4.1370e5, non-finite 0 of 205212672
+trace block 8 attn: max 3.9750e1, non-finite 0 of 273616896
+trace block 8 h: max 4.1574e5, non-finite 0 of 205212672
+trace block 9 attn: max 5.0750e1, non-finite 0 of 273616896
+trace block 9 h: max 4.1574e5, non-finite 0 of 205212672
+trace block 10 attn: max 7.7000e1, non-finite 0 of 273616896
+trace block 10 h: max 4.1574e5, non-finite 0 of 205212672
+trace block 11 attn: max 4.0750e1, non-finite 0 of 273616896
+trace block 11 h: max 4.9357e5, non-finite 0 of 205212672
+trace block 12 attn: max 4.4750e1, non-finite 0 of 273616896
+trace block 12 h: max 4.9971e5, non-finite 0 of 205212672
+trace block 13 attn: max 8.2000e1, non-finite 0 of 273616896
+trace block 13 h: max 1.8596e6, non-finite 0 of 205212672
+trace block 14 attn: max 5.9000e1, non-finite 0 of 273616896
+trace block 14 h: max 1.8596e6, non-finite 0 of 205212672
+trace block 15 attn: max 6.8000e1, non-finite 0 of 273616896
+trace block 15 h: max 1.8596e6, non-finite 0 of 205212672
+trace block 16 attn: max 5.8500e1, non-finite 0 of 273616896
+trace block 16 h: max 1.8596e6, non-finite 0 of 205212672
+trace block 17 attn: max 6.0500e1, non-finite 0 of 273616896
+trace block 17 h: max 1.8596e6, non-finite 0 of 205212672
+trace block 18 attn: max 7.4000e1, non-finite 0 of 273616896
+trace block 18 h: max 1.8514e6, non-finite 0 of 205212672
+trace block 19 attn: max 1.1600e2, non-finite 0 of 273616896
+trace block 19 h: max 1.8514e6, non-finite 0 of 205212672
+trace block 20 attn: max 7.1500e1, non-finite 0 of 273616896
+trace block 20 h: max 1.8432e6, non-finite 0 of 205212672
+trace block 21 attn: max 8.9500e1, non-finite 0 of 273616896
+trace block 21 h: max 1.8350e6, non-finite 0 of 205212672
+trace block 22 attn: max 1.0200e2, non-finite 0 of 273616896
+trace block 22 h: max 1.8350e6, non-finite 0 of 205212672
+trace block 23 attn: max 9.2000e1, non-finite 0 of 273616896
+trace block 23 h: max 1.8268e6, non-finite 0 of 205212672
+trace block 24 attn: max 1.3300e2, non-finite 0 of 273616896
+trace block 24 h: max 1.8268e6, non-finite 0 of 205212672
+trace block 25 attn: max 1.1300e2, non-finite 0 of 273616896
+trace block 25 h: max 1.8268e6, non-finite 0 of 205212672
+trace block 26 attn: max 1.1500e2, non-finite 0 of 273616896
+trace block 26 h: max 1.8104e6, non-finite 0 of 205212672
+trace block 27 attn: max 1.0400e2, non-finite 0 of 273616896
+trace block 27 h: max 1.7859e6, non-finite 0 of 205212672
+trace block 28 attn: max 1.4100e2, non-finite 0 of 273616896
+trace block 28 h: max 1.7695e6, non-finite 0 of 205212672
+trace block 29 attn: max 1.9200e2, non-finite 0 of 273616896
+trace block 29 h: max 1.7613e6, non-finite 0 of 205212672
+trace block 30 attn: max 2.7000e2, non-finite 0 of 273616896
+trace block 30 h: max 1.7531e6, non-finite 0 of 205212672
+trace block 31 attn: max 3.3400e2, non-finite 0 of 273616896
+trace block 31 h: max 1.7285e6, non-finite 0 of 205212672
+trace block 32 attn: max 2.6600e2, non-finite 0 of 273616896
+trace block 32 h: max 1.7203e6, non-finite 0 of 205212672
+trace block 33 attn: max 3.0200e2, non-finite 0 of 273616896
+trace block 33 h: max 1.7039e6, non-finite 0 of 205212672
+trace block 34 attn: max 2.9400e2, non-finite 0 of 273616896
+trace block 34 h: max 1.6876e6, non-finite 0 of 205212672
+trace block 35 attn: max 2.8400e2, non-finite 0 of 273616896
+trace block 35 h: max 1.6630e6, non-finite 0 of 205212672
+trace block 36 attn: max 2.9600e2, non-finite 0 of 273616896
+trace block 36 h: max 2.7853e6, non-finite 0 of 205212672
+trace block 37 attn: max 2.2900e2, non-finite 0 of 273616896
+trace block 37 h: max 2.7853e6, non-finite 0 of 205212672
+trace block 38 attn: max 2.4600e2, non-finite 0 of 273616896
+trace block 38 h: max 2.7853e6, non-finite 0 of 205212672
+trace block 39 attn: max 2.5200e2, non-finite 0 of 273616896
+trace block 39 h: max 9.9615e6, non-finite 0 of 205212672
+trace block 40 attn: max 2.2600e2, non-finite 0 of 273616896
+trace block 40 h: max 9.9615e6, non-finite 0 of 205212672
+trace block 41 attn: max 2.6800e2, non-finite 0 of 273616896
+trace block 41 h: max 1.0027e7, non-finite 0 of 205212672
+trace block 42 attn: max 3.0400e2, non-finite 0 of 273616896
+trace block 42 h: max 1.0093e7, non-finite 0 of 205212672
+trace block 43 attn: max 2.9800e2, non-finite 0 of 273616896
+trace block 43 h: max 1.0093e7, non-finite 0 of 205212672
+trace block 44 attn: max 4.3800e2, non-finite 0 of 273616896
+trace block 44 h: max 1.0224e7, non-finite 0 of 205212672
+trace block 45 attn: max 4.5400e2, non-finite 0 of 273616896
+trace block 45 h: max 1.0420e7, non-finite 0 of 205212672
+trace block 46 attn: max 4.4400e2, non-finite 0 of 273616896
+trace block 46 h: max 1.0420e7, non-finite 0 of 205212672
+trace block 47 attn: max 4.6400e2, non-finite 0 of 273616896
+trace block 47 h: max 1.0355e7, non-finite 0 of 205212672
+trace block 48 attn: max 4.9400e2, non-finite 0 of 273616896
+trace block 48 h: max 1.0420e7, non-finite 0 of 205212672
+trace block 49 attn: max 4.8200e2, non-finite 0 of 273616896
+trace block 49 h: max 1.0420e7, non-finite 0 of 205212672
+trace step 0 video: max 5.2812e0, non-finite 0 of 3580416
+trace step 0 audio: max 3.7812e0, non-finite 0 of 13248
+step 1/8 68.39s
+trace step 1 video: max 0.0000e0, non-finite 3580416 of 3580416
+trace step 1 audio: max 0.0000e0, non-finite 13248 of 13248
+step 2/8 6.51s
+trace step 2 video: max 0.0000e0, non-finite 3580416 of 3580416
+trace step 2 audio: max 0.0000e0, non-finite 13248 of 13248
+step 3/8 6.59s
+trace step 3 video: max 0.0000e0, non-finite 3580416 of 3580416
+trace step 3 audio: max 0.0000e0, non-finite 13248 of 13248
+step 4/8 6.48s
+trace step 4 video: max 0.0000e0, non-finite 3580416 of 3580416
+trace step 4 audio: max 0.0000e0, non-finite 13248 of 13248
+step 5/8 6.49s
+trace step 5 video: max 0.0000e0, non-finite 3580416 of 3580416
+trace step 5 audio: max 0.0000e0, non-finite 13248 of 13248
+step 6/8 6.56s
+trace step 6 video: max 0.0000e0, non-finite 3580416 of 3580416
+trace step 6 audio: max 0.0000e0, non-finite 13248 of 13248
+step 7/8 6.53s
+trace step 7 video: max 0.0000e0, non-finite 3580416 of 3580416
+trace step 7 audio: max 0.0000e0, non-finite 13248 of 13248
+step 8/8 6.47s
+run 0: total 120.54s  prepare 0.25s  adaln 0.00s  denoise 114.03s (["68.39", "6.51", "6.59", "6.48", "6.49", "6.56", "6.53", "6.47"])  decode 6.01s  audio 0.18s
+wrote /root/out/v2-new-trace.y4m (124 frames 1344x768) and /root/out/v2-new-trace.wav
+mux: ffmpeg -i /root/out/v2-new-trace.y4m -i /root/out/v2-new-trace.wav -c:v libx264 -pix_fmt yuv420p -c:a aac /root/out/v2-new-trace.mp4
+
+real	3m50.160s
+user	3m0.196s
+sys	2m29.365s
