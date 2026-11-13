@@ -172,3 +172,35 @@ one thing left between the V2 numbers.
 **15 s**: 218.4 s against 213.6 s (2 % behind), at 30.8 GB.
 
 Cost: ~$1.3 for pod 3 plus ~$0.5 for the lost one; $25.68 → $23.15.
+
+## Pod 4 (54256d1): page-locked DMA, first try
+
+Pod `d9vt7lde0hjo86` (11:30–12:05 UTC; `output-5-pod4-pagelock-dma.txt`).
+54256d1 registers only the whole pages inside each streamed buffer and
+copies the two partial edge pages as pageable memory, so no neighbouring
+allocation is ever locked. The clips ran, the measurement said nothing
+moved, and the checker still failed:
+
+| | denoise | decode | note |
+|---|---|---|---|
+| V2, page-locked (two runs) | 57.9 s, 57.5 s = 7.1–7.4 s × 8 | 6.6 s | |
+| V2, `H3_CUDA_NO_PIN=1` | 58.3 s | 6.7 s | |
+| V1 | 25.9 s | 6.5 s | |
+| V2, 15 s | 218.8 s = 27.0–27.6 s × 8 | 20.3 s | 30.9 GB |
+| raw H3, 25 steps, `--qk8` | 267.8 s = 10.5–10.9 s × 25 | | |
+
+Two readings. First, this box is ~8 % slower than pod 3's across the
+board (V2 7.2 against 6.6 s per forward, the dense INT8 step 10.7
+against 9.95 s) with jitter the earlier pods did not show; `nvidia-smi`
+before the run reported its PCIe link at **gen 1 × 8** (idle state or
+not, the next pod samples the link, SM clock and power through the
+clips). Second, page-locking did not move the needle (57.7 against
+58.3 s), which means the host's copy time is not what idles the GPU
+either: every small upload in the prefetch (norms, the partial edge
+pages) still ends in a `cuStreamSynchronize` of the side stream, and an
+in-order stream makes that wait cover the large DMAs issued just before.
+The checker panicked at its first upload with `CUDA_ERROR_INVALID_VALUE`
+again (`h3 check` loads several streamed DiTs in one process and the
+locked pages of a dropped one stayed registered): 0c29fac turns the
+locks into guards the DiT drops before its buffers, and gates the path
+behind `H3_CUDA_PIN=1` until the suite passes with it.
