@@ -135,8 +135,12 @@ State and invariants only; the reasoning is in `docs/design.md`.
   P·V half is one k32 FP8 mma per 32 keys with `ldmatrix.x2` and no
   shared-memory transpose. Kernels `fw_attention_pv8_{64,128}` and
   `fw_vsa_fine3g_mma{64,128}` (`H3_CUDA_VSA_FINE=g`), sm_89+
-  (`cvt.rn.satfinite.e4m3x2`); WebGPU emulates (`attn_qk8.wgsl`,
-  `vsa_fine.wgsl`). 143 checks. On the 5090
+  (`cvt.rn.satfinite.e4m3x2`); WebGPU emulates (`attn_pv8.wgsl`, the
+  V codes from `attn_qk8.wgsl`, the VSA fine stage in `flash.wgsl`). 143 checks (CUDA: 143 / 143 on an RTX 4000 Ada,
+  sm_89, after the checker fix below; the dense pv8 cases at 3e-3). Head
+  sizes without an FP8 kernel (not 64 / 128) run the host oracle on CUDA,
+  dense and VSA alike (`CuVsa::host_pv8`); pre-sm_89 cards warn and run
+  bf16 P·V. On the 5090
   (`docs/runs/2026-11-13-runpod-5090-fp8-pv`, the slower pod kind): the
   dense call 119.5 → **82.1 ms** (1.46×), the dense base step 10.35 →
   **8.66 s** (pod 3: 7.84 s; ComfyUI 6.8 s), the 25-step denoise 258 →

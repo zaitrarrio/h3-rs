@@ -155,9 +155,22 @@ charged for the flip. It also makes the oracle's int8 code arithmetic the kernel
 rather than `x / s`: one code in a million differed, and a code flip
 moves a score by ~3e-3, enough to re-round P). With it the CPU and
 lavapipe checks are 143 / 143 (lavapipe's pv8 cases at 1e-7 of the
-oracle, bit-faithful emulation); the CUDA check ran again on the change:
-CUDA_RECHECK_TBD
+oracle, bit-faithful emulation); the CUDA check ran again on the change, on a
+kernel-check pod without the volume (`rp.py create … - -`): **143 / 143
+on an RTX 4000 Ada** (sm_89, driver 595.91.07, 130 W; RunPod
+`76c8crm2zg1yyh`, EUR-IS-2, $0.28/h, 21:34–21:45 UTC;
+`check-ada/output-1.txt`). The dense pv8 cases went from 2.1–3.4e-2 to
+2.8–3.1e-3 and the d64 / d128 VSA pv8 cases from 0.2–2.3e-2 to
+2.1–3.1e-3 of the oracle: the kernels were faithful all along, the
+checker was not. The d32 VSA pv8 cases stayed at 0.5–2.3e-2, because
+there is no FP8 fine kernel below d64 and that path had ignored `pv8`
+(bf16 P·V against the FP8 oracle, inside the tolerance by luck); it now
+runs the host oracle on CUDA like the dense path does
+(`CuVsa::host_pv8`); the CUDA check of that tree is the next entry below.
 
-Cost of the round: six pods, ~$6 (five 5090 pods at $1.39/h, 5 min to
-2 h each, the 4090 at $0.89/h for 27 min); the pod that failed to
-restart was the expensive one.
+CUDA_RECHECK2_TBD
+
+Cost of the round: eight pods, ~$6.5 (five 5090 pods at $1.39/h, 5 min
+to 2 h each, the 4090 at $0.89/h for 27 min, the kernel-check Ada pods at
+$0.28/h for ~10 min each); the pod that failed to restart was the
+expensive one.

@@ -87,6 +87,11 @@ pub struct CuVsa {
     /// FP8 P·V: V codes transposed per head to `[d][nb·te]` in slot order
     /// (bytes in u16 words), the per-head V mean, chunk maxima, per-head scale.
     pv8: Option<(CuBuf, CuBuf, CuBuf, CuBuf)>,
+    /// FP8 P·V asked for a head size without an FP8 fine kernel (only 64 and
+    /// 128 have one), or with the fine3 path switched off: the call runs the
+    /// host oracle, as the dense path does. Pre-sm_89 cards warn instead and
+    /// run bf16 P·V (a real clip through the oracle would take hours).
+    host_pv8: Option<VsaSpec>,
 }
 
 pub struct CuWeight {
@@ -1758,6 +1763,7 @@ impl Backend for Cuda {
                     Backend::upload_table(self, &vec![0.0; h]),
                 )
             }),
+            host_pv8: (spec.pv8 && self.ada && !(self.vsa_fine3.is_some() && !self.scalar_attn && (d == 64 || d == 128))).then(|| spec.clone()),
             d,
             seq: plan.seq,
             scale: spec.scale,
@@ -1769,6 +1775,14 @@ impl Backend for Cuda {
         assert!(n <= q.len && n <= k.len && n <= v.len && n <= out.len);
         if let Some(g) = gate {
             assert!(n <= g.len);
+        }
+        if let Some(spec) = &s.host_pv8 {
+            let (qh, kh, vh) = (self.download(q), self.download(k), self.download(v));
+            let gh = gate.map(|g| self.download(g));
+            let mut o = vec![0f32; n];
+            h3_cpu::vsa_reference(&qh[..n], &kh[..n], &vh[..n], gh.as_deref().map(|g| &g[..n]), spec, &mut o);
+            self.write(out, &o);
+            return;
         }
         let grid = (s.nb as u32, s.heads as u32, 1);
         let vec_pool = s.d.is_multiple_of(4) && s.d <= 128;

@@ -1,0 +1,57 @@
++ O=/root/out
++ mkdir -p /root/out
++ cd /root
++ nvidia-smi --query-gpu=name,driver_version,power.limit,memory.total,compute_cap --format=csv,noheader
+NVIDIA RTX 4000 Ada Generation, 595.91.07, 130.00 W, 20475 MiB, 8.9
++ echo '== conformance'
+== conformance
++ timeout 1800 /w/h3-bin check --backend cuda
++ echo 'check exit 0'
+check exit 0
++ grep -E 'checks|panick|FAIL|rror' /root/out/check.log
+all 143 checks pass (tolerance 3e-2)
++ grep -E 'pv8|qk8' /root/out/check.log
+attention qk8 h3 kv3 37x37 d16 causal=false          rel 1.96e-2  ok
+attention qk8+pv8 h3 kv3 37x37 d16 causal=false      rel 2.80e-3  ok
+attention qk8 h4 kv2 70x70 d32 causal=true           rel 1.15e-2  ok
+attention qk8+pv8 h4 kv2 70x102 d32 causal=true      rel 3.08e-3  ok
+attention qk8 h2 kv2 130x65 d64 causal=false         rel 1.03e-2  ok
+attention qk8+pv8 h2 kv2 130x65 d64 causal=false     rel 3.01e-3  ok
+attention qk8 h2 kv1 33x33 d128 causal=true          rel 6.41e-3  ok
+attention qk8+pv8 h2 kv1 33x65 d128 causal=true      rel 2.88e-3  ok
+vsa tile64 d32 qk8 gate                              rel 7.18e-3  ok
+vsa tile64 d32 qk8 no-gate                           rel 1.55e-2  ok
+vsa tile64 d32 qk8+pv8 gate                          rel 5.47e-3  ok
+vsa tile64 d32 qk8+pv8 no-gate                       rel 2.25e-2  ok
+vsa tile128 d64 qk8 gate                             rel 1.45e-2  ok
+vsa tile128 d64 qk8 no-gate                          rel 2.15e-2  ok
+vsa tile128 d64 qk8+pv8 gate                         rel 2.06e-3  ok
+vsa tile128 d64 qk8+pv8 no-gate                      rel 3.11e-3  ok
+vsa tile64 d128 qk8 gate                             rel 8.92e-3  ok
+vsa tile64 d128 qk8 no-gate                          rel 1.02e-2  ok
+vsa tile64 d128 qk8+pv8 gate                         rel 2.99e-3  ok
+vsa tile64 d128 qk8+pv8 no-gate                      rel 3.03e-3  ok
+dit tiny Dense { qk8: false, pv8: false } native     rel 5.89e-3  ok
+dit tiny Dense { qk8: false, pv8: false } native streamed rel 5.89e-3  ok
+dit tiny Vsa { sparsity: 0.5, tile: 64, ref_sparsity: 0.5, qk8: false, pv8: false } native rel 5.15e-3  ok
+dit tiny Vsa { sparsity: 0.5, tile: 64, ref_sparsity: 0.5, qk8: false, pv8: false } native streamed rel 5.15e-3  ok
+dit tiny Dense { qk8: false, pv8: false } int8       rel 5.41e-3  ok
+dit tiny Dense { qk8: false, pv8: false } int8 streamed rel 5.41e-3  ok
+dit tiny Vsa { sparsity: 0.5, tile: 64, ref_sparsity: 0.5, qk8: false, pv8: false } int8 rel 4.66e-3  ok
+dit tiny Vsa { sparsity: 0.5, tile: 64, ref_sparsity: 0.5, qk8: false, pv8: false } int8 streamed rel 4.66e-3  ok
+dit tiny Dense { qk8: false, pv8: false } int4-hqq-g32 rel 5.21e-3  ok
+dit tiny Dense { qk8: false, pv8: false } int4-hqq-g32 streamed rel 5.21e-3  ok
+dit tiny Vsa { sparsity: 0.5, tile: 64, ref_sparsity: 0.5, qk8: false, pv8: false } int4-hqq-g32 rel 5.60e-3  ok
+dit tiny Vsa { sparsity: 0.5, tile: 64, ref_sparsity: 0.5, qk8: false, pv8: false } int4-hqq-g32 streamed rel 5.60e-3  ok
+dit tiny Dense { qk8: true, pv8: false } native      rel 5.43e-3  ok
+dit tiny Dense { qk8: true, pv8: false } native streamed rel 5.43e-3  ok
+dit tiny Dense { qk8: true, pv8: true } native       rel 5.37e-3  ok
+dit tiny Dense { qk8: true, pv8: true } native streamed rel 5.37e-3  ok
+dit tiny Vsa { sparsity: 0.5, tile: 64, ref_sparsity: 0.5, qk8: true, pv8: false } native rel 5.78e-3  ok
+dit tiny Vsa { sparsity: 0.5, tile: 64, ref_sparsity: 0.5, qk8: true, pv8: false } native streamed rel 5.78e-3  ok
+dit tiny Vsa { sparsity: 0.5, tile: 64, ref_sparsity: 0.5, qk8: true, pv8: true } native rel 5.85e-3  ok
+dit tiny Vsa { sparsity: 0.5, tile: 64, ref_sparsity: 0.5, qk8: true, pv8: true } native streamed rel 5.85e-3  ok
+<?xml version="1.0" encoding="UTF-8"?><Error><Code>InvalidArgument</Code><Message>Authorization</Message></Error>+ echo 'check done; terminating pod 76c8crm2zg1yyh'
+check done; terminating pod 76c8crm2zg1yyh
++ terminate
+
