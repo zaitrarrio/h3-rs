@@ -81,6 +81,10 @@ struct ModelArgs {
     /// Precomputed AdaLN tables (`h3 adaln-tables`), so the 13 B modulation weights are never read.
     #[arg(long)]
     tables: Option<PathBuf>,
+    /// Euler step count for the base model (its release runs 49; ComfyUI's template 25). Distilled
+    /// variants keep their own ladders.
+    #[arg(long)]
+    steps: Option<usize>,
 }
 
 #[derive(clap::Args, Clone, Copy)]
@@ -434,8 +438,21 @@ pub struct Resolved {
 }
 
 impl ModelArgs {
-    fn resolve(&self) -> Result<Resolved> {
+    /// The named preset with `--steps` applied (the base model's Euler ladder only).
+    fn preset(&self) -> Result<Variant> {
         let mut variant = Variant::by_name(&self.variant)?;
+        if let Some(n) = self.steps {
+            match variant.sampler {
+                Sampler::Uniform(_) if n >= 1 => variant.sampler = Sampler::Uniform(n + 1),
+                Sampler::Uniform(_) => bail!("--steps must be at least 1"),
+                _ => bail!("--steps applies to the base model's uniform Euler ladder; {} has its own", variant.name),
+            }
+        }
+        Ok(variant)
+    }
+
+    fn resolve(&self) -> Result<Resolved> {
+        let mut variant = self.preset()?;
         let variant_dir = self.variant_dir.clone().or_else(|| self.model_dir.clone());
         if let Some(vd) = &variant_dir {
             for name in ["fastvideo_inference.json", "transformer/fastvideo_inference.json"] {
@@ -525,7 +542,7 @@ fn main() -> Result<()> {
     }
     match cli.cmd {
         Cmd::Plan { model, shape, attn, vram_gib, max_binding_mib, backend, text_tokens } => {
-            let variant = Variant::by_name(&model.variant)?;
+            let variant = model.preset()?;
             let g = shape.geometry(&variant)?;
             let (lt, lh, lw) = g.latent(16);
             let layout = packing::build_layout(&vec![packing::TEXT_TAG; text_tokens], lt, lh, lw, g.audio_latents(), variant.config.patch, &[])?;
