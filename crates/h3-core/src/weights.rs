@@ -120,14 +120,15 @@ impl SafetensorsDir {
         }
         let mut maps = Vec::new();
         let mut index = HashMap::new();
-        let advise = std::env::var_os("H3_NO_MADVISE").is_none();
+        // `H3_MADVISE=1`: MADV_SEQUENTIAL on each map and MADV_WILLNEED per tensor.
+        // Measured slower from RunPod's FUSE network volume (load 147-167 s vs
+        // 118 s without; `docs/runs/2026-11-13-runpod-pro6000-stage`), so it is
+        // opt-in; staging the files onto local disk is what pays there.
+        let advise = std::env::var_os("H3_MADVISE").is_some();
         for (i, f) in files.iter().enumerate() {
             let file = std::fs::File::open(f)?;
             let map = map_readonly(&file)?;
             if advise {
-                // Tensors are consumed front to back: let the kernel read ahead in
-                // large requests instead of one page fault at a time (on a network
-                // filesystem the difference is 0.2 vs 0.7+ GB/s). Best effort.
                 let _ = map.advise(memmap2::Advice::Sequential);
             }
             let st = safetensors::SafeTensors::deserialize(&map)
@@ -146,8 +147,7 @@ impl SafetensorsDir {
         let st = safetensors::SafeTensors::deserialize(&self.maps[i]).map_err(|e| Error::Weights(e.to_string()))?;
         let t = st.tensor(name).map_err(|e| Error::Weights(e.to_string()))?;
         let data = t.data();
-        if std::env::var_os("H3_NO_MADVISE").is_none() {
-            // Ask for this tensor's pages before they are touched (`H3_NO_MADVISE=1` to compare).
+        if std::env::var_os("H3_MADVISE").is_some() {
             let off = data.as_ptr() as usize - self.maps[i].as_ptr() as usize;
             let _ = self.maps[i].advise_range(memmap2::Advice::WillNeed, off, data.len());
         }

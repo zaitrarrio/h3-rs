@@ -8,8 +8,10 @@ nvidia/cuda:12.8.1-runtime-ubuntu24.04 with the weights volume at
 fetches the h3 binary from `<run>/BIN_KEY` in the h3-runs bucket, links
 /w/<tree> to /workspace/weights/<tree> for every tree there (`stage TREE
 [SUB...]` in a command copies a tree, or parts of it, onto the container
-disk and repoints the link: loads from the network volume run at
-0.25-0.5 GB/s, the local disk is NVMe), then runs
+disk and repoints the link; `H3_STAGE="TREE[:SUB,SUB] ..."` does it at
+boot, before READY: the volume reads at 0.8-1.9 GB/s into the copy but
+the loader pages it at 0.2 GB/s, so staging pays from the first load;
+size the container disk for it), then runs
 `<run>/cmd/N.sh` for N = 1..40 as they appear (rr.py cmd N FILE),
 uploading `<run>/out/N.log` after each (rr.py out N). Weights are fetched by
 commands built with fetch_plan.py (idempotent, size-checked, add-only on the
@@ -52,6 +54,8 @@ L = ["#!/bin/bash", "set -u", "LOG=/root/boot.log", "exec >>$LOG 2>&1",
      "mkdir -p /w /workspace/weights /workspace/h3-rs",
      'for t in /workspace/weights/*/; do t=${t%/}; ln -sfn "$t" "/w/$(basename "$t")"; done; ls -la /w',
      f"curl -sf -o /w/h3-bin {shlex.quote(get(B, run + '/' + sys.argv[1]))} && chmod +x /w/h3-bin && echo 'binary ok'",
+     ] + [f"stage {item.split(':')[0]} {' '.join(item.split(':')[1].split(',')) if ':' in item else ''}".rstrip()
+          for item in os.environ.get("H3_STAGE", "").split()] + [
      'up $LOG "$LOGPUT"', "echo READY",
      "CMD=(" + " ".join(shlex.quote(get(B, f"{run}/cmd/{i}.sh")) for i in range(1, N + 1)) + ")",
      "OUT=(" + " ".join(shlex.quote(put(f"{run}/out/{i}.log")) for i in range(1, N + 1)) + ")",

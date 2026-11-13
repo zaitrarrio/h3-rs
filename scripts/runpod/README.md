@@ -14,11 +14,16 @@ the volume yet (R2 `fv-weights` or Hugging Face).
     python3 scripts/runpod/rp.py create h3-rs "NVIDIA RTX PRO 6000 Blackwell Server Edition" EU-RO-1 bz0ofkfx45 "$START"
     python3 scripts/vast/rr.py cmd 1 first.sh    # … rr.py out 1
 
+Stage what a run loads: `H3_STAGE="h3-8step-mxfp8 h3-8step:text_encoder,tokenizer,vae,audio_vae"`
+before `make_boot.py` copies those onto the container disk at boot (the
+V2 recipe's 103 GB in 70 s) and the loads then run at NVMe speed; from
+the volume the mmap loader reads at 0.2 GB/s
+(`docs/runs/2026-11-13-runpod-pro6000-stage`).
+
 The volume `fv-weights-h3-ltx-500` (EU-RO-1) is shared with fastvideo-rs,
 whose fetcher lays trees out as `/workspace/weights/<tree>/` with
 `.complete` and `.fv-revision` markers; writes there are add-only (never
-move or delete a tree). It is a network filesystem: loads read it at
-0.25–0.5 GB/s. `stage TREE [SUB...]` (exported by the boot) copies a tree,
+move or delete a tree). `stage TREE [SUB...]` (exported by the boot) copies a tree,
 or only the named subdirectories with the rest symlinked back, onto the
 container disk with eight parallel `cp` streams and repoints `/w/TREE`;
 size the container disk for it at `rp.py create` (last argument, GB). A

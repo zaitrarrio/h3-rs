@@ -111,10 +111,17 @@ State and invariants only; the reasoning is in `docs/design.md`.
   LoRA, pika-h3-flex, open-h3-regenerate-2k, the fox assets (`h3-rs/`),
   the V2 / Omni / base / Pika AdaLN tables
   (`h3-rs/tables/`) and the stored MXFP8 V2 (`h3-8step-mxfp8/`): 689 GB
-  (`docs/runs/2026-11-12-runpod-volume-fill`). It is a network
-  filesystem: weight-streaming loads read at ~0.5 GB/s (Pika load
-  490–566 s, AdaLN tables 2–4× slower than on local NVMe), fetches write
-  at ~300 MB/s; clip times are unaffected. Pods self-terminate through the
+  (`docs/runs/2026-11-12-runpod-volume-fill`). It is a FUSE network
+  filesystem that `cp` reads at 0.8 GB/s per stream (1.9 GB/s with
+  eight) but the mmap loader pages at 0.2 GB/s, so **stage the trees a
+  run needs onto the container disk** (`H3_STAGE="TREE[:SUB,…] …"` at
+  boot, `stage` in a command; size the disk at `rp.py create`): the V2
+  recipe stages in 70 s and then loads in 47 s + 86 s prompt against
+  122 s + 195 s from the volume, 114 s ahead from the first run
+  (`docs/runs/2026-11-13-runpod-pro6000-stage`; `madvise` readahead in
+  the loader measured slower there and is opt-in, `H3_MADVISE=1`).
+  Fetches write the volume at ~300 MB/s; clip times are unaffected either
+  way. Pods self-terminate through the
   REST API (the boot's `terminate`, which uploads the running command's
   output first; `H3_POD_HOURS` backstop). EU-RO-1 stock is intermittent
   for every card: hunt with a retry loop, never two pods on the volume at

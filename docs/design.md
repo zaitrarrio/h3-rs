@@ -125,9 +125,12 @@ time); when the tables do not fit, they are uploaded per step.
    (750 GB) holds every variant's weights, the AdaLN tables and a stored
    MXFP8 V2 (`docs/runs/2026-11-12-runpod-volume-fill`); the fastest
    recipe reproduces from it (`…-runpod-pro6000-v2-omni-trim`). The
-   network volume reads at 0.25–0.5 GB/s: the stored MXFP8 V2 loads in
-   129 s there (84 s on NVMe) and the host Qwen3-VL's shards make the
-   prompt step 190–280 s; `h3 encode` removes the latter.
+   mmap loader pages the network volume at 0.2 GB/s while `cp` reads it
+   at 0.8–1.9 GB/s, so pods stage their trees onto NVMe first (70 s for
+   the V2 recipe, then load 47 s + prompt 86 s against 122 + 195 s;
+   `docs/runs/2026-11-13-runpod-pro6000-stage`); kernel readahead advice
+   in the loader measured slower on FUSE and stayed opt-in. A device or
+   pre-encoded (`h3 encode`) prompt path is still the next host cost.
    Ref2VA / Omni prompts are 7.2 k rows and the host
    Qwen3-VL takes two minutes: a device text encoder is the next host
    cost. Optional: the Sol-H3-VAE windowed decoder (`vae_fast/`, 24

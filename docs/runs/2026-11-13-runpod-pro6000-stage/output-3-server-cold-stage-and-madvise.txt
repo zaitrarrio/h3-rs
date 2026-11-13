@@ -1,0 +1,48 @@
+=== cmd 1
+NVIDIA RTX PRO 6000 Blackwell Server Edition, 595.91.07, 600.00 W, 97887 MiB
+Filesystem                Size  Used Avail Use% Mounted on
+overlay                   250G  821M  250G   1% /
+mfs#euro.runpod.net:9421  2.3P  1.9P  404T  83% /workspace
+               total        used        free      shared  buff/cache   available
+Mem:             755         231         253           1         276         523
+mfs#euro.runpod.net:9421 on /workspace type fuse (rw,nosuid,nodev,relatime,user_id=0,group_id=0,allow_other)
+== 1. cold single-stream read of the volume: one untouched 5.3 GB V2 transformer shard
+single-stream cp: 5318721240 bytes in 6887 ms (772 MB/s)
+== 2. cold stage, 8 parallel streams (nothing of these trees read yet on this pod)
+staged h3-8step-mxfp8 [.complete .fv-revision .fv-source transformer.safetensors ]: 25599877462 bytes in 30 s (853 MB/s), 0 files wrong
+staged h3-8step [text_encoder tokenizer vae audio_vae]: 77757397506 bytes in 40 s (1943 MB/s), 0 files wrong
+Filesystem      Size  Used Avail Use% Mounted on
+overlay         250G   98G  153G  39% /
+== 3. the V2 recipe from the staged copy (page cache holds what the copy just wrote)
+load 46.7s
+prompt: 33 rows in 85.8s
+run 0: total 44.15s  prepare 0.30s  adaln 0.00s  denoise 37.71s (["4.86", "4.67", "4.68", "4.68", "4.70", "4.70", "4.71", "4.71"])  decode 5.86s  audio 0.19s
+== 4. again from the staged copy
+load 49.8s
+prompt: 33 rows in 72.3s
+run 0: total 43.84s  prepare 0.27s  adaln 0.00s  denoise 37.72s (["4.86", "4.67", "4.68", "4.69", "4.70", "4.70", "4.71", "4.72"])  decode 5.58s  audio 0.19s
+== 5. the same from the volume, now that the volume's files are cached by nothing on this pod (read pattern test)
+load 121.5s
+prompt: 33 rows in 195.4s
+run 0: total 43.87s  prepare 0.26s  adaln 0.00s  denoise 37.73s (["4.87", "4.67", "4.68", "4.69", "4.70", "4.71", "4.71", "4.71"])  decode 5.61s  audio 0.19s
+stage3 cmd 1 done
+exit 0
+=== cmd 2
+/workspace/weights/h3-8step
+/workspace/weights/h3-8step-mxfp8
+== 6. madvise loader (Sequential at open, WillNeed per tensor) from the volume
+load 166.9s
+prompt: 33 rows in 224.4s
+run 0: total 43.91s  prepare 0.25s  adaln 0.00s  denoise 37.71s (["4.86", "4.67", "4.68", "4.69", "4.70", "4.70", "4.71", "4.71"])  decode 5.66s  audio 0.19s
+== 7. same binary, H3_NO_MADVISE=1, from the volume (control)
+load 118.0s
+prompt: 33 rows in 185.0s
+run 0: total 44.00s  prepare 0.26s  adaln 0.00s  denoise 37.69s (["4.85", "4.67", "4.68", "4.68", "4.69", "4.70", "4.71", "4.70"])  decode 5.77s  audio 0.19s
+== 8. madvise loader again from the volume
+load 146.7s
+prompt: 33 rows in 75.9s
+run 0: total 44.04s  prepare 0.27s  adaln 0.00s  denoise 37.68s (["4.85", "4.66", "4.68", "4.69", "4.69", "4.70", "4.70", "4.70"])  decode 5.82s  audio 0.19s
+stage3 done; terminating pod ltbtexhz8uxmeo
+exit 0
+
+[exited with code 0]
