@@ -714,7 +714,7 @@ fn models<B: Backend>(p: &mut Pair<'_, B>) {
     upscaler_check(p);
 }
 
-fn dit_forward<B: Backend>(be: &B, attention: Attention, quant: WeightQuant, gate: bool) -> Vec<f32> {
+fn dit_forward<B: Backend>(be: &B, attention: Attention, quant: WeightQuant, gate: bool, stream: bool) -> Vec<f32> {
     let cfg = H3Config::tiny_vsa();
     let src = Synthetic { seed: 11 };
     // Gate presence: the synthetic source answers every name, so the loader
@@ -729,7 +729,7 @@ fn dit_forward<B: Backend>(be: &B, attention: Attention, quant: WeightQuant, gat
         }
     }
     let src_dyn: Box<dyn h3_core::weights::WeightSource> = if gate { Box::new(src) } else { Box::new(NoGate(src)) };
-    let dit = H3Dit::load(be, cfg.clone(), src_dyn.as_ref(), &LoadOptions { quant, stream_blocks: false }, &[]).unwrap();
+    let dit = H3Dit::load(be, cfg.clone(), src_dyn.as_ref(), &LoadOptions { quant, stream_blocks: stream }, &[]).unwrap();
     // A small FL2VA layout: 6 text rows (one vision tag), one first keyframe,
     // 3×4×6 latent, 5 audio latents.
     let text = vec![TEXT_TAG, TEXT_TAG, 0, TEXT_TAG, TEXT_TAG, TEXT_TAG];
@@ -753,9 +753,13 @@ fn dit_forward<B: Backend>(be: &B, attention: Attention, quant: WeightQuant, gat
 }
 
 fn dit_check<B: Backend>(p: &mut Pair<'_, B>, attention: Attention, quant: WeightQuant, gate: bool) {
-    let got = dit_forward(p.be, attention, quant, gate);
-    let want = dit_forward(&Cpu, attention, quant, gate);
-    p.record(format!("dit tiny {attention:?} {quant}"), got, want);
+    let got = dit_forward(p.be, attention, quant, gate, false);
+    let want = dit_forward(&Cpu, attention, quant, gate, false);
+    p.record(format!("dit tiny {attention:?} {quant}"), got, want.clone());
+    // Streamed blocks (`--stream-blocks`): the same forward with every block's
+    // weights uploaded per step through the backend's prefetch path.
+    let streamed = dit_forward(p.be, attention, quant, gate, true);
+    p.record(format!("dit tiny {attention:?} {quant} streamed"), streamed, want);
 }
 
 fn vae_check<B: Backend>(p: &mut Pair<'_, B>) {
