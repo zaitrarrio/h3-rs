@@ -40,69 +40,6 @@ pub struct CuBuf {
 /// Token chunks of the two-stage per-head K mean (`fw_vsa_kmean` / `fw_vsa_kmean2`).
 const KMEAN_CHUNKS: usize = 128;
 
-/// Bytes of pinned staging per slot: a block of the 13 B H3 is ~560 MB of
-/// MXFP8 codes and scales, 735 MB in bf16; a larger block falls back to
-/// pageable copies for what does not fit.
-const STAGING_SLOT: usize = 1 << 30;
-
-/// One pinned slot: its buffer, the bump offset, and the event after which
-/// its contents may be overwritten (the DMA of the previous use is done).
-struct StagingSlot {
-    buf: cudarc::driver::PinnedHostSlice<u8>,
-    used: usize,
-    done: Option<cudarc::driver::CudaEvent>,
-}
-
-#[derive(Default)]
-struct StagingRing {
-    slots: Vec<StagingSlot>,
-    cur: usize,
-}
-
-impl StagingRing {
-    /// Switch to the other slot and make it writable (wait for its DMA).
-    fn next_slot(&mut self) {
-        if !self.slots.is_empty() {
-            self.cur = (self.cur + 1) % self.slots.len();
-            let s = &mut self.slots[self.cur];
-            if let Some(ev) = s.done.take() {
-                ev.synchronize().expect("event");
-            }
-            s.used = 0;
-        }
-    }
-
-    /// Mark the current slot reusable once `stream`'s work so far (the copies
-    /// out of it) has completed.
-    fn fence(&mut self, stream: &Arc<CudaStream>) {
-        if let Some(s) = self.slots.get_mut(self.cur) {
-            s.done = Some(stream.record_event(None).expect("event"));
-        }
-    }
-
-    /// `len` bytes of the current slot, allocating the two slots on first use.
-    fn carve(&mut self, ctx: &Arc<CudaContext>, len: usize) -> Option<&'static mut [u8]> {
-        if self.slots.is_empty() {
-            for _ in 0..2 {
-                // SAFETY: the memory is written before it is read (`copy_from_slice`).
-                let buf = unsafe { ctx.alloc_pinned_with_flags::<u8>(STAGING_SLOT, 0) }.ok()?;
-                self.slots.push(StagingSlot { buf, used: 0, done: None });
-            }
-        }
-        let s = &mut self.slots[self.cur];
-        if s.used + len > STAGING_SLOT {
-            return None;
-        }
-        let off = s.used;
-        s.used += len.div_ceil(256) * 256;
-        let base = s.buf.as_mut_slice().ok()?.as_mut_ptr();
-        // SAFETY: the region [off, off + len) of this slot is handed out once per
-        // use of the slot and the slot outlives the backend; the lifetime is
-        // erased because the caller copies into it and issues the DMA at once.
-        Some(unsafe { std::slice::from_raw_parts_mut(base.add(off), len) })
-    }
-}
-
 /// VSA state: tile tables (u32), the region table, f32 pooled means and
 /// pooled-branch output, selections and counts.
 pub struct CuVsa {
@@ -166,12 +103,11 @@ pub struct Cuda {
     staging: std::sync::atomic::AtomicBool,
     /// The end of the last prefetch, for `prefetch_wait`.
     fence: std::sync::Mutex<Option<cudarc::driver::CudaEvent>>,
-    /// Pinned staging for prefetched uploads: two slots used alternately, each
-    /// a bump allocator over one page-locked buffer with the event of its last
-    /// copies. The host copies a block's bytes into the slot (memcpy) and the
-    /// DMA to the device runs on the side stream without the host waiting.
-    staging_ring: std::sync::Mutex<StagingRing>,
-    use_staging: bool,
+    /// Host ranges page-locked by `pin_host` (the interior pages of streamed
+    /// weight buffers): copies from inside them are DMA with no host wait.
+    pinned: std::sync::Mutex<Vec<(usize, usize)>>,
+    no_pin: bool,
+    pin_warned: std::sync::atomic::AtomicBool,
     blas: CudaBlas,
     /// cuBLASLt with the bias (+ tanh-GELU) epilogue fused into the GEMM;
     /// `None` when unavailable or `H3_CUDA_NO_LT=1`.
@@ -566,8 +502,9 @@ impl Cuda {
             copy,
             staging: std::sync::atomic::AtomicBool::new(false),
             fence: std::sync::Mutex::new(None),
-            staging_ring: std::sync::Mutex::new(StagingRing::default()),
-            use_staging: env1("H3_CUDA_PIN"),
+            pinned: std::sync::Mutex::new(Vec::new()),
+            no_pin: env1("H3_CUDA_NO_PIN"),
+            pin_warned: std::sync::atomic::AtomicBool::new(false),
             blas,
             lt,
             module,
@@ -628,15 +565,16 @@ impl Cuda {
         CuBuf { s: Arc::new(s), len, f32 }
     }
 
-    /// A pinned staging region of `len` bytes in the current slot, or `None`
-    /// when not prefetching, when the ring is off, or when the slot is full.
-    /// `H3_CUDA_PIN=1` turns the ring on (opt-in until measured on a GPU).
-    fn stage(&self, len: usize) -> Option<&'static mut [u8]> {
-        if !self.staging.load(std::sync::atomic::Ordering::Relaxed) || !self.use_staging {
-            return None;
+    /// The part of `bytes` that lies in a page-locked range, as (start, end)
+    /// offsets into `bytes`; empty when none does.
+    fn pinned_part(&self, bytes: &[u8]) -> (usize, usize) {
+        let (a, b) = (bytes.as_ptr() as usize, bytes.as_ptr() as usize + bytes.len());
+        for &(s, e) in self.pinned.lock().unwrap().iter() {
+            if s < b && e > a {
+                return (s.max(a) - a, e.min(b) - a);
+            }
         }
-        let mut ring = self.staging_ring.lock().unwrap();
-        ring.carve(&self.ctx, len)
+        (0, 0)
     }
 
     /// Byte-coded weights (int8 / int4 / NVFP4 / MXFP8 codes and scales) as a
@@ -651,15 +589,27 @@ impl Cuda {
         let s = st.alloc_zeros::<u16>(words).expect("cuda alloc");
         if !bytes.is_empty() {
             let (p, _g) = s.device_ptr(st);
-            if let Some(pin) = self.stage(bytes.len()) {
-                pin.copy_from_slice(bytes);
-                // SAFETY: the staging slot is reused only after the event recorded
-                // on it by `prefetch_end` has completed (`StagingRing::carve`).
-                unsafe { cudarc::driver::result::memcpy_htod_async(p, &*pin, st.cu_stream()).expect("upload") };
-            } else {
-                // SAFETY: `bytes` outlives the copy: the stream is synchronised before returning.
-                unsafe { cudarc::driver::result::memcpy_htod_async(p, bytes, st.cu_stream()).expect("upload") };
-                st.synchronize().expect("sync");
+            let (i0, i1) = self.pinned_part(bytes);
+            // SAFETY (all three copies): pageable parts are waited for before
+            // returning; the page-locked part outlives the backend (`pin_host`).
+            unsafe {
+                if i1 > i0 {
+                    // The unpinned edges first (at most a page each), one wait,
+                    // then the DMA of the interior with no wait.
+                    if i0 > 0 {
+                        cudarc::driver::result::memcpy_htod_async(p, &bytes[..i0], st.cu_stream()).expect("upload");
+                    }
+                    if i1 < bytes.len() {
+                        cudarc::driver::result::memcpy_htod_async(p + i1 as u64, &bytes[i1..], st.cu_stream()).expect("upload");
+                    }
+                    if i0 > 0 || i1 < bytes.len() {
+                        st.synchronize().expect("sync");
+                    }
+                    cudarc::driver::result::memcpy_htod_async(p + i0 as u64, &bytes[i0..i1], st.cu_stream()).expect("upload");
+                } else {
+                    cudarc::driver::result::memcpy_htod_async(p, bytes, st.cu_stream()).expect("upload");
+                    st.synchronize().expect("sync");
+                }
             }
         }
         CuBuf { s: Arc::new(s), len: words, f32: false }
@@ -1092,14 +1042,41 @@ impl Backend for Cuda {
     }
 
     fn prefetch_begin(&self) {
-        self.staging_ring.lock().unwrap().next_slot();
         self.staging.store(true, std::sync::atomic::Ordering::Relaxed);
     }
 
     fn prefetch_end(&self) {
         self.staging.store(false, std::sync::atomic::Ordering::Relaxed);
-        self.staging_ring.lock().unwrap().fence(&self.copy);
         *self.fence.lock().unwrap() = Some(self.copy.record_event(None).expect("event"));
+    }
+
+    /// Page-lock the whole pages inside `bytes` (never the partial edge pages:
+    /// an allocation can share those with its neighbours, and a copy from a
+    /// buffer that straddles a locked page fails with INVALID_VALUE, which is
+    /// what registering page-rounded ranges did). `H3_CUDA_NO_PIN=1` disables.
+    fn pin_host(&self, bytes: &[u8]) {
+        const PAGE: usize = 4096;
+        if self.no_pin || bytes.is_empty() {
+            return;
+        }
+        let a = bytes.as_ptr() as usize;
+        let start = a.div_ceil(PAGE) * PAGE;
+        let end = ((a + bytes.len()) / PAGE) * PAGE;
+        if end <= start {
+            return;
+        }
+        let mut reg = self.pinned.lock().unwrap();
+        if reg.iter().any(|&(s, e)| start < e && end > s) {
+            return;
+        }
+        // SAFETY: whole pages owned by this allocation, readable, kept alive for
+        // the backend's lifetime by the caller (streamed block weights).
+        let r = unsafe { cudarc::driver::sys::cuMemHostRegister_v2(start as *mut _, end - start, 0) };
+        if r == cudarc::driver::sys::CUresult::CUDA_SUCCESS {
+            reg.push((start, end));
+        } else if !self.pin_warned.swap(true, std::sync::atomic::Ordering::Relaxed) {
+            eprintln!("warning: cuMemHostRegister failed ({r:?}); streamed weights copy from pageable memory");
+        }
     }
 
     fn prefetch_wait(&self) {
