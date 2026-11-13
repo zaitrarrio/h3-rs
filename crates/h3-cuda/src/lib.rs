@@ -123,8 +123,8 @@ pub struct Cuda {
     /// weight buffers): copies from inside them are DMA with no host wait.
     /// Shared with the guards, which remove their range when dropped.
     pinned: Arc<std::sync::Mutex<Vec<(usize, usize)>>>,
-    /// `H3_CUDA_PIN=1`: page-lock streamed weights (opt-in until the
-    /// conformance suite passes with it on a GPU).
+    /// Page-lock streamed weights (default; `H3_CUDA_NO_PIN=1` compares):
+    /// 127 / 127 checks with it on a 5090, V2 forward 7.2 → 6.45 s there.
     use_pin: bool,
     /// Pinned bounce buffer for the small uploads of a prefetch (norms, the
     /// unlocked edge pages): copied in, then DMA'd with no host wait. Reset
@@ -526,7 +526,7 @@ impl Cuda {
             staging: std::sync::atomic::AtomicBool::new(false),
             fence: std::sync::Mutex::new(None),
             pinned: Arc::new(std::sync::Mutex::new(Vec::new())),
-            use_pin: env1("H3_CUDA_PIN"),
+            use_pin: !env1("H3_CUDA_NO_PIN"),
             bounce: std::sync::Mutex::new(None),
             pin_warned: std::sync::atomic::AtomicBool::new(false),
             blas,
