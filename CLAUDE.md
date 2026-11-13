@@ -33,11 +33,13 @@ State and invariants only; the reasoning is in `docs/design.md`.
   **RTX 5090 (32 GB, 600 W on RunPod)** against ComfyUI's template on
   the same card class, prompt, canvas and seed (the h3-speedups page,
   `docs/runs/2026-11-13-runpod-5090-vs-comfy`): the V2 recipe does not
-  fit resident (OOM at 31.7 GB), streamed it runs 6.9 s per forward,
-  denoise 54.9 s + decode 6.6 s against ComfyUI's 54.1 s total / 45.2 s
-  sampler (14 % behind); FastH3 v1 4-step 31.3 s against 33.3 s (on
-  par); the 15 s clip (362 frames) 230.8 s against 213.6 s at 31.2 GB
-  peak; the raw model at 25 dense euler steps 13.2 s per step bf16, 9.95 s with
+  fit resident (OOM at 31.7 GB), streamed with page-locked weights it
+  runs 6.45 s per forward, denoise 52.0 s + decode 6.1 s against
+  ComfyUI's 54.1 s total / 45.2 s sampler (7 % behind, on a pod whose
+  pageable forward was 7.2 s; a faster pod ran the pageable path at
+  6.6 s); FastH3 v1 4-step 30.1 s against 33.3 s (ahead); the 15 s clip
+  (362 frames) 208.9 s against 213.6 s (ahead) at 31.2 GB peak; the raw
+  model at 25 dense euler steps 13.2 s per step bf16, 9.95 s with
   `--qk8`, against ComfyUI's 6.8 s.
 - MXFP8 (`--weights mxfp8`, `quant::Mxfp8`): W8A8, E4M3 codes with one E8M0
   scale per 32 input columns in cuBLASLt's `VEC32_UE8M0` swizzle
@@ -123,16 +125,20 @@ State and invariants only; the reasoning is in `docs/design.md`.
   re-encoded them on the CPU each step and copied on the compute stream
   (5090: V2 forward 15.4 → 6.6 s, V1 14.4 → 6.0 s, dense base 21.3 →
   13.2 s; clips byte-identical, `h3 check` has streamed twins of the DiT
-  cases). The streamed V2 forward still idles ~1 s per forward between
-  blocks against its 5.6 s of GPU op time: the host's copy of each block
-  (pageable `cuMemcpyHtoDAsync`, or a memcpy into a pinned staging ring,
-  which measured no gain and was removed) is on the critical path, so the
-  interior pages of each streamed buffer are page-locked at load
-  (`pin_host`, `cuMemHostRegister` on whole pages only: page-rounded
-  ranges locked neighbours and broke every later copy) and the DMA runs
-  without a host wait; `H3_CUDA_NO_PIN=1` compares. `--steps N` sets the
-  base model's uniform Euler ladder (ComfyUI's 25-step template);
-  distilled variants refuse it.
+  cases). Streamed weights are page-locked at load (`pin_host`:
+  `cuMemHostRegister` on the whole pages *inside* each buffer only,
+  page-rounded ranges locked neighbours and broke every later copy; a
+  guard per range lives in the DiT ahead of its blocks and unlocks on
+  drop) and the small uploads of a prefetch go through a 64 MB pinned
+  bounce buffer, so no copy of a prefetch waits on the side stream: on the
+  5090 the V2 forward 7.2 → 6.45 s and the 15 s clip's 27.2 → 23.8 s on
+  one pod, 127 / 127 checks either way; a pinned staging ring (memcpy of
+  the whole block) had measured nothing and was removed.
+  `H3_CUDA_NO_PIN=1` compares. The forward is then compute-bound and
+  5090 pods differ by ~8 % through their clocks under the 575 W limit
+  (median 2445 MHz on the slower kind; the link runs PCIe 5 × 8).
+  `--steps N` sets the base model's uniform Euler ladder (ComfyUI's
+  25-step template); distilled variants refuse it.
 - NVFP4 on CUDA stays 4-bit on the device (codes + E4M3 scales, expanded
   into the bf16 scratch per GEMM like int8 / int4): the 42-block Trim runs in
   24.3 GB peak on an L40S; expanding at load needs 36 GB and OOMs a 48 GB

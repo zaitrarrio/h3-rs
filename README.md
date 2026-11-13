@@ -40,13 +40,14 @@ resident recipe needs more than 32 GB):
 
 | 1344×768, seed 1 | ComfyUI total / sampler | h3-rs denoise + decode / denoise |
 |---|---|---|
-| FastH3-V2, 8 steps, 124 frames | 54.1 s / 45.2 s | 61.5 s / 54.9 s |
-| FastH3 v1, 4 steps, 124 frames | 33.3 s / 23.9 s | 31.3 s / 24.9 s |
-| FastH3-V2, 362 frames (15 s) | 213.6 s / 185.6 s | 230.8 s / 211.4 s |
-| raw H3, 25 euler steps, dense | 181.7 s / 169.0 s | 356.1 s / 349.6 s |
+| FastH3-V2, 8 steps, 124 frames | 54.1 s / 45.2 s | 58.1 s / 52.0 s |
+| FastH3 v1, 4 steps, 124 frames | 33.3 s / 23.9 s | 30.1 s / 24.0 s |
+| FastH3-V2, 362 frames (15 s) | 213.6 s / 185.6 s | 208.9 s / 190.8 s |
+| raw H3, 25 euler steps, dense | 181.7 s / 169.0 s | 255.0 s / 248.8 s (`--qk8`; 336 s bf16) |
 
-The dense rows are bf16 attention against ComfyUI's INT8 attention; an
-INT8 dense path is the next kernel.
+The dense row is INT8 Q·Kᵀ attention (`--qk8`) against ComfyUI's Kitchen
+int8; the remaining dense gap is the attention kernel (112 ms per call
+against an implied ~80 ms).
 
 The MLX recipes of the cookbook use the same checkpoints; on Apple GPUs the
 WebGPU backend runs them through Metal.

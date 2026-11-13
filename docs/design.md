@@ -120,8 +120,10 @@ time); when the tables do not fit, they are uploaded per step.
    2 GiB binding limits also cap clips above ~38k tokens until activations
    are chunked more widely).
 7. ~~Block streaming with overlapped uploads~~: done (prefetch on a side
-   stream, byte uploads; 5090 record). A 24 GB card run is still open:
-   the 5090 peaks at 15.9–18 GB streamed at 124 frames.
+   stream, byte uploads, page-locked weights with a pinned bounce for the
+   small copies; 5090 record: the forward is compute-bound now). A 24 GB
+   card run is still open: the 5090 peaks at 15.9–18 GB streamed at 124
+   frames.
 7b. INT8 dense attention (`--qk8`): the VSA fine stage's recipe
    (per-64-row-tile int8 Q and mean-shifted K, `mma.s8` scores, bf16
    P·V) inside the dense `attn_mma2` kernel, with the CPU oracle and the

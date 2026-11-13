@@ -1,0 +1,55 @@
+NVIDIA GeForce RTX 5090, 595.91.07, 575.00 W, 32607 MiB, 1, 5, 8, 16
+Filesystem      Size  Used Avail Use% Mounted on
+overlay         250G   98G  153G  39% /
+               total        used        free      shared  buff/cache   available
+Mem:             186          67           2           0         118         118
+CPU(s):                                  32
+Model name:                              AMD Ryzen 9 9950X 16-Core Processor
+CPU(s) scaling MHz:                      81%
+== conformance, default path
+all 127 checks pass (tolerance 3e-2)
+== conformance, H3_CUDA_PIN=1 (page-locked streamed weights)
+all 127 checks pass (tolerance 3e-2)
+== v2: --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --tables /workspace/h3-rs/tables/v2.tables --stream-blocks
+peak VRAM MiB:  17964; pcie gen/width seen:  3 1, 8; 4 2, 8; 386 5, 8;; sm clock max/median:  2925/2445; power max:  582.90; exit 0
+cuda NVIDIA GeForce RTX 5090 (sm_120)
+load 29.7s
+prompt: 462 rows in 93.6s
+run 0: total 65.66s  prepare 0.29s  adaln 0.00s  denoise 58.52s (["7.54", "7.14", "7.48", "7.32", "7.64", "7.28", "7.06", "7.06"])  decode 6.59s  audio 0.19s
+real	3m16.519s
+== v2-pin: --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --tables /workspace/h3-rs/tables/v2.tables --stream-blocks
+peak VRAM MiB:  17952; pcie gen/width seen:  2 1, 8; 2 2, 8; 325 5, 8;; sm clock max/median:  2925/2445; power max:  576.70; exit 0
+cuda NVIDIA GeForce RTX 5090 (sm_120)
+load 29.0s
+prompt: 462 rows in 69.0s
+run 0: total 58.56s  prepare 0.24s  adaln 0.00s  denoise 51.96s (["6.75", "6.42", "6.46", "6.45", "6.47", "6.45", "6.46", "6.50"])  decode 6.11s  audio 0.18s
+real	2m44.242s
+== v2-2: --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --tables /workspace/h3-rs/tables/v2.tables --stream-blocks
+peak VRAM MiB:  17996; pcie gen/width seen:  3 2, 8; 345 5, 8;; sm clock max/median:  2925/2445; power max:  577.88; exit 0
+cuda NVIDIA GeForce RTX 5090 (sm_120)
+load 28.8s
+prompt: 462 rows in 74.0s
+run 0: total 64.33s  prepare 0.24s  adaln 0.00s  denoise 57.12s (["7.34", "7.04", "7.08", "7.07", "7.09", "7.12", "7.20", "7.18"])  decode 6.71s  audio 0.19s
+real	2m54.040s
+== v2-pin-2: --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --tables /workspace/h3-rs/tables/v2.tables --stream-blocks
+peak VRAM MiB:  17952; pcie gen/width seen:  1 2, 8; 333 5, 8;; sm clock max/median:  2925/2445; power max:  577.46; exit 0
+cuda NVIDIA GeForce RTX 5090 (sm_120)
+load 27.6s
+prompt: 462 rows in 73.3s
+run 0: total 58.73s  prepare 0.29s  adaln 0.00s  denoise 52.12s (["6.80", "6.46", "6.43", "6.39", "6.45", "6.67", "6.47", "6.43"])  decode 6.07s  audio 0.18s
+real	2m46.849s
+== v2-15s: --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --tables /workspace/h3-rs/tables/v2.tables --stream-blocks --ffn-chunk 16384
+peak VRAM MiB:  31212; pcie gen/width seen:  1 2, 8; 682 5, 8;; sm clock max/median:  2917/2385; power max:  581.84; exit 0
+cuda NVIDIA GeForce RTX 5090 (sm_120)
+load 26.7s
+prompt: 569 rows in 66.2s
+run 0: total 240.10s  prepare 1.26s  adaln 0.00s  denoise 217.99s (["27.19", "27.03", "27.18", "27.23", "27.29", "27.33", "27.36", "27.37"])  decode 20.11s  audio 0.53s
+real	5m41.605s
+== v2-15s-pin: --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --tables /workspace/h3-rs/tables/v2.tables --stream-blocks --ffn-chunk 16384
+peak VRAM MiB:  31232; pcie gen/width seen:  2 1, 8; 3 2, 8; 635 5, 8;; sm clock max/median:  2925/2602; power max:  583.20; exit 0
+cuda NVIDIA GeForce RTX 5090 (sm_120)
+load 28.3s
+prompt: 569 rows in 71.5s
+run 0: total 210.84s  prepare 1.25s  adaln 0.00s  denoise 190.75s (["24.39", "23.63", "23.71", "23.78", "23.81", "23.81", "23.80", "23.82"])  decode 18.11s  audio 0.52s
+real	5m19.943s
+5090f done; terminating pod dkiswsqjobaxu4

@@ -204,3 +204,50 @@ again (`h3 check` loads several streamed DiTs in one process and the
 locked pages of a dropped one stayed registered): 0c29fac turns the
 locks into guards the DiT drops before its buffers, and gates the path
 behind `H3_CUDA_PIN=1` until the suite passes with it.
+
+## Pod 5 (bb79796 + the default flip 673d23b): page-locked DMA, done
+
+Pod `dkiswsqjobaxu4` (12:11–12:37 UTC; `output-6-pod5-pagelock-default.txt`,
+`pod5-*.log`, `pod5-v2-pin.smi.csv` the 0.5 s samples of memory, PCIe
+link, SM clock, power and temperature through the clip). The fix after
+pod 4: the small uploads of a prefetch (norms, the unlocked edge pages)
+go through a 64 MB pinned bounce buffer, so nothing in the prefetch waits
+on the side stream any more; the page-lock guards live in the DiT and
+drop before its buffers. The box is another of the slower kind (default
+V2 forward 7.1–7.5 s, like pod 4).
+
+`h3 check --backend cuda`: **127 / 127 both ways** (default and page-locked,
+`check-cuda-5090-127-pagelocked.log`).
+
+| | ComfyUI total / sampler | pageable (two runs) | **page-locked (two runs)** | |
+|---|---|---|---|---|
+| FastH3-V2, 8 steps: denoise | 54.1 s / 45.2 s | 58.5 s, 57.1 s (7.1–7.6 s per forward) | **52.0 s, 52.1 s** (6.75, then 6.4–6.5 s) | −10 % |
+| decode / denoise + decode | | 6.6–6.7 s / 64.0 s | 6.1 s / **58.1 s** | |
+| FastH3-V2, 15 s (362 frames): denoise | 213.6 s / 185.6 s | 218.0 s (27.0–27.4 s per forward) | **190.8 s** (24.4, then 23.6–23.8 s) | −12.5 % |
+| decode / denoise + decode | | 20.1 s / 239.4 s | 18.1 s / **208.9 s** | ahead of 213.6 s |
+| peak VRAM | 30.0 GB | 31.2 GB | 31.2 GB | |
+
+During the clips the link sat at **PCIe gen 5 × 8** (the slot gives half
+the lanes; idle readings of gen 1 are the link's power state, which is
+what pod 4's pre-run query saw), the SM clock at a 2445 MHz median
+(2925 max), power up to 583 W of the 575 W limit. So this box's slower
+forwards against pod 3 are its clocks under the power limit, not the
+link: the forward is compute-bound once the host is out of the way, and
+box-to-box variance of ~8 % is the band these pods come in.
+
+Page-locking is now the default (`H3_CUDA_NO_PIN=1` compares).
+
+Standing after pod 5, against the page on the same card class:
+
+| 1344×768, seed 1 | ComfyUI total / sampler | h3-rs denoise + decode / denoise | |
+|---|---|---|---|
+| FastH3-V2, 8 steps, 124 frames | 54.1 s / 45.2 s | 58.1 s / 52.0 s (pod 5 box; pod 3's box ran the pageable path at 53.2 s) | 7 % behind |
+| FastH3 v1, 4 steps, 124 frames | 33.3 s / 23.9 s | 30.1 s / 24.0 s (pod 3, pageable) | ahead |
+| FastH3-V2, 362 frames (15 s) | 213.6 s / 185.6 s | 208.9 s / 190.8 s | ahead |
+| raw H3, 25 euler steps, dense | 181.7 s / 169.0 s | 255.0 s / 248.8 s with `--qk8` (pod 3) | 1.4× behind |
+
+What is left: the dense attention kernel (INT8 Q·Kᵀ at 112 ms per call,
+ComfyUI's step implies ~80 ms; FP8 P·V and a tighter pipeline), and on
+V2 the fine stage's 34 ms per call against the GEMMs' 518 TFLOP/s.
+
+Cost: pod 5 ~$0.7 (plus pod 4 ~$0.8); $23.15 → $21.79.
