@@ -37,9 +37,11 @@ L = ["#!/bin/bash", "set -u", "LOG=/root/boot.log", "exec >>$LOG 2>&1",
      'stage() { t=$1; shift; src=/workspace/weights/$t; dst=/root/w/$t; mkdir -p "$dst"; T0=$(date +%s); '
      'if [ $# -eq 0 ]; then subs=$(cd "$src" && ls -A | tr "\\n" " "); else subs="$*"; for e in "$src"/* "$src"/.[!.]*; do '
      '[ -e "$e" ] && ln -sfn "$e" "$dst/$(basename "$e")"; done; fi; '
-     'for sub in $subs; do [ -L "$dst/$sub" ] && rm -f "$dst/$sub"; (cd "$src" && find "$sub" -type f -print0 | xargs -0 -P 8 -n 2 cp --update=none --parents -t "$dst"); done; '
+     'for sub in $subs; do [ -L "$dst/$sub" ] && rm -f "$dst/$sub"; (cd "$src" && find "$sub" -type d -exec mkdir -p "$dst/{}" \\; && '
+     'find "$sub" -type f -print0 | xargs -0 -P 8 -n 2 cp --update=none --parents -t "$dst"); done; '
      'b=$(cd "$src" && du -sbL $subs | awk \'{s+=$1} END {print s}\'); dt=$(( $(date +%s) - T0 )); '
-     'echo "staged $t [$subs]: $b bytes in $dt s ($(( b / (dt > 0 ? dt : 1) / 1000000 )) MB/s)"; ln -sfn "$dst" "/w/$t"; }',
+     'bad=$(cd "$src" && find $subs -type f -printf "%s %p\\n" | while read z f; do [ "$(stat -c %s "$dst/$f" 2>/dev/null)" = "$z" ] || echo "$f"; done | wc -l); '
+     'echo "staged $t [$subs]: $b bytes in $dt s ($(( b / (dt > 0 ? dt : 1) / 1000000 )) MB/s), $bad files wrong"; ln -sfn "$dst" "/w/$t"; }',
      'export -f up terminate stage; export LOG LOGPUT',
      f'(sleep {int(hours * 3600)}; echo "backstop: terminating after {hours} h"; while :; do terminate; sleep 120; done) &',
      '(while true; do sleep 20; up $LOG "$LOGPUT"; done) &',

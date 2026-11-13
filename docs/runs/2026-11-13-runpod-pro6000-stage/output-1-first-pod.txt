@@ -1,0 +1,81 @@
+NVIDIA RTX PRO 6000 Blackwell Server Edition, 595.91.07, 600.00 W, 97887 MiB
+Filesystem                Size  Used Avail Use% Mounted on
+overlay                   250G  821M  250G   1% /
+mfs#euro.runpod.net:9421  2.3P  1.9P  404T  83% /workspace
+128
+               total        used        free      shared  buff/cache   available
+Mem:            2267         180         455           0        1649        2087
+++ nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits
+++ head -1
+== 1. baseline from the volume (same pod)
+load 125.2s
+prompt: 33 rows in 198.3s
+run 0: total 43.63s  prepare 0.28s  adaln 0.00s  denoise 37.19s (["4.77", "4.60", "4.61", "4.62", "4.63", "4.64", "4.65", "4.66"])  decode 5.88s  audio 0.19s
+== 2. raw single-stream read of the volume: the 25.6 GB MXFP8 file
+++ date +%s
+++ date +%s
+++ stat -c %s /root/one.bin
+++ stat -c %s /root/one.bin
+single-stream cp: 25599877328 bytes in 31 s (825 MB/s)
+== 3. stage (8 parallel cp streams)
+++ date +%s
+++ cd /workspace/weights/h3-8step-mxfp8
+++ ls -A
+++ tr '\n' ' '
+++ cd /workspace/weights/h3-8step-mxfp8
+++ du -sbL .complete .fv-revision .fv-source transformer.safetensors
+++ awk '{s+=$1} END {print s}'
+++ date +%s
+staged h3-8step-mxfp8 [.complete .fv-revision .fv-source transformer.safetensors ]: 25599877462 bytes in 4 s (6399 MB/s)
+++ date +%s
+++ basename /workspace/weights/h3-8step/audio_vae
+++ basename /workspace/weights/h3-8step/text_encoder
+++ basename /workspace/weights/h3-8step/tokenizer
+++ basename /workspace/weights/h3-8step/transformer
+++ basename /workspace/weights/h3-8step/vae
+++ basename /workspace/weights/h3-8step/.complete
+++ basename /workspace/weights/h3-8step/.fv-revision
+++ basename /workspace/weights/h3-8step/.fv-source
+cp: cannot make directory '/root/w/h3-8step/text_encoder': File exists
+cp: cannot make directory '/root/w/h3-8step/tokenizer': File exists
+cp: cannot make directory '/root/w/h3-8step/vae': File exists
+++ cd /workspace/weights/h3-8step
+++ du -sbL text_encoder tokenizer vae audio_vae
+++ awk '{s+=$1} END {print s}'
+++ date +%s
+staged h3-8step [text_encoder tokenizer vae audio_vae]: 77757397506 bytes in 30 s (2591 MB/s)
+/w/h3-8step-mxfp8/:
+total 24999896
+drwxr-xr-x 2 root root          92 Nov 13 02:46 .
+drwxr-xr-x 4 root root          56 Nov 13 02:46 ..
+-rw-r--r-- 1 root root          81 Nov 13 02:46 .complete
+-rw-r--r-- 1 root root          47 Nov 13 02:46 .fv-revision
+-rw-r--r-- 1 root root           6 Nov 13 02:46 .fv-source
+-rw-r--r-- 1 root root 25599877328 Nov 13 02:46 transformer.safetensors
+
+/w/h3-8step/:
+total 8
+drwxr-xr-x 6 root root  181 Nov 13 02:46 .
+drwxr-xr-x 4 root root   56 Nov 13 02:46 ..
+lrwxrwxrwx 1 root root   37 Nov 13 02:46 .complete -> /workspace/weights/h3-8step/.complete
+lrwxrwxrwx 1 root root   40 Nov 13 02:46 .fv-revision -> /workspace/weights/h3-8step/.fv-revision
+lrwxrwxrwx 1 root root   38 Nov 13 02:46 .fv-source -> /workspace/weights/h3-8step/.fv-source
+drwxr-xr-x 2 root root   80 Nov 13 02:46 audio_vae
+drwxr-xr-x 2 root root 4096 Nov 13 02:46 text_encoder
+drwxr-xr-x 2 root root   87 Nov 13 02:46 tokenizer
+lrwxrwxrwx 1 root root   39 Nov 13 02:46 transformer -> /workspace/weights/h3-8step/transformer
+drwxr-xr-x 2 root root 4096 Nov 13 02:46 vae
+Filesystem      Size  Used Avail Use% Mounted on
+overlay         250G   98G  153G  39% /
+== 4. from the staged copy, cold page cache
+/root/cmd.sh: line 13: /proc/sys/vm/drop_caches: Read-only file system
+(drop_caches not permitted)
+load 40.4s
+Error: no tokenizer.json under /w/h3-8step
+== 5. from the staged copy again (page cache warm)
+load 37.3s
+Error: no tokenizer.json under /w/h3-8step
+stage measurement done; terminating pod aclrjlfkrun7et
+exit 0
+
+[exited with code 0]
