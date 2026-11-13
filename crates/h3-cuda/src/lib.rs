@@ -40,6 +40,22 @@ pub struct CuBuf {
 /// Token chunks of the two-stage per-head K mean (`fw_vsa_kmean` / `fw_vsa_kmean2`).
 const KMEAN_CHUNKS: usize = 128;
 
+/// A page-locked host range (`pin_host`); unlocked and forgotten on drop.
+struct PinGuard {
+    start: usize,
+    end: usize,
+    ranges: Arc<std::sync::Mutex<Vec<(usize, usize)>>>,
+}
+
+impl Drop for PinGuard {
+    fn drop(&mut self) {
+        // SAFETY: the range was registered by `pin_host` and is still mapped
+        // (the guard lives next to its buffer and drops first).
+        unsafe { cudarc::driver::sys::cuMemHostUnregister(self.start as *mut _) };
+        self.ranges.lock().unwrap().retain(|&(s, e)| (s, e) != (self.start, self.end));
+    }
+}
+
 /// VSA state: tile tables (u32), the region table, f32 pooled means and
 /// pooled-branch output, selections and counts.
 pub struct CuVsa {
@@ -105,8 +121,11 @@ pub struct Cuda {
     fence: std::sync::Mutex<Option<cudarc::driver::CudaEvent>>,
     /// Host ranges page-locked by `pin_host` (the interior pages of streamed
     /// weight buffers): copies from inside them are DMA with no host wait.
-    pinned: std::sync::Mutex<Vec<(usize, usize)>>,
-    no_pin: bool,
+    /// Shared with the guards, which remove their range when dropped.
+    pinned: Arc<std::sync::Mutex<Vec<(usize, usize)>>>,
+    /// `H3_CUDA_PIN=1`: page-lock streamed weights (opt-in until the
+    /// conformance suite passes with it on a GPU).
+    use_pin: bool,
     pin_warned: std::sync::atomic::AtomicBool,
     blas: CudaBlas,
     /// cuBLASLt with the bias (+ tanh-GELU) epilogue fused into the GEMM;
@@ -502,8 +521,8 @@ impl Cuda {
             copy,
             staging: std::sync::atomic::AtomicBool::new(false),
             fence: std::sync::Mutex::new(None),
-            pinned: std::sync::Mutex::new(Vec::new()),
-            no_pin: env1("H3_CUDA_NO_PIN"),
+            pinned: Arc::new(std::sync::Mutex::new(Vec::new())),
+            use_pin: env1("H3_CUDA_PIN"),
             pin_warned: std::sync::atomic::AtomicBool::new(false),
             blas,
             lt,
@@ -1054,28 +1073,32 @@ impl Backend for Cuda {
     /// an allocation can share those with its neighbours, and a copy from a
     /// buffer that straddles a locked page fails with INVALID_VALUE, which is
     /// what registering page-rounded ranges did). `H3_CUDA_NO_PIN=1` disables.
-    fn pin_host(&self, bytes: &[u8]) {
+    fn pin_host(&self, bytes: &[u8]) -> Option<Box<dyn std::any::Any + Send>> {
         const PAGE: usize = 4096;
-        if self.no_pin || bytes.is_empty() {
-            return;
+        if !self.use_pin || bytes.is_empty() {
+            return None;
         }
         let a = bytes.as_ptr() as usize;
         let start = a.div_ceil(PAGE) * PAGE;
         let end = ((a + bytes.len()) / PAGE) * PAGE;
         if end <= start {
-            return;
+            return None;
         }
         let mut reg = self.pinned.lock().unwrap();
         if reg.iter().any(|&(s, e)| start < e && end > s) {
-            return;
+            return None;
         }
-        // SAFETY: whole pages owned by this allocation, readable, kept alive for
-        // the backend's lifetime by the caller (streamed block weights).
+        // SAFETY: whole pages owned by this allocation, readable; the guard
+        // unregisters them before the allocation is freed (it is dropped first).
         let r = unsafe { cudarc::driver::sys::cuMemHostRegister_v2(start as *mut _, end - start, 0) };
         if r == cudarc::driver::sys::CUresult::CUDA_SUCCESS {
             reg.push((start, end));
-        } else if !self.pin_warned.swap(true, std::sync::atomic::Ordering::Relaxed) {
-            eprintln!("warning: cuMemHostRegister failed ({r:?}); streamed weights copy from pageable memory");
+            Some(Box::new(PinGuard { start, end, ranges: Arc::clone(&self.pinned) }))
+        } else {
+            if !self.pin_warned.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                eprintln!("warning: cuMemHostRegister failed ({r:?}); streamed weights copy from pageable memory");
+            }
+            None
         }
     }
 

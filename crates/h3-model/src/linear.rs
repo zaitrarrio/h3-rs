@@ -48,29 +48,27 @@ pub struct HostLinear {
     pub cols: usize,
 }
 
+/// A page-lock guard ([`Backend::pin_host`]); dropped before its buffer.
+pub type PinGuard = Box<dyn std::any::Any + Send>;
+
 impl HostWeight {
     /// Page-lock the buffers a streamed upload reads ([`Backend::pin_host`]).
-    pub fn pin<B: Backend>(&self, be: &B) {
-        match self {
+    pub fn pin<B: Backend>(&self, be: &B, out: &mut Vec<PinGuard>) {
+        let bufs: Vec<&[u8]> = match self {
             // SAFETY (both casts): `f32` / `i8` reinterpreted as the bytes of the same allocation.
-            HostWeight::F32(v) => be.pin_host(unsafe { std::slice::from_raw_parts(v.as_ptr() as *const u8, v.len() * 4) }),
-            HostWeight::Q8(q) => be.pin_host(unsafe { std::slice::from_raw_parts(q.q.as_ptr() as *const u8, q.q.len()) }),
-            HostWeight::Q4(_) => {}
-            HostWeight::Nvfp4(q) => {
-                be.pin_host(&q.packed);
-                be.pin_host(&q.scales);
-            }
-            HostWeight::Mxfp8(q) => {
-                be.pin_host(&q.codes);
-                be.pin_host(&q.scales);
-            }
-        }
+            HostWeight::F32(v) => vec![unsafe { std::slice::from_raw_parts(v.as_ptr() as *const u8, v.len() * 4) }],
+            HostWeight::Q8(q) => vec![unsafe { std::slice::from_raw_parts(q.q.as_ptr() as *const u8, q.q.len()) }],
+            HostWeight::Q4(_) => vec![],
+            HostWeight::Nvfp4(q) => vec![&q.packed, &q.scales],
+            HostWeight::Mxfp8(q) => vec![&q.codes, &q.scales],
+        };
+        out.extend(bufs.into_iter().filter_map(|b| be.pin_host(b)));
     }
 }
 
 impl HostLinear {
-    pub fn pin<B: Backend>(&self, be: &B) {
-        self.w.pin(be);
+    pub fn pin<B: Backend>(&self, be: &B, out: &mut Vec<PinGuard>) {
+        self.w.pin(be, out);
     }
 
     pub fn upload<B: Backend>(&self, be: &B) -> Linear<B> {

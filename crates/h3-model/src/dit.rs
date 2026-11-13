@@ -64,9 +64,9 @@ pub struct HostAttnFf {
 }
 
 impl HostAttnFf {
-    fn pin<B: Backend>(&self, be: &B) {
+    fn pin<B: Backend>(&self, be: &B, out: &mut Vec<crate::linear::PinGuard>) {
         for l in [&self.qkv, &self.out, &self.ff_in, &self.ff_out].into_iter().chain(self.gate.as_ref()) {
-            l.pin(be);
+            l.pin(be, out);
         }
     }
 
@@ -139,6 +139,10 @@ pub struct H3Dit<B: Backend> {
     pub context_embedder: Linear<B>,
     pub refiner: Vec<AttnFf<B>>,
     pub final_norm: B::Buf,
+    /// Page-lock guards of the streamed blocks' host buffers: declared before
+    /// `blocks` so they drop (unlock) before the buffers are freed.
+    #[allow(dead_code)]
+    pins: Vec<crate::linear::PinGuard>,
     pub blocks: Vec<Residency<B>>,
     pub norm_out_w: B::Buf,
     pub heads: OutputHeads<B>,
@@ -310,6 +314,7 @@ impl<B: Backend> H3Dit<B> {
             refiner.push(unit_host(&format!("token_refiner.refiner_blocks.{l}"), false, WeightQuant::Native)?.upload(be));
         }
         let mut blocks = Vec::with_capacity(cfg.layers);
+        let mut pins = Vec::new();
         // MXFP8 leaves the first two and last three blocks in bf16 (`for_block`);
         // `H3_MXFP8_ALL_BLOCKS=1` quantizes them too (a speed / quality experiment).
         let all_blocks = std::env::var("H3_MXFP8_ALL_BLOCKS").is_ok_and(|v| v == "1");
@@ -317,7 +322,7 @@ impl<B: Backend> H3Dit<B> {
             let q = if all_blocks { opts.quant } else { opts.quant.for_block(l, cfg.layers) };
             let h = unit_host(&format!("transformer_blocks.{l}"), has_gate, q)?;
             blocks.push(if opts.stream_blocks {
-                h.pin(be);
+                h.pin(be, &mut pins);
                 Residency::Host(h)
             } else {
                 Residency::Device(h.upload(be))
@@ -405,6 +410,7 @@ impl<B: Backend> H3Dit<B> {
             context_embedder: plain("context_embedder")?,
             refiner,
             final_norm: be.upload(&vec("token_refiner.final_norm.weight", d)?),
+            pins,
             blocks,
             norm_out_w: be.upload(&vec("norm_out.norm.weight", d)?),
             heads,

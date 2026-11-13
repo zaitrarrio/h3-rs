@@ -400,9 +400,12 @@ pub trait Backend {
     /// dropping prefetched weights the compute queue may still be reading.
     fn prefetch_release(&self) {}
     /// Page-lock host memory that streamed uploads will read every step, so
-    /// the copies run as DMA without a host-side wait. The memory must stay
-    /// allocated for the backend's lifetime. Best effort; a no-op by default.
-    fn pin_host(&self, _bytes: &[u8]) {}
+    /// the copies run as DMA without a host-side wait. The returned guard
+    /// unlocks on drop and must be dropped before the memory is freed (the
+    /// caller keeps it next to the buffer). Best effort; `None` by default.
+    fn pin_host(&self, _bytes: &[u8]) -> Option<Box<dyn std::any::Any + Send>> {
+        None
+    }
     /// Wait for queued work (timing only; downloads synchronise themselves).
     fn sync(&self);
     /// Per-kernel device time since the last [`Backend::profile_reset`], when
