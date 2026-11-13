@@ -141,11 +141,15 @@ pub struct Cuda {
     name: String,
     /// Compute capability major ≥ 8: bf16 mma.sync is available.
     ampere: bool,
+    /// sm_89+: FP8 tensor cores (`mma.e4m3`).
+    ada: bool,
     q8_scratch: std::sync::Mutex<Option<CuBuf>>,
     /// INT8 dense attention scratch for the last shape: (heads, kv_heads, sq,
     /// sk, d) and (q8, k8, qsc, ksc, kmean, kpart).
     #[allow(clippy::type_complexity)]
     attn_qk8_scratch: std::sync::Mutex<Option<((usize, usize, usize, usize, usize), (CuBuf, CuBuf, CuBuf, CuBuf, CuBuf, CuBuf))>>,
+    /// FP8 P·V scratch keyed by (kv_heads, sk, d): transposed V codes, V mean, partial maxima, scales.
+    attn_pv8_scratch: std::sync::Mutex<Option<((usize, usize, usize), (CuBuf, CuBuf, CuBuf, CuBuf))>>,
     /// MXFP8 activations per GEMM: (E4M3 codes, swizzled E8M0 scales, bf16
     /// rounded copy for the emulation path), grown on demand.
     mx_scratch: std::sync::Mutex<Option<(CuBuf, CuBuf, CuBuf)>>,
@@ -222,6 +226,10 @@ struct Kernels {
     attention_qk8_64: CudaFunction,
     attention_qk8_128: CudaFunction,
     attn_qk8_quant: CudaFunction,
+    attention_pv8_64: CudaFunction,
+    attention_pv8_128: CudaFunction,
+    attn_v8_max: CudaFunction,
+    attn_v8: CudaFunction,
     vsa_fine_mma2_64_w2: CudaFunction,
     vsa_fine_mma2_64_w4: CudaFunction,
     vsa_fine_mma2_128_w2: CudaFunction,
@@ -482,6 +490,10 @@ impl Cuda {
             attention_qk8_64: get("fw_attention_qk8_64")?,
             attention_qk8_128: get("fw_attention_qk8_128")?,
             attn_qk8_quant: get("fw_attn_qk8_quant")?,
+            attention_pv8_64: get("fw_attention_pv8_64")?,
+            attention_pv8_128: get("fw_attention_pv8_128")?,
+            attn_v8_max: get("fw_attn_v8_max")?,
+            attn_v8: get("fw_attn_v8")?,
             vsa_fine_mma2_64_w2: get("fw_vsa_fine_mma2_64_w2")?,
             vsa_fine_mma2_64_w4: get("fw_vsa_fine_mma2_64_w4")?,
             vsa_fine_mma2_128_w2: get("fw_vsa_fine_mma2_128_w2")?,
@@ -535,8 +547,10 @@ impl Cuda {
             f,
             name,
             ampere: maj >= 8,
+            ada: maj > 8 || (maj == 8 && min >= 9),
             q8_scratch: std::sync::Mutex::new(None),
             attn_qk8_scratch: std::sync::Mutex::new(None),
+            attn_pv8_scratch: std::sync::Mutex::new(None),
             mx_scratch: std::sync::Mutex::new(None),
             sm_major: maj as u32,
             no_fp8: env1("H3_CUDA_NO_FP8"),
@@ -710,7 +724,7 @@ impl Cuda {
 
     fn kernel_name(&self, f: &CudaFunction) -> &'static str {
         let k = &self.f;
-        let all: [(&CudaFunction, &'static str); 69] = [
+        let all: [(&CudaFunction, &'static str); 73] = [
             (&k.bias_act, "bias_act"),
             (&k.swiglu, "swiglu"),
             (&k.gate_residual, "gate_residual"),
@@ -741,6 +755,10 @@ impl Cuda {
             (&k.attention_qk8_64, "attention (int8 qk, d64)"),
             (&k.attention_qk8_128, "attention (int8 qk, d128)"),
             (&k.attn_qk8_quant, "attention int8 q/k quant"),
+            (&k.attention_pv8_64, "attention (int8 qk + fp8 pv, d64)"),
+            (&k.attention_pv8_128, "attention (int8 qk + fp8 pv, d128)"),
+            (&k.attn_v8_max, "attention fp8 v max"),
+            (&k.attn_v8, "attention fp8 v quant"),
             (&k.vsa_fine_mma2_64_w2, "vsa fine (mma2, d64)"),
             (&k.vsa_fine_mma2_64_w4, "vsa fine (mma2, d64)"),
             (&k.vsa_fine_mma2_128_w2, "vsa fine (mma2, d128)"),
@@ -1566,10 +1584,19 @@ impl Backend for Cuda {
         head_dim <= 128 && head_dim.is_multiple_of(4)
     }
 
-    fn attention_qk8(&self, q: &CuBuf, k: &CuBuf, v: &CuBuf, heads: usize, kv_heads: usize, sq: usize, sk: usize, d: usize, causal: bool, out: &CuBuf) {
+    fn attention_qk8(&self, q: &CuBuf, k: &CuBuf, v: &CuBuf, heads: usize, kv_heads: usize, sq: usize, sk: usize, d: usize, causal: bool, pv8: bool, out: &CuBuf) {
         assert!(heads.is_multiple_of(kv_heads));
         assert!(heads * sq * d <= q.len && kv_heads * sk * d <= k.len && kv_heads * sk * d <= v.len && sq * heads * d <= out.len);
+        if pv8 && !(self.ada && !self.scalar_attn && (d == 64 || d == 128)) {
+            // No FP8 tensor cores (or no kernel for this head dim): the oracle on the host.
+            let (qh, kh, vh) = (self.download(q), self.download(k), self.download(v));
+            let o = h3_core::vsa::attention_pv8_reference(&qh[..heads * sq * d], &kh[..kv_heads * sk * d], &vh[..kv_heads * sk * d], heads, kv_heads, sq, sk, d, causal);
+            self.write(out, &o);
+            return;
+        }
         let f = match d {
+            128 if pv8 => &self.f.attention_pv8_128,
+            64 if pv8 => &self.f.attention_pv8_64,
             128 if self.ampere && !self.scalar_attn => &self.f.attention_qk8_128,
             64 if self.ampere && !self.scalar_attn => &self.f.attention_qk8_64,
             _ => {
@@ -1613,27 +1640,53 @@ impl Backend for Cuda {
             (256, 1, 1),
             &[Arg::P(self.ptr(k)), Arg::P(self.ptr(kmean)), Arg::P(self.ptr(k8)), Arg::P(self.ptr(ksc)), Arg::I(sk as i32), Arg::I(d as i32), Arg::I(1)],
         );
-        self.launch(
-            f,
-            (sq.div_ceil(128) as u32, heads as u32, 1),
-            (128, 1, 1),
-            &[
-                Arg::P(self.ptr(q)),
-                Arg::P(self.ptr(k)),
-                Arg::P(self.ptr(v)),
-                Arg::P(self.ptr(out)),
-                Arg::I(heads as i32),
-                Arg::I(kv_heads as i32),
-                Arg::I(sq as i32),
-                Arg::I(sk as i32),
-                Arg::I(causal as i32),
-                Arg::F(1.0 / (d as f32).sqrt()),
-                Arg::P(self.ptr(q8)),
-                Arg::P(self.ptr(k8)),
-                Arg::P(self.ptr(qsc)),
-                Arg::P(self.ptr(ksc)),
-            ],
-        );
+        let mut args = vec![
+            Arg::P(self.ptr(q)),
+            Arg::P(self.ptr(k)),
+            Arg::P(self.ptr(v)),
+            Arg::P(self.ptr(out)),
+            Arg::I(heads as i32),
+            Arg::I(kv_heads as i32),
+            Arg::I(sq as i32),
+            Arg::I(sk as i32),
+            Arg::I(causal as i32),
+            Arg::F(1.0 / (d as f32).sqrt()),
+            Arg::P(self.ptr(q8)),
+            Arg::P(self.ptr(k8)),
+            Arg::P(self.ptr(qsc)),
+            Arg::P(self.ptr(ksc)),
+        ];
+        let mut pv8_guard = self.attn_pv8_scratch.lock().unwrap();
+        if pv8 {
+            // V: mean (the K-mean kernels on V), chunk maxima, then the
+            // transposed E4M3 codes in mma fragment order (fw_attn_v8).
+            let key = (kv_heads, sk, d);
+            let skp = sk.div_ceil(32) * 32;
+            let nparts = sk.div_ceil(64);
+            if pv8_guard.as_ref().is_none_or(|(k, _)| *k != key) {
+                *pv8_guard = Some((
+                    key,
+                    (
+                        self.alloc((kv_heads * d * skp).div_ceil(2)),
+                        Backend::upload_table(self, &vec![0.0; kv_heads * d]),
+                        Backend::upload_table(self, &vec![0.0; kv_heads * nparts]),
+                        Backend::upload_table(self, &vec![0.0; kv_heads]),
+                    ),
+                ));
+            }
+            let (_, (v8t, vmean, vpart, vsc)) = pv8_guard.as_ref().unwrap();
+            self.launch(&self.f.vsa_kmean, (KMEAN_CHUNKS as u32, kv_heads as u32, 1), (128, 1, 1), &[Arg::P(self.ptr(v)), Arg::P(self.ptr(kpart)), Arg::I(sk as i32), Arg::I(d as i32), Arg::I(nch)]);
+            self.launch(&self.f.vsa_kmean2, (kv_heads as u32, 1, 1), (128, 1, 1), &[Arg::P(self.ptr(kpart)), Arg::P(self.ptr(vmean)), Arg::I(sk as i32), Arg::I(d as i32), Arg::I(nch)]);
+            self.launch(&self.f.attn_v8_max, (nparts as u32, kv_heads as u32, 1), (256, 1, 1), &[Arg::P(self.ptr(v)), Arg::P(self.ptr(vmean)), Arg::P(self.ptr(vpart)), Arg::I(sk as i32), Arg::I(d as i32)]);
+            self.launch(
+                &self.f.attn_v8,
+                ((skp / 32) as u32, kv_heads as u32, 1),
+                (128, 1, 1),
+                &[Arg::P(self.ptr(v)), Arg::P(self.ptr(vmean)), Arg::P(self.ptr(vpart)), Arg::I(nparts as i32), Arg::P(self.ptr(vsc)), Arg::P(self.ptr(v8t)), Arg::I(sk as i32), Arg::I(d as i32)],
+            );
+            args.extend([Arg::P(self.ptr(v8t)), Arg::P(self.ptr(vmean)), Arg::P(self.ptr(vsc))]);
+        }
+        self.launch(f, (sq.div_ceil(128) as u32, heads as u32, 1), (128, 1, 1), &args);
     }
 
     fn vsa_prepare(&self, spec: &VsaSpec) -> CuVsa {

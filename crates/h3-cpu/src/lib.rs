@@ -649,7 +649,15 @@ impl Backend for Cpu {
         });
     }
 
-    fn attention_qk8(&self, q: &CpuBuf, k: &CpuBuf, v: &CpuBuf, heads: usize, kv_heads: usize, sq: usize, sk: usize, d: usize, causal: bool, out: &CpuBuf) {
+    fn attention_qk8(&self, q: &CpuBuf, k: &CpuBuf, v: &CpuBuf, heads: usize, kv_heads: usize, sq: usize, sk: usize, d: usize, causal: bool, pv8: bool, out: &CpuBuf) {
+        if pv8 {
+            let o = {
+                let (q, k, v) = (q.r(), k.r(), v.r());
+                h3_core::vsa::attention_pv8_reference(&q[..heads * sq * d], &k[..kv_heads * sk * d], &v[..kv_heads * sk * d], heads, kv_heads, sq, sk, d, causal)
+            };
+            out.w()[..sq * heads * d].copy_from_slice(&o);
+            return;
+        }
         let (q8, k8) = {
             let (q, k) = (q.r(), k.r());
             h3_core::vsa::attn_qk8_round(&q[..heads * sq * d], &k[..kv_heads * sk * d], heads, kv_heads, sq, sk, d)

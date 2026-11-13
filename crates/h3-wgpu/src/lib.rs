@@ -35,6 +35,7 @@ const ELEM: &str = include_str!("shaders/elementwise.wgsl");
 const MX_ACT: &str = include_str!("shaders/mx_act.wgsl");
 const VSA_QK8: &str = include_str!("shaders/vsa_qk8.wgsl");
 const ATTN_QK8: &str = include_str!("shaders/attn_qk8.wgsl");
+const ATTN_PV8: &str = include_str!("shaders/attn_pv8.wgsl");
 const GROUP_NORM: &str = include_str!("shaders/group_norm.wgsl");
 const CONV: &str = include_str!("shaders/conv.wgsl");
 const CONV3D: &str = include_str!("shaders/conv3d.wgsl");
@@ -1116,8 +1117,9 @@ impl Backend for Wgpu {
         self.dispatch(&pipe, &p, &[q, k, v, out], (sq.div_ceil(64) as u32, heads as u32, 1));
     }
 
-    fn attention_qk8(&self, q: &GBuf, k: &GBuf, v: &GBuf, heads: usize, kv_heads: usize, sq: usize, sk: usize, d: usize, causal: bool, out: &GBuf) {
-        // Emulation: the rounded f32 copies through the exact kernel.
+    fn attention_qk8(&self, q: &GBuf, k: &GBuf, v: &GBuf, heads: usize, kv_heads: usize, sq: usize, sk: usize, d: usize, causal: bool, pv8: bool, out: &GBuf) {
+        // Emulation: the rounded f32 copies through the exact kernel (or, with
+        // FP8 P·V, through the oracle's two-pass kernel).
         let (kmean, q8, k8) = (self.alloc(kv_heads * d), self.alloc(heads * sq * d), self.alloc(kv_heads * sk * d));
         let pipe = self.pipeline("attn_qk8", || ATTN_QK8.to_string());
         let mut p = [heads as u32, kv_heads as u32, sq as u32, sk as u32, d as u32, 0, 0, 0];
@@ -1126,7 +1128,21 @@ impl Backend for Wgpu {
         self.dispatch(&pipe, &p, &[q, k, &kmean, &q8, &k8], (sq.div_ceil(64) as u32, heads as u32, 1));
         p[5] = 2;
         self.dispatch(&pipe, &p, &[q, k, &kmean, &q8, &k8], (sk.div_ceil(64) as u32, kv_heads as u32, 1));
-        self.attention(&q8, &k8, v, heads, kv_heads, sq, sk, d, causal, out);
+        if !pv8 {
+            self.attention(&q8, &k8, v, heads, kv_heads, sq, sk, d, causal, out);
+            return;
+        }
+        // V: mean (mode 0 on V), scale (mode 3), codes (mode 4).
+        let (vmean, v8, vscale) = (self.alloc(kv_heads * d), self.alloc(kv_heads * sk * d), self.alloc(kv_heads.max(1)));
+        p[5] = 0;
+        self.dispatch(&pipe, &p, &[q, v, &vmean, &v8, &vscale], (kv_heads as u32, 1, 1));
+        p[5] = 3;
+        self.dispatch(&pipe, &p, &[q, v, &vmean, &v8, &vscale], (kv_heads as u32, 1, 1));
+        p[5] = 4;
+        self.dispatch(&pipe, &p, &[q, v, &vmean, &v8, &vscale], (sk.div_ceil(64) as u32, kv_heads as u32, 1));
+        let pipe8 = self.pipeline("attn_pv8", || ATTN_PV8.to_string());
+        let p8 = [heads as u32, kv_heads as u32, sq as u32, sk as u32, d as u32, causal as u32, (1.0 / (d as f32).sqrt()).to_bits(), 0];
+        self.dispatch(&pipe8, &p8, &[&q8, &k8, &v8, &vmean, &vscale, out], (sq.div_ceil(64) as u32, heads as u32, 1));
     }
 
     fn vsa_supported(&self, head_dim: usize) -> bool {

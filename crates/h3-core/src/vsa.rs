@@ -315,6 +315,96 @@ pub fn attn_qk8_round(q: &[f32], k: &[f32], heads: usize, kv_heads: usize, sq: u
     (qo, ko)
 }
 
+/// FP8 P·V (SageAttention2's recipe) on the dense INT8 path: V is smoothed by
+/// its per-channel mean over the keys (per KV head), rounded to E4M3 with one
+/// scale `max|v − mean| / 448` per KV head, and stored as unitless codes.
+/// Returns `(codes as f32, mean [kv_heads][d], scale [kv_heads])`.
+pub fn attn_v8_round(v: &[f32], kv_heads: usize, sk: usize, d: usize) -> (Vec<f32>, Vec<f32>, Vec<f32>) {
+    let mut codes = vec![0f32; kv_heads * sk * d];
+    let mut mean = vec![0f32; kv_heads * d];
+    let mut scale = vec![0f32; kv_heads];
+    for h in 0..kv_heads {
+        let vh = &v[h * sk * d..][..sk * d];
+        let mut acc = vec![0f64; d];
+        for r in 0..sk {
+            for c in 0..d {
+                acc[c] += vh[r * d + c] as f64;
+            }
+        }
+        for c in 0..d {
+            mean[h * d + c] = (acc[c] / sk.max(1) as f64) as f32;
+        }
+        let mut mx = 0f32;
+        for r in 0..sk {
+            for c in 0..d {
+                mx = mx.max((vh[r * d + c] - mean[h * d + c]).abs());
+            }
+        }
+        let sc = mx / 448.0;
+        scale[h] = sc;
+        let inv = if sc > 0.0 { 1.0 / sc } else { 0.0 };
+        for r in 0..sk {
+            for c in 0..d {
+                let x = (vh[r * d + c] - mean[h * d + c]) * inv;
+                codes[(h * sk + r) * d + c] = crate::quant::e4m3_decode(crate::quant::e4m3_satfinite(x));
+            }
+        }
+    }
+    (codes, mean, scale)
+}
+
+/// Rows per 64× P scale: P is rounded to E4M3 as `exp2(s − ⌈m⌉ + 6)`, so
+/// every weight down to 2^-12 of the row's largest sits in E4M3's normal
+/// range; the kernels' running maxima are integers too, so their rescales
+/// are exact powers of two and round the same way.
+pub const PV8_SHIFT: f32 = 6.0;
+
+/// The 8-bit attention oracle: INT8 Q·Kᵀ ([`attn_qk8_round`]) and FP8 P·V
+/// ([`attn_v8_round`]). Scores in log2 units; the row maximum rounded up to
+/// an integer; `p = exp2(s − ⌈m⌉ + PV8_SHIFT)` rounded to E4M3 for the
+/// product and kept exact for the denominator; `o = Σ p₈·v₈ · scale / Σ p
+/// + mean`. Output `[sq][heads][d]`.
+#[allow(clippy::too_many_arguments)]
+pub fn attention_pv8_reference(q: &[f32], k: &[f32], v: &[f32], heads: usize, kv_heads: usize, sq: usize, sk: usize, d: usize, causal: bool) -> Vec<f32> {
+    let (q8, k8) = attn_qk8_round(q, k, heads, kv_heads, sq, sk, d);
+    let (v8, mean, vs) = attn_v8_round(v, kv_heads, sk, d);
+    let group = heads / kv_heads;
+    let sl2 = std::f32::consts::LOG2_E / (d as f32).sqrt();
+    let mut out = vec![0f32; sq * heads * d];
+    let mut s2 = vec![0f32; sk];
+    for i in 0..sq {
+        let limit = if causal { (i + 1 + sk - sq).min(sk) } else { sk };
+        for h in 0..heads {
+            let kh = h / group;
+            let qi = &q8[(h * sq + i) * d..][..d];
+            let mut m = f32::NEG_INFINITY;
+            for (j, sj) in s2[..limit].iter_mut().enumerate() {
+                let kj = &k8[(kh * sk + j) * d..][..d];
+                *sj = qi.iter().zip(kj).map(|(a, b)| a * b).sum::<f32>() * sl2;
+                m = m.max(*sj);
+            }
+            let mi = m.ceil();
+            let mut l = 0f32;
+            let mut acc = vec![0f32; d];
+            for (j, &sj) in s2[..limit].iter().enumerate() {
+                let p = (sj - mi + PV8_SHIFT).exp2();
+                l += p;
+                let p8 = crate::quant::e4m3_decode(crate::quant::e4m3_satfinite(p));
+                let vj = &v8[(kh * sk + j) * d..][..d];
+                for c in 0..d {
+                    acc[c] += p8 * vj[c];
+                }
+            }
+            let inv = if l > 0.0 { vs[kh] / l } else { 0.0 };
+            let o = &mut out[(i * heads + h) * d..][..d];
+            for c in 0..d {
+                o[c] = acc[c] * inv + mean[kh * d + c];
+            }
+        }
+    }
+    out
+}
+
 /// Select the key tiles of query tile `qt` from a row of pooled scores
 /// (`scores[kt]` for all tiles), the host oracle of the selection rule. Ties
 /// go to the lower tile index (PyTorch `topk` on CUDA is not specified for

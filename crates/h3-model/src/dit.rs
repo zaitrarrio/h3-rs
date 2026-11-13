@@ -111,8 +111,9 @@ pub struct PddHeads {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Attention {
-    /// Full attention; `qk8` runs INT8 Q·Kᵀ ([`Backend::attention_qk8`]).
-    Dense { qk8: bool },
+    /// Full attention; `qk8` runs INT8 Q·Kᵀ ([`Backend::attention_qk8`]),
+    /// `pv8` FP8 P·V as well.
+    Dense { qk8: bool, pv8: bool },
     /// Video sparse attention: target-region sparsity, tile size (64 / 128 /
     /// 256 tokens) and reference-region sparsity.
     Vsa { sparsity: f64, tile: usize, ref_sparsity: f64, qk8: bool },
@@ -681,8 +682,9 @@ impl<B: Backend> H3Dit<B> {
                     let st = if mods.dense { ws.vsa_dense.as_ref().unwrap() } else { vsa };
                     be.vsa_attention(&ws.q, &ws.k, &ws.v, g, st, &ws.attn);
                 }
-                (None, _) if matches!(ws.attention, Attention::Dense { qk8: true }) => {
-                    be.attention_qk8(&ws.q, &ws.k, &ws.v, c.heads, c.heads, s, s, c.head_dim, false, &ws.attn)
+                (None, _) if matches!(ws.attention, Attention::Dense { qk8: true, .. }) => {
+                    let pv8 = matches!(ws.attention, Attention::Dense { pv8: true, .. });
+                    be.attention_qk8(&ws.q, &ws.k, &ws.v, c.heads, c.heads, s, s, c.head_dim, false, pv8, &ws.attn)
                 }
                 (None, _) => be.attention(&ws.q, &ws.k, &ws.v, c.heads, c.heads, s, s, c.head_dim, false, &ws.attn),
             }

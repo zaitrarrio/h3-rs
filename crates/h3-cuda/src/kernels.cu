@@ -618,6 +618,18 @@ __device__ __forceinline__ void mma_s8(int* c, unsigned a0, unsigned a1, unsigne
                  : "+r"(c[0]), "+r"(c[1]), "+r"(c[2]), "+r"(c[3])
                  : "r"(a0), "r"(a1), "r"(a2), "r"(a3), "r"(b0), "r"(b1));
 }
+__device__ __forceinline__ unsigned mx_e4m3(float x);
+// m16n8k32 e4m3 × e4m3 → f32 (sm_89+): A = 16×32 row, B = 32×8 col. Below
+// sm_89 the host never launches a kernel that reaches it.
+__device__ __forceinline__ void mma_e4m3(float* c, unsigned a0, unsigned a1, unsigned a2, unsigned a3, unsigned b0, unsigned b1) {
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 890
+    asm volatile("mma.sync.aligned.m16n8k32.row.col.f32.e4m3.e4m3.f32 {%0,%1,%2,%3}, {%4,%5,%6,%7}, {%8,%9}, {%0,%1,%2,%3};\n"
+                 : "+f"(c[0]), "+f"(c[1]), "+f"(c[2]), "+f"(c[3])
+                 : "r"(a0), "r"(a1), "r"(a2), "r"(a3), "r"(b0), "r"(b1));
+#else
+    asm volatile("trap;");
+#endif
+}
 __device__ __forceinline__ unsigned pack_bf16(float lo, float hi) {
     unsigned r;
     asm("cvt.rn.bf16x2.f32 %0, %1, %2;" : "=r"(r) : "f"(hi), "f"(lo));   // hi lands in the upper half
@@ -1441,14 +1453,23 @@ extern "C" __global__ void fw_vsa_pair(u64 sel_, u64 nsel_, u64 usel_, u64 nusel
 // qsc / ksc one scale per (head, 64-row tile); K chunks stage as int8 (ks8,
 // 16-byte chunks swizzled by the row) and the scores come out of mma.s8 as
 // int32, scaled by the two tiles' qsc·ksc. P·V stays bf16.
-template <int D, int WARPS, bool Q8 = false>
+// PV8 (with Q8, mode 0): FP8 P·V as in h3_core::vsa::attention_pv8_reference.
+// v8t holds V − mean(V) as E4M3 codes, transposed per KV head to [D][sk
+// padded to 32] with the keys of every 32-key chunk in mma B-fragment order
+// (fw_attn_v8), vmean [kv_heads][D] and vsc [kv_heads] its mean and scale.
+// Running maxima are rounded up to integers (rescales exact powers of two),
+// P = exp2(s − ⌈m⌉ + 6) rounded to E4M3 for the mma and summed exactly for
+// l, and the epilogue applies vsc / l and adds the mean back.
+template <int D, int WARPS, bool Q8 = false, bool PV8 = false>
 __device__ __forceinline__ void attn_mma2_body(int mode, const bf16_t* q, const bf16_t* k, const bf16_t* v, bf16_t* out,
         int heads, int kv_heads, int sq, int sk, int causal, float scale,
         const unsigned* slot, const unsigned* sel, const unsigned* nsel, const float* pooled, const bf16_t* gate,
         int has_gate, int nb, int np, int dense_all, int te, int maxsel,
         bf16_t* ks, bf16_t* vs, unsigned char* kvalid,
         const signed char* q8 = 0, const signed char* k8 = 0, const float* qsc = 0, const float* ksc = 0,
-        unsigned char* ks8 = 0) {
+        unsigned char* ks8 = 0, const unsigned char* v8t = 0, const float* vmean = 0, const float* vsc = 0,
+        unsigned char* vs8 = 0) {
+    static_assert(!PV8 || Q8, "PV8 needs Q8");
     constexpr int KS_STRIDE = D + 8;
     constexpr int KK = D / 16;        // k-steps of Q·Kᵀ
     constexpr int DT = D / 8;         // 8-wide dim tiles of the output
@@ -1572,10 +1593,23 @@ __device__ __forceinline__ void attn_mma2_body(int mode, const bf16_t* q, const 
             if (valid && ch8 == 0) valid[key] = tk >= 0;
         }
     };
+    // FP8 V: chunk c of the transposed codes is D rows × 32 bytes (two 16-byte
+    // halves per row, swizzled by bit 2 of the row so ldmatrix.x2 over eight
+    // rows hits eight different banks). Zero codes pad keys ≥ sk.
+    const int skp = (sk + MMA2_BK - 1) / MMA2_BK * MMA2_BK;
+    const unsigned char* v8base = PV8 ? v8t + (long)kh * D * skp : 0;
+    auto at8v = [](int r, int half) -> int { return r * 32 + ((half ^ ((r >> 2) & 1)) << 4); };
+    auto load_v8 = [&](int c) {
+        #pragma unroll
+        for (int j = 0; j < (PV8 ? (2 * D) / NTHR : 1); ++j) {
+            const int idx = tid + NTHR * j, r = idx >> 1, half = idx & 1;
+            cp_async16(vs8 + at8v(r, half), v8base + (long)r * skp + c * MMA2_BK + half * 16, true);
+        }
+    };
     if (nchunks > 0) {
         if constexpr (Q8) load8(0, kvalid); else load(ks, kbase, 0, kvalid);
         cp_async_commit();
-        load(vs, vbase, 0, 0);
+        if constexpr (PV8) load_v8(0); else load(vs, vbase, 0, 0);
         cp_async_commit();
     }
 
@@ -1653,6 +1687,11 @@ __device__ __forceinline__ void attn_mma2_body(int mode, const bf16_t* q, const 
                 mx[mt][0] = fmaxf(mx[mt][0], __shfl_xor_sync(0xffffffffu, mx[mt][0], off));
                 mx[mt][1] = fmaxf(mx[mt][1], __shfl_xor_sync(0xffffffffu, mx[mt][1], off));
             }
+            if constexpr (PV8) {
+                // Finite maxima only: a fully masked row keeps -1e30 and p = 0.
+                mx[mt][0] = mx[mt][0] > -1e29f ? ceilf(mx[mt][0]) : mx[mt][0];
+                mx[mt][1] = mx[mt][1] > -1e29f ? ceilf(mx[mt][1]) : mx[mt][1];
+            }
             const float c0 = exp2f(m[mt][0] - mx[mt][0]), c1 = exp2f(m[mt][1] - mx[mt][1]);
             m[mt][0] = mx[mt][0]; m[mt][1] = mx[mt][1];
             l[mt][0] *= c0; l[mt][1] *= c1;
@@ -1661,6 +1700,44 @@ __device__ __forceinline__ void attn_mma2_body(int mode, const bf16_t* q, const 
         }
         cp_async_wait1();          // V_c landed (K_{c+1} may still be in flight)
         __syncthreads();
+        if constexpr (PV8) {
+            // One k32 step covers the chunk. A fragment of row g: bytes (keys)
+            // 4t..4t+3 of the virtual k order, i.e. keys {2t, 2t+1, 8+2t, 9+2t}
+            // of the chunk (S n-tiles 0 and 1 of this thread) for a0 / a1 and
+            // the same +16 (n-tiles 2 and 3) for a2 / a3. fw_attn_v8 stores V
+            // in that key order, so B comes straight from ldmatrix over the
+            // transposed rows: lanes 0-7 the first 16 bytes of rows d0..d0+7,
+            // lanes 8-15 the second.
+            unsigned a[2][4];
+            #pragma unroll
+            for (int mt = 0; mt < 2; ++mt) {
+                float p[4][4];
+                #pragma unroll
+                for (int nt = 0; nt < 4; ++nt) {
+                    #pragma unroll
+                    for (int cc = 0; cc < 4; ++cc) {
+                        p[nt][cc] = exp2f(s[mt][nt][cc] - (cc < 2 ? m[mt][0] : m[mt][1]) + 6.0f);
+                    }
+                }
+                l[mt][0] += p[0][0] + p[0][1] + p[1][0] + p[1][1] + p[2][0] + p[2][1] + p[3][0] + p[3][1];
+                l[mt][1] += p[0][2] + p[0][3] + p[1][2] + p[1][3] + p[2][2] + p[2][3] + p[3][2] + p[3][3];
+                a[mt][0] = mx_e4m3(p[0][0]) | (mx_e4m3(p[0][1]) << 8) | (mx_e4m3(p[1][0]) << 16) | (mx_e4m3(p[1][1]) << 24);
+                a[mt][1] = mx_e4m3(p[0][2]) | (mx_e4m3(p[0][3]) << 8) | (mx_e4m3(p[1][2]) << 16) | (mx_e4m3(p[1][3]) << 24);
+                a[mt][2] = mx_e4m3(p[2][0]) | (mx_e4m3(p[2][1]) << 8) | (mx_e4m3(p[3][0]) << 16) | (mx_e4m3(p[3][1]) << 24);
+                a[mt][3] = mx_e4m3(p[2][2]) | (mx_e4m3(p[2][3]) << 8) | (mx_e4m3(p[3][2]) << 16) | (mx_e4m3(p[3][3]) << 24);
+            }
+            const unsigned vs8_l = (unsigned)__cvta_generic_to_shared(vs8);
+            const int lr = lane & 7, lhalf = (lane >> 3) & 1;
+            #pragma unroll
+            for (int dt = 0; dt < DT; ++dt) {
+                const int r = dt * 8 + lr;
+                const unsigned addr = vs8_l + r * 32 + ((lhalf ^ ((r >> 2) & 1)) << 4);
+                unsigned b0, b1;
+                asm volatile("ldmatrix.sync.aligned.m8n8.x2.shared.b16 {%0,%1}, [%2];\n" : "=r"(b0), "=r"(b1) : "r"(addr));
+                mma_e4m3(o[0][dt], a[0][0], a[0][1], a[0][2], a[0][3], b0, b1);
+                mma_e4m3(o[1][dt], a[1][0], a[1][1], a[1][2], a[1][3], b0, b1);
+            }
+        } else
         #pragma unroll
         for (int kk = 0; kk < MMA2_BK / 16; ++kk) {
             unsigned a[2][4];
@@ -1691,7 +1768,7 @@ __device__ __forceinline__ void attn_mma2_body(int mode, const bf16_t* q, const 
             }
         }
         __syncthreads();           // every warp is done with vs
-        if (c + 1 < nchunks) load(vs, vbase, c + 1, 0);
+        if (c + 1 < nchunks) { if constexpr (PV8) load_v8(c + 1); else load(vs, vbase, c + 1, 0); }
         cp_async_commit();
     }
     #pragma unroll
@@ -1701,12 +1778,18 @@ __device__ __forceinline__ void attn_mma2_body(int mode, const bf16_t* q, const 
             l[mt][0] += __shfl_xor_sync(0xffffffffu, l[mt][0], off);
             l[mt][1] += __shfl_xor_sync(0xffffffffu, l[mt][1], off);
         }
-        const float i0 = l[mt][0] > 0.0f ? 1.0f / l[mt][0] : 0.0f, i1 = l[mt][1] > 0.0f ? 1.0f / l[mt][1] : 0.0f;
+        const float vscale = PV8 ? vsc[kh] : 1.0f;
+        const float i0 = l[mt][0] > 0.0f ? vscale / l[mt][0] : 0.0f, i1 = l[mt][1] > 0.0f ? vscale / l[mt][1] : 0.0f;
         const int tok0 = tok[mt][0], tok1 = tok[mt][1];
         #pragma unroll
         for (int dt = 0; dt < DT; ++dt) {
             const int cidx = dt * 8 + t * 2;
             float a0 = o[mt][dt][0] * i0, a1 = o[mt][dt][1] * i0, b0 = o[mt][dt][2] * i1, b1 = o[mt][dt][3] * i1;
+            if constexpr (PV8) {
+                // The oracle adds the mean back on every row, empty ones too.
+                const float m0 = vmean[(long)kh * D + cidx], m1 = vmean[(long)kh * D + cidx + 1];
+                a0 += m0; a1 += m1; b0 += m0; b1 += m1;
+            }
             if (mode == 1 && has_gate) {
                 const float* cr = pooled + ((long)h * nb + qt) * D + cidx;
                 if (tok0 >= 0) { const bf16_t* gr = gate + ((long)h * sq + tok0) * D + cidx; a0 += cr[0] * ld(gr, 0); a1 += cr[1] * ld(gr, 1); }
@@ -1765,6 +1848,85 @@ extern "C" __global__ void __launch_bounds__(128) fw_attention_qk8_##D(u64 q_, u
 }
 ATTN_QK8_KERNEL(64)
 ATTN_QK8_KERNEL(128)
+
+#define ATTN_PV8_KERNEL(D)                                                                                           \
+extern "C" __global__ void __launch_bounds__(128) fw_attention_pv8_##D(u64 q_, u64 k_, u64 v_, u64 out_, int heads, \
+        int kv_heads, int sq, int sk, int causal, float scale, u64 q8_, u64 k8_, u64 qsc_, u64 ksc_, u64 v8t_,       \
+        u64 vmean_, u64 vsc_) {                                                                                      \
+    __shared__ __align__(16) unsigned char ks8[MMA2_BK * D];                                                         \
+    __shared__ __align__(16) unsigned char vs8[MMA2_BK * D];                                                         \
+    __shared__ unsigned char kvalid[2 * MMA2_BK];                                                                    \
+    attn_mma2_body<D, 4, true, true>(0, (const bf16_t*)q_, (const bf16_t*)k_, (const bf16_t*)v_, (bf16_t*)out_,    \
+                         heads, kv_heads, sq, sk, causal, scale, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, (bf16_t*)0,        \
+                         (bf16_t*)0, kvalid, (const signed char*)q8_, (const signed char*)k8_, (const float*)qsc_,   \
+                         (const float*)ksc_, ks8, (const unsigned char*)v8t_, (const float*)vmean_,                  \
+                         (const float*)vsc_, vs8);                                                                   \
+}
+ATTN_PV8_KERNEL(64)
+ATTN_PV8_KERNEL(128)
+
+// h3_core::vsa::attn_v8_round, device side. fw_attn_v8_max: one block per
+// (chunk of 64 keys, KV head), 256 threads, writes max|v − mean| per block to
+// part[head][chunk]; fw_attn_v8: one block per (32-key chunk, KV head), d
+// threads (thread = channel): reduces the chunk maxima to vsc[head] =
+// max / 448 and writes the chunk's E4M3 codes of (v − mean) / vsc transposed
+// into v8t[head][channel][skp] with the 32 keys in mma B-fragment order:
+// position 4j + i holds key {2j, 2j+1, 8+2j, 9+2j}[i] for j < 4 and the same
+// + 16 for j ≥ 4. Keys ≥ sk are code 0.
+extern "C" __global__ void __launch_bounds__(256) fw_attn_v8_max(u64 v_, u64 vmean_, u64 part_, int sk, int d) {
+    __shared__ float red[8];
+    const bf16_t* v = (const bf16_t*)v_;
+    const float* vm = (const float*)vmean_ + (long)blockIdx.y * d;
+    const int row0 = blockIdx.x * 64, rows = min(64, sk - row0), n = rows * d;
+    const long base = ((long)blockIdx.y * sk + row0) * d;
+    const int tid = threadIdx.x, warp = tid >> 5, lane = tid & 31;
+    float mx = 0.0f;
+    for (int i = tid; i < n; i += 256) mx = fmaxf(mx, fabsf(ld(v, base + i) - vm[i % d]));
+    for (int o = 16; o > 0; o >>= 1) mx = fmaxf(mx, __shfl_xor_sync(0xffffffffu, mx, o));
+    if (lane == 0) red[warp] = mx;
+    __syncthreads();
+    if (tid == 0) {
+        float m = red[0];
+        for (int w = 1; w < 8; ++w) m = fmaxf(m, red[w]);
+        ((float*)part_)[(long)blockIdx.y * gridDim.x + blockIdx.x] = m;
+    }
+}
+extern "C" __global__ void __launch_bounds__(128) fw_attn_v8(u64 v_, u64 vmean_, u64 part_, int nparts, u64 vsc_, u64 v8t_, int sk, int d) {
+    __shared__ float scs;
+    const bf16_t* v = (const bf16_t*)v_;
+    const int h = blockIdx.y, c = blockIdx.x, tid = threadIdx.x;
+    const float* vm = (const float*)vmean_ + (long)h * d;
+    const int skp = gridDim.x * MMA2_BK;
+    if (tid == 0) {
+        const float* part = (const float*)part_ + (long)h * nparts;
+        float m = 0.0f;
+        for (int i = 0; i < nparts; ++i) m = fmaxf(m, part[i]);
+        scs = m / 448.0f;
+        if (c == 0) ((float*)vsc_)[h] = scs;
+    }
+    __syncthreads();
+    if (tid >= d) return;
+    const float inv = scs > 0.0f ? 1.0f / scs : 0.0f, mean = vm[tid];
+    unsigned char* dst = (unsigned char*)v8t_ + ((long)h * d + tid) * skp + (long)c * MMA2_BK;
+    unsigned words[8];
+    #pragma unroll
+    for (int j = 0; j < 8; ++j) {
+        unsigned w = 0;
+        #pragma unroll
+        for (int i = 0; i < 4; ++i) {
+            const int jj = j & 3, key = (j >> 2) * 16 + (i < 2 ? 2 * jj + i : 8 + 2 * jj + (i - 2));
+            const int tk = c * MMA2_BK + key;
+            const unsigned code = tk < sk ? mx_e4m3((ld(v, ((long)h * sk + tk) * d + tid) - mean) * inv) : 0u;
+            w |= code << (8 * i);
+        }
+        words[j] = w;
+    }
+    uint4* o = (uint4*)dst;
+    uint4 w0; w0.x = words[0]; w0.y = words[1]; w0.z = words[2]; w0.w = words[3];
+    uint4 w1; w1.x = words[4]; w1.y = words[5]; w1.z = words[6]; w1.w = words[7];
+    o[0] = w0;
+    o[1] = w1;
+}
 
 // h3_core::vsa::attn_qk8_round: one 64-row tile of X ([heads][seq][d] bf16)
 // per block (tile, head), 256 threads: the tile's scale max|x − mean| / 127

@@ -100,6 +100,9 @@ struct AttnArgs {
     /// INT8 Q·Kᵀ (SageAttention's recipe; int8 tensor cores on CUDA) in the VSA fine stage and in dense attention.
     #[arg(long, visible_alias = "qk8", default_value_t = false)]
     vsa_qk8: bool,
+    /// FP8 P·V as well, in dense attention (implies --qk8; fp8 tensor cores on sm_89+).
+    #[arg(long, default_value_t = false)]
+    pv8: bool,
     /// Block linears on the device: native (bf16 / f16) | int8 | int4[-hqq][-gN][-ffn] | nvfp4.
     #[arg(long, default_value = "native")]
     weights: WeightQuant,
@@ -117,7 +120,7 @@ struct AttnArgs {
 impl AttnArgs {
     fn attention(&self, v: &Variant) -> Attention {
         match (self.attention, v.vsa) {
-            (AttnKind::Dense, _) | (AttnKind::Auto, None) => Attention::Dense { qk8: self.vsa_qk8 },
+            (AttnKind::Dense, _) | (AttnKind::Auto, None) => Attention::Dense { qk8: self.vsa_qk8 || self.pv8, pv8: self.pv8 },
             (AttnKind::Vsa, None) => Attention::Vsa { sparsity: self.vsa_sparsity.unwrap_or(0.8), tile: 64, ref_sparsity: 0.9, qk8: self.vsa_qk8 },
             (_, Some(p)) => Attention::Vsa {
                 sparsity: self.vsa_sparsity.unwrap_or(p.sparsity),
@@ -708,7 +711,7 @@ fn bench<B: Backend>(be: &B, model: &ModelArgs, shape: &Shape, attn: &AttnArgs, 
     let dit = H3Dit::load(be, cfg.clone(), &src, &LoadOptions { quant: attn.weights, stream_blocks: attn.stream_blocks }, &[])?;
     be.sync();
     println!("load (synthetic) {:.2}s", t0.elapsed().as_secs_f64());
-    let attention = if variant.vsa.is_some() || attn.attention == AttnKind::Vsa { attn.attention(&variant) } else { Attention::Dense { qk8: attn.vsa_qk8 } };
+    let attention = if variant.vsa.is_some() || attn.attention == AttnKind::Vsa { attn.attention(&variant) } else { Attention::Dense { qk8: attn.vsa_qk8 || attn.pv8, pv8: attn.pv8 } };
     let text = dit.refine_text(be, &vec![0.0; text_tokens * cfg.text_dim]);
     let ws = dit.workspace(be, &layout, attn.ffn_chunk.unwrap_or(usize::MAX), attention)?;
     let t1 = std::time::Instant::now();

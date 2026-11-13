@@ -518,8 +518,8 @@ pub trait Backend {
     /// [`Backend::attention`] with INT8 Q·Kᵀ: must equal `attention` of
     /// [`crate::vsa::attn_qk8_round`]'s copies of Q and K up to the backend's
     /// rounding (CUDA runs int8 tensor cores on the same codes; the CPU and
-    /// WebGPU round and run the exact kernel). P·V stays in the activation
-    /// precision.
+    /// WebGPU round and run the exact kernel). With `pv8` the P·V half runs
+    /// in FP8 too and the oracle is [`crate::vsa::attention_pv8_reference`].
     #[allow(clippy::too_many_arguments)]
     fn attention_qk8(
         &self,
@@ -532,6 +532,7 @@ pub trait Backend {
         sk: usize,
         head_dim: usize,
         causal: bool,
+        pv8: bool,
         out: &Self::Buf,
     );
 

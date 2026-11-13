@@ -41,7 +41,7 @@ fn hf_parity_dit() {
     let tags: Vec<u8> = src.get("input.text_tags", &[6]).unwrap().iter().map(|v| *v as u8).collect();
     let layout = packing::build_layout(&tags, 2, 4, 6, 5, cfg.patch, &[Anchor::First]).unwrap();
     let text = dit.refine_text(&be, &src.get("input.text", &[6, cfg.text_dim]).unwrap());
-    let ws = dit.workspace(&be, &layout, usize::MAX, Attention::Dense { qk8: false }).unwrap();
+    let ws = dit.workspace(&be, &layout, usize::MAX, Attention::Dense { qk8: false, pv8: false }).unwrap();
     let tables = dit.adaln_tables(&be, &src, &[], &[0.25, 0.7, 0.999, 1.0], None).unwrap();
     let (unique, inverse) = packing::row_timesteps(&layout, 0.25, 0.7, 0.999, 1.0);
     let mods = dit.step_mods(&be, &tables, &unique, &inverse, &layout.token_tags, false).unwrap();
