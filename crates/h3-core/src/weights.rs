@@ -120,9 +120,16 @@ impl SafetensorsDir {
         }
         let mut maps = Vec::new();
         let mut index = HashMap::new();
+        let advise = std::env::var_os("H3_NO_MADVISE").is_none();
         for (i, f) in files.iter().enumerate() {
             let file = std::fs::File::open(f)?;
             let map = map_readonly(&file)?;
+            if advise {
+                // Tensors are consumed front to back: let the kernel read ahead in
+                // large requests instead of one page fault at a time (on a network
+                // filesystem the difference is 0.2 vs 0.7+ GB/s). Best effort.
+                let _ = map.advise(memmap2::Advice::Sequential);
+            }
             let st = safetensors::SafeTensors::deserialize(&map)
                 .map_err(|e| Error::Weights(format!("{}: {e}", f.display())))?;
             for name in st.names() {
@@ -138,7 +145,13 @@ impl SafetensorsDir {
         let i = *self.index.get(name).ok_or_else(|| Error::Weights(format!("missing tensor `{name}`")))?;
         let st = safetensors::SafeTensors::deserialize(&self.maps[i]).map_err(|e| Error::Weights(e.to_string()))?;
         let t = st.tensor(name).map_err(|e| Error::Weights(e.to_string()))?;
-        Ok((t.dtype(), t.shape().to_vec(), t.data()))
+        let data = t.data();
+        if std::env::var_os("H3_NO_MADVISE").is_none() {
+            // Ask for this tensor's pages before they are touched (`H3_NO_MADVISE=1` to compare).
+            let off = data.as_ptr() as usize - self.maps[i].as_ptr() as usize;
+            let _ = self.maps[i].advise_range(memmap2::Advice::WillNeed, off, data.len());
+        }
+        Ok((t.dtype(), t.shape().to_vec(), data))
     }
 
     pub fn contains_raw(&self, name: &str) -> bool {
