@@ -645,7 +645,10 @@ impl<B: Backend> H3Dit<B> {
         // Streamed blocks: block l + 1's weights are uploaded on the backend's
         // side queue while block l computes (`prefetch_*`); at most two blocks
         // are resident, and a block is freed only after the compute queue has
-        // passed it (`prefetch_release`).
+        // passed it (`prefetch_release`). `H3_PREFETCH_DEPTH=2` keeps two
+        // blocks in flight (three resident), for links where one block's
+        // upload does not fit inside one block's compute.
+        let depth: usize = std::env::var("H3_PREFETCH_DEPTH").ok().and_then(|v| v.parse().ok()).unwrap_or(1).clamp(1, 2);
         let prefetch = |l: usize| -> Option<AttnFf<B>> {
             match self.blocks.get(l) {
                 Some(Residency::Host(h)) => {
@@ -675,14 +678,14 @@ impl<B: Backend> H3Dit<B> {
         if first {
             stat("input h", &ws.h);
         }
-        let mut staged = prefetch(0);
+        let mut staged: std::collections::VecDeque<AttnFf<B>> = (0..depth).filter_map(prefetch).collect();
         for (l, (bl, m)) in self.blocks.iter().zip(&mods.blocks).enumerate() {
             let streamed;
             let w = match bl {
                 Residency::Device(w) => w,
                 Residency::Host(_) => {
                     be.prefetch_wait();
-                    streamed = staged.take().expect("prefetched block");
+                    streamed = staged.pop_front().expect("prefetched block");
                     &streamed
                 }
             };
@@ -736,7 +739,7 @@ impl<B: Backend> H3Dit<B> {
             if matches!(bl, Residency::Host(_)) {
                 // This block's kernels are queued: fetch the next one behind them,
                 // then let the side queue free this block once the compute queue is past it.
-                staged = prefetch(l + 1);
+                staged.extend(prefetch(l + depth));
                 be.prefetch_release();
             }
         }

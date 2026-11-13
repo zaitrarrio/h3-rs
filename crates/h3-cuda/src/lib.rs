@@ -117,6 +117,14 @@ enum Quant {
     Mxfp8,
 }
 
+#[derive(Default)]
+struct Stall {
+    waits: Vec<(cudarc::driver::CudaEvent, cudarc::driver::CudaEvent)>,
+    copies: Vec<(cudarc::driver::CudaEvent, Arc<cudarc::driver::CudaEvent>, usize)>,
+    open: Option<cudarc::driver::CudaEvent>,
+    bytes: usize,
+}
+
 pub struct Cuda {
     #[allow(dead_code)]
     ctx: Arc<CudaContext>,
@@ -125,8 +133,16 @@ pub struct Cuda {
     copy: Arc<CudaStream>,
     /// Uploads go to `copy` between `prefetch_begin` and `prefetch_end`.
     staging: std::sync::atomic::AtomicBool,
-    /// The end of the last prefetch, for `prefetch_wait`.
-    fence: std::sync::Mutex<Option<cudarc::driver::CudaEvent>>,
+    /// The ends of the prefetches in flight, oldest first: `prefetch_wait`
+    /// takes the front, `prefetch_begin` synchronises the back on the host
+    /// before the bounce buffer is reused (with one prefetch in flight that is
+    /// the same event; `H3_PREFETCH_DEPTH=2` keeps two).
+    fence: std::sync::Mutex<std::collections::VecDeque<Arc<cudarc::driver::CudaEvent>>>,
+    /// `H3_STALL=1`: event pairs around every `prefetch_wait` on the compute
+    /// stream and around every prefetch's copies on the copy stream, with the
+    /// bytes copied, so the per-forward summary can say how long the GPU sat
+    /// waiting for streamed weights and at what rate they arrived.
+    stall: Option<std::sync::Mutex<Stall>>,
     /// Host ranges page-locked by `pin_host` (the interior pages of streamed
     /// weight buffers): copies from inside them are DMA with no host wait.
     /// Shared with the guards, which remove their range when dropped.
@@ -540,12 +556,13 @@ impl Cuda {
         let blas = CudaBlas::new(stream.clone()).map_err(err)?;
         let lt = if env1("H3_CUDA_NO_LT") { None } else { Lt::new(&stream).ok() };
         let name = format!("cuda {} (sm_{maj}{min})", ctx.name().unwrap_or_default());
-        Ok(Self {
+        let me = Self {
             ctx,
             stream,
             copy,
             staging: std::sync::atomic::AtomicBool::new(false),
-            fence: std::sync::Mutex::new(None),
+            fence: std::sync::Mutex::new(std::collections::VecDeque::new()),
+            stall: env1("H3_STALL").then(Default::default),
             pinned: Arc::new(std::sync::Mutex::new(Vec::new())),
             use_pin: !env1("H3_CUDA_NO_PIN"),
             bounce: std::sync::Mutex::new(None),
@@ -585,7 +602,11 @@ impl Cuda {
                 _ => Some(3),
             },
             prof: env1("H3_PROFILE").then(Default::default),
-        })
+        };
+        if let Some(line) = me.h2d_probe() {
+            eprintln!("{line}");
+        }
+        Ok(me)
     }
 
     fn ptr(&self, b: &CuBuf) -> u64 {
@@ -620,6 +641,7 @@ impl Cuda {
     /// pageable copy is waited for.
     fn htod(&self, dst: u64, src: &[u8], st: &Arc<CudaStream>) {
         const BOUNCE: usize = 64 << 20;
+        self.count_upload(src.len());
         if self.use_pin && self.staging.load(std::sync::atomic::Ordering::Relaxed) {
             let mut g = self.bounce.lock().unwrap();
             if g.is_none() {
@@ -644,6 +666,41 @@ impl Cuda {
         // SAFETY: `src` outlives the copy: the stream is synchronised before returning.
         unsafe { cudarc::driver::result::memcpy_htod_async(dst, src, st.cu_stream()).expect("upload") };
         st.synchronize().expect("sync");
+    }
+
+    /// Bytes of an upload issued during a prefetch, for the stall summary.
+    fn count_upload(&self, n: usize) {
+        if let Some(st) = &self.stall {
+            if self.staging.load(std::sync::atomic::Ordering::Relaxed) {
+                st.lock().unwrap().bytes += n;
+            }
+        }
+    }
+
+    /// `H3_STALL=1`: one-off host-to-device rate probe, 256 MB pinned and
+    /// pageable, so a stalled forward can be read against the link.
+    fn h2d_probe(&self) -> Option<String> {
+        self.stall.as_ref()?;
+        const N: usize = 256 << 20;
+        let dst = self.stream.alloc_zeros::<u8>(N).ok()?;
+        let (p, _g) = dst.device_ptr(&self.stream);
+        let mut out = String::from("h2d probe (256 MB):");
+        let pageable = vec![1u8; N];
+        // SAFETY: `pinned` is written before it is read; both sources outlive their copies (synchronised below).
+        let pinned = unsafe { self.ctx.alloc_pinned_with_flags::<u8>(N, 0) }.ok();
+        for (name, src) in [("pageable", Some(&pageable[..])), ("pinned", pinned.as_ref().and_then(|b| b.as_slice().ok()))] {
+            let Some(src) = src else { continue };
+            let mut best = f32::INFINITY;
+            for _ in 0..3 {
+                let e0 = self.stream.record_event(None).ok()?;
+                unsafe { cudarc::driver::result::memcpy_htod_async(p, src, self.stream.cu_stream()).ok()? };
+                let e1 = self.stream.record_event(None).ok()?;
+                self.stream.synchronize().ok()?;
+                best = best.min(e0.elapsed_ms(&e1).ok()?);
+            }
+            out += &format!(" {name} {:.1} GB/s", N as f64 / 1e9 / (best as f64 / 1e3));
+        }
+        Some(out)
     }
 
     /// The part of `bytes` that lies in a page-locked range, as (start, end)
@@ -682,6 +739,7 @@ impl Cuda {
                 }
                 // SAFETY: the locked pages stay mapped and locked while the DiT
                 // that owns them (and their guard) lives.
+                self.count_upload(i1 - i0);
                 unsafe { cudarc::driver::result::memcpy_htod_async(p + i0 as u64, &bytes[i0..i1], st.cu_stream()).expect("upload") };
             } else {
                 self.htod(p, bytes, st);
@@ -1123,21 +1181,36 @@ impl Backend for Cuda {
     }
 
     fn prefetch_begin(&self) {
-        if let Some(ev) = self.fence.lock().unwrap().as_ref() {
-            // The previous prefetch's copies (some from the bounce buffer) are
-            // done before the buffer is reused: the host blocks here until the
-            // copy stream has run them, which is at most two blocks behind.
+        if let Some(ev) = self.fence.lock().unwrap().back() {
+            // Every prefetch in flight has run its copies (some from the bounce
+            // buffer) before the buffer is reused: the host blocks here until
+            // the copy stream has run the newest, at most two blocks behind.
             ev.synchronize().expect("event");
         }
         if let Some((_, used)) = self.bounce.lock().unwrap().as_mut() {
             *used = 0;
+        }
+        if let Some(st) = &self.stall {
+            let mut st = st.lock().unwrap();
+            st.bytes = 0;
+            // Recorded behind the release wait already queued on the copy
+            // stream, so it marks when this prefetch's copies actually start.
+            st.open = Some(self.copy.record_event(None).expect("event"));
         }
         self.staging.store(true, std::sync::atomic::Ordering::Relaxed);
     }
 
     fn prefetch_end(&self) {
         self.staging.store(false, std::sync::atomic::Ordering::Relaxed);
-        *self.fence.lock().unwrap() = Some(self.copy.record_event(None).expect("event"));
+        let ev = Arc::new(self.copy.record_event(None).expect("event"));
+        if let Some(st) = &self.stall {
+            let mut st = st.lock().unwrap();
+            if let Some(e0) = st.open.take() {
+                let bytes = st.bytes;
+                st.copies.push((e0, Arc::clone(&ev), bytes));
+            }
+        }
+        self.fence.lock().unwrap().push_back(ev);
     }
 
     /// Page-lock the whole pages inside `bytes` (never the partial edge pages:
@@ -1183,8 +1256,20 @@ impl Backend for Cuda {
         // depends on how far the host runs ahead of the GPU, so one 5090
         // pod produced byte-identical clips and three later hosts never
         // produced a frame).
-        if let Some(ev) = self.fence.lock().unwrap().as_ref() {
-            self.stream.wait(ev).expect("wait");
+        // With two prefetches in flight the front is the block about to run.
+        let ev = {
+            let mut f = self.fence.lock().unwrap();
+            if f.len() > 1 { f.pop_front() } else { f.front().cloned() }
+        };
+        if let Some(ev) = ev {
+            if let Some(st) = &self.stall {
+                let w0 = self.stream.record_event(None).expect("event");
+                self.stream.wait(&*ev).expect("wait");
+                let w1 = self.stream.record_event(None).expect("event");
+                st.lock().unwrap().waits.push((w0, w1));
+            } else {
+                self.stream.wait(&*ev).expect("wait");
+            }
         }
     }
 
@@ -1202,13 +1287,45 @@ impl Backend for Cuda {
     }
 
     fn profile_report(&self) -> Option<String> {
-        self.profile_table()
+        let mut out = self.profile_table().unwrap_or_default();
+        if let Some(st) = &self.stall {
+            self.stream.synchronize().expect("sync");
+            self.copy.synchronize().expect("sync");
+            let mut st = st.lock().unwrap();
+            if !st.waits.is_empty() || !st.copies.is_empty() {
+                let wait: f64 = st.waits.iter().map(|(a, b)| a.elapsed_ms(b).unwrap_or(0.0) as f64).sum();
+                let worst = st.waits.iter().map(|(a, b)| a.elapsed_ms(b).unwrap_or(0.0)).fold(0f32, f32::max);
+                let copy: f64 = st.copies.iter().map(|(a, b, _)| a.elapsed_ms(b).unwrap_or(0.0) as f64).sum();
+                let bytes: usize = st.copies.iter().map(|c| c.2).sum();
+                out += &format!(
+                    "prefetch: {} blocks; compute stream waited {:.0} ms total, {:.1} ms/block, worst {:.1} ms; copies {:.0} ms for {:.2} GB ({:.1} GB/s while copying, {:.2} GB/block)\n",
+                    st.waits.len(),
+                    wait,
+                    wait / st.waits.len().max(1) as f64,
+                    worst,
+                    copy,
+                    bytes as f64 / 1e9,
+                    if copy > 0.0 { bytes as f64 / 1e9 / (copy / 1e3) } else { 0.0 },
+                    bytes as f64 / 1e9 / st.copies.len().max(1) as f64,
+                );
+                st.waits.clear();
+                st.copies.clear();
+            }
+        }
+        (!out.is_empty()).then_some(out)
     }
 
     fn profile_reset(&self) {
         if let Some(p) = &self.prof {
             self.stream.synchronize().expect("sync");
             p.lock().unwrap().clear();
+        }
+        if let Some(st) = &self.stall {
+            self.stream.synchronize().expect("sync");
+            self.copy.synchronize().expect("sync");
+            let mut st = st.lock().unwrap();
+            st.waits.clear();
+            st.copies.clear();
         }
     }
 
