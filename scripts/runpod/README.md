@@ -17,6 +17,11 @@ the volume yet (R2 `fv-weights` or Hugging Face).
 The volume `fv-weights-h3-ltx-500` (EU-RO-1) is shared with fastvideo-rs,
 whose fetcher lays trees out as `/workspace/weights/<tree>/` with
 `.complete` and `.fv-revision` markers; writes there are add-only (never
-move or delete a tree). A command terminates the pod with `terminate`
+move or delete a tree). It is a network filesystem: loads read it at
+0.25–0.5 GB/s. `stage TREE [SUB...]` (exported by the boot) copies a tree,
+or only the named subdirectories with the rest symlinked back, onto the
+container disk with eight parallel `cp` streams and repoints `/w/TREE`;
+size the container disk for it at `rp.py create` (last argument, GB). A
+command terminates the pod with `terminate`
 (exported by the boot); the boot's backstop terminates it after
 `H3_POD_HOURS` (default 4) regardless.
