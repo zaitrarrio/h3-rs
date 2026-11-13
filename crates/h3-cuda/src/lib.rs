@@ -103,6 +103,10 @@ pub struct Cuda {
     staging: std::sync::atomic::AtomicBool,
     /// The end of the last prefetch, for `prefetch_wait`.
     fence: std::sync::Mutex<Option<cudarc::driver::CudaEvent>>,
+    /// Host ranges page-locked by `pin_host` (start, end): copies from them
+    /// need no host-side wait.
+    pinned: std::sync::Mutex<Vec<(usize, usize)>>,
+    pin_warned: std::sync::atomic::AtomicBool,
     blas: CudaBlas,
     /// cuBLASLt with the bias (+ tanh-GELU) epilogue fused into the GEMM;
     /// `None` when unavailable or `H3_CUDA_NO_LT=1`.
@@ -487,6 +491,8 @@ impl Cuda {
             copy,
             staging: std::sync::atomic::AtomicBool::new(false),
             fence: std::sync::Mutex::new(None),
+            pinned: std::sync::Mutex::new(Vec::new()),
+            pin_warned: std::sync::atomic::AtomicBool::new(false),
             blas,
             lt,
             module,
@@ -546,9 +552,16 @@ impl Cuda {
         CuBuf { s: Arc::new(s), len, f32 }
     }
 
+    /// Whether `bytes` lies inside a range `pin_host` page-locked.
+    fn is_pinned(&self, bytes: &[u8]) -> bool {
+        let (a, b) = (bytes.as_ptr() as usize, bytes.as_ptr() as usize + bytes.len());
+        self.pinned.lock().unwrap().iter().any(|&(s, e)| s <= a && b <= e)
+    }
+
     /// Byte-coded weights (int8 / int4 / NVFP4 / MXFP8 codes and scales) as a
     /// 16-bit buffer, copied straight from the host bytes: a streamed block's
     /// weights used to go through a `u8 → u16` pass on the CPU every step.
+    /// From page-locked memory the copy is a DMA the host does not wait for.
     fn upload_bytes(&self, bytes: &[u8]) -> CuBuf {
         let st = self.ustream();
         let words = bytes.len().div_ceil(2).max(1);
@@ -556,9 +569,12 @@ impl Cuda {
         let s = st.alloc_zeros::<u16>(words).expect("cuda alloc");
         if !bytes.is_empty() {
             let (p, _g) = s.device_ptr(st);
-            // SAFETY: as in `upload_u16`.
+            // SAFETY: pinned sources outlive the backend (the contract of
+            // `pin_host`); pageable ones are waited for before returning.
             unsafe { cudarc::driver::result::memcpy_htod_async(p, bytes, st.cu_stream()).expect("upload") };
-            st.synchronize().expect("sync");
+            if !self.is_pinned(bytes) {
+                st.synchronize().expect("sync");
+            }
         }
         CuBuf { s: Arc::new(s), len: words, f32: false }
     }
@@ -1004,6 +1020,30 @@ impl Backend for Cuda {
     fn prefetch_release(&self) {
         let ev = self.stream.record_event(None).expect("event");
         self.copy.wait(&ev).expect("wait");
+    }
+
+    fn pin_host(&self, bytes: &[u8]) {
+        if bytes.is_empty() || env1("H3_CUDA_NO_PIN") {
+            return;
+        }
+        const PAGE: usize = 4096;
+        let start = (bytes.as_ptr() as usize) & !(PAGE - 1);
+        let end = (bytes.as_ptr() as usize + bytes.len()).div_ceil(PAGE) * PAGE;
+        let mut reg = self.pinned.lock().unwrap();
+        // Registering a page twice is an error for the driver; allocations
+        // can share a page, so a range that touches a registered one is
+        // skipped (it then copies as pageable memory).
+        if reg.iter().any(|&(s, e)| start < e && end > s) {
+            return;
+        }
+        // SAFETY: the range is readable host memory; the caller keeps it
+        // allocated for the backend's lifetime (streamed block weights).
+        let r = unsafe { cudarc::driver::sys::cuMemHostRegister_v2(start as *mut _, end - start, 0) };
+        if r == cudarc::driver::sys::CUresult::CUDA_SUCCESS {
+            reg.push((start, end));
+        } else if !self.pin_warned.swap(true, std::sync::atomic::Ordering::Relaxed) {
+            eprintln!("warning: cuMemHostRegister failed ({r:?}); streamed weights copy from pageable memory");
+        }
     }
 
     fn weight_bytes(&self, w: &CuWeight) -> usize {

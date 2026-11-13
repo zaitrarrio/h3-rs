@@ -48,7 +48,31 @@ pub struct HostLinear {
     pub cols: usize,
 }
 
+impl HostWeight {
+    /// Page-lock the buffers a streamed upload reads (see [`Backend::pin_host`]).
+    pub fn pin<B: Backend>(&self, be: &B) {
+        match self {
+            // SAFETY (both casts): `f32` / `i8` reinterpreted as the bytes of the same allocation.
+            HostWeight::F32(v) => be.pin_host(unsafe { std::slice::from_raw_parts(v.as_ptr() as *const u8, v.len() * 4) }),
+            HostWeight::Q8(q) => be.pin_host(unsafe { std::slice::from_raw_parts(q.q.as_ptr() as *const u8, q.q.len()) }),
+            HostWeight::Q4(_) => {}
+            HostWeight::Nvfp4(q) => {
+                be.pin_host(&q.packed);
+                be.pin_host(&q.scales);
+            }
+            HostWeight::Mxfp8(q) => {
+                be.pin_host(&q.codes);
+                be.pin_host(&q.scales);
+            }
+        }
+    }
+}
+
 impl HostLinear {
+    pub fn pin<B: Backend>(&self, be: &B) {
+        self.w.pin(be);
+    }
+
     pub fn upload<B: Backend>(&self, be: &B) -> Linear<B> {
         let w = match &self.w {
             HostWeight::F32(v) => be.weight(v, self.rows, self.cols),

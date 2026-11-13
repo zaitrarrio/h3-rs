@@ -399,6 +399,10 @@ pub trait Backend {
     /// The side queue waits for the compute queue's work so far: call before
     /// dropping prefetched weights the compute queue may still be reading.
     fn prefetch_release(&self) {}
+    /// Page-lock host memory that will be uploaded repeatedly (streamed block
+    /// weights), so the copies run as DMA without blocking the host. The
+    /// memory must stay allocated for the backend's lifetime. Best effort.
+    fn pin_host(&self, _bytes: &[u8]) {}
     /// Wait for queued work (timing only; downloads synchronise themselves).
     fn sync(&self);
     /// Per-kernel device time since the last [`Backend::profile_reset`], when
