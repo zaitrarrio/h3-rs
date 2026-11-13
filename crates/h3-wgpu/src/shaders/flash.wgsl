@@ -15,8 +15,13 @@
 //               list sel[(h·nb + qt)·(nb + 1)] = count, then tile ids, each
 //               tile as `sub` chunks of 64 slots. With has_gate:
 //               out += coarse[h][qt] · gate[h][token].
+// pv8 (h3_core::vsa::attention_pv8_reference's P·V half): v holds the
+// unitless E4M3 codes of V − vmean, the running row maximum is rounded up
+// to an integer, P = exp2(s − ⌈m⌉ + 6) is rounded to E4M3 for the product
+// and summed exactly, and the epilogue applies vscale[kv head] / l and adds
+// vmean back before the gate term.
 struct P { heads: u32, group: u32, sq: u32, sk: u32, d: u32, scale_log2: f32, mode: u32, causal: u32,
-           nb: u32, tile: u32, sub: u32, has_gate: u32 }
+           nb: u32, tile: u32, sub: u32, has_gate: u32, pv8: u32, _p1: u32, _p2: u32, _p3: u32 }
 @group(0) @binding(0) var<uniform> p: P;
 @group(0) @binding(1) var<storage, read> q: array<f32>;
 @group(0) @binding(2) var<storage, read> k: array<f32>;
@@ -26,6 +31,37 @@ struct P { heads: u32, group: u32, sq: u32, sk: u32, d: u32, scale_log2: f32, mo
 @group(0) @binding(6) var<storage, read> sel: array<u32>;
 @group(0) @binding(7) var<storage, read> coarse: array<f32>;
 @group(0) @binding(8) var<storage, read> gate: array<f32>;
+@group(0) @binding(9) var<storage, read> vmean: array<f32>;
+@group(0) @binding(10) var<storage, read> vscale: array<f32>;
+
+// E4M3 code of v (cvt.rn.satfinite) and back, as mx_act.wgsl.
+fn e4m3_sat(v: f32) -> u32 {
+    let u = bitcast<u32>(v);
+    let sign = (u >> 24u) & 0x80u;
+    let a = u & 0x7FFFFFFFu;
+    if (a > 0x7F800000u) { return sign | 0x7Fu; }
+    if (a >= 0x43E00000u) { return sign | 0x7Eu; }
+    if (a < 0x3C800000u) {
+        let m = u32(round(bitcast<f32>(a) * 512.0));
+        return sign | m;
+    }
+    var e = i32(a >> 23u) - 127;
+    var m = (a >> 20u) & 7u;
+    let rem = a & 0xFFFFFu;
+    if (rem > 0x80000u || (rem == 0x80000u && (m & 1u) == 1u)) {
+        m = m + 1u;
+        if (m == 8u) { m = 0u; e = e + 1; }
+    }
+    return sign | (u32(e + 7) << 3u) | m;
+}
+fn e4m3_decode(b: u32) -> f32 {
+    var sign = 1.0;
+    if ((b & 0x80u) != 0u) { sign = -1.0; }
+    let e = i32((b >> 3u) & 0xFu);
+    let m = f32(b & 7u);
+    if (e == 0) { return sign * m / 512.0; }
+    return sign * (1.0 + m / 8.0) * exp2(f32(e - 7));
+}
 
 const PAD: u32 = 0xffffffffu;
 const SS: u32 = 65u;   // padded row stride of the S/P tile
@@ -140,13 +176,22 @@ fn main(@builtin(local_invocation_index) tid: u32, @builtin(workgroup_id) wid: v
             let base = tid * SS;
             var mx = rowm[tid];
             for (var j = 0u; j < 64u; j = j + 1u) { mx = max(mx, ss[base + j]); }
+            if (p.pv8 != 0u && mx > -1e29) { mx = ceil(mx); }
             let corr = exp2(rowm[tid] - mx);
             var sum = 0.0;
             for (var j = 0u; j < 64u; j = j + 1u) {
                 var e = 0.0;
-                if (ss[base + j] > -1e29) { e = exp2(ss[base + j] - mx); }
+                if (ss[base + j] > -1e29) {
+                    if (p.pv8 != 0u) {
+                        let pr = exp2(ss[base + j] - mx + 6.0);
+                        sum = sum + pr;
+                        e = e4m3_decode(e4m3_sat(pr));
+                    } else {
+                        e = exp2(ss[base + j] - mx);
+                        sum = sum + e;
+                    }
+                }
                 ss[base + j] = e;
-                sum = sum + e;
             }
             rowl[tid] = rowl[tid] * corr + sum;
             rowm[tid] = mx;
@@ -193,16 +238,18 @@ fn main(@builtin(local_invocation_index) tid: u32, @builtin(workgroup_id) wid: v
         if (tok == PAD) { continue; }
         var inv = 0.0;
         if (rowl[r] > 0.0) { inv = 1.0 / rowl[r]; }
+        if (p.pv8 != 0u) { inv = inv * vscale[kh]; }
         for (var j = 0u; j < nd; j = j + 1u) {
             let col = tx + 16u * j;
             var o: f32;
             if (j < 4u) { o = oa[i][j]; } else { o = ob[i][j - 4u]; }
             o = o * inv;
+            if (p.pv8 != 0u) { o = o + vmean[kh * d + col]; }
             if (p.mode == 1u && p.has_gate != 0u) {
                 o = o + coarse[(h * p.nb + qt) * d + col] * gate[(h * p.sq + tok) * d + col];
             }
             out[(tok * p.heads + h) * d + col] = o;
         }
     }
-    if (p.heads == 0xfffffffeu) { out[0] = coarse[0] + gate[0] + f32(sel[0]) + f32(slot[0]); }
+    if (p.heads == 0xfffffffeu) { out[0] = coarse[0] + gate[0] + f32(sel[0]) + f32(slot[0]) + vmean[0] + vscale[0]; }
 }

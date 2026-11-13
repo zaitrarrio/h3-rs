@@ -80,6 +80,8 @@ pub struct GVsa {
     tile: usize,
     /// INT8 Q·Kᵀ emulation (`vsa_qk8.wgsl`): per-head K mean, rounded Q / K copies.
     qk8: Option<(GBuf, GBuf, GBuf)>,
+    /// FP8 P·V emulation (`attn_qk8.wgsl` modes 0 / 3 / 4 on V): per-head V mean, E4M3 codes, per-head scale.
+    pv8: Option<(GBuf, GBuf, GBuf)>,
     sub: usize,
 }
 
@@ -750,6 +752,7 @@ impl Wgpu {
         scale: f32,
         causal: bool,
         vsa: Option<(&GVsa, Option<&GBuf>)>,
+        pv8: Option<(&GBuf, &GBuf)>,
     ) {
         let pipe = self.pipeline("flash", || FLASH.to_string());
         let (nb, tile, sub, has_gate) = vsa.map_or((0, 64, 1, 0), |(s, g)| (s.nb, s.tile, s.sub, g.is_some() as u32));
@@ -766,6 +769,10 @@ impl Wgpu {
             tile as u32,
             sub as u32,
             has_gate,
+            pv8.is_some() as u32,
+            0,
+            0,
+            0,
         ];
         let blocks = if mode == 0 { sq.div_ceil(64) } else { nb * sub };
         let dm = &self.dummy;
@@ -773,8 +780,9 @@ impl Wgpu {
             Some((s, g)) => (&s.slot, &s.sel, &s.coarse, g.unwrap_or(dm)),
             None => (dm, dm, dm, dm),
         };
+        let (vmean, vscale) = pv8.unwrap_or((dm, dm));
         assert!(blocks as u32 <= MAX_DIM && heads as u32 <= MAX_DIM);
-        self.dispatch(&pipe, &p, &[q, k, v, out, slot, sel, coarse, gate], (blocks as u32, heads as u32, 1));
+        self.dispatch(&pipe, &p, &[q, k, v, out, slot, sel, coarse, gate, vmean, vscale], (blocks as u32, heads as u32, 1));
     }
 
     fn conv_pipe(&self, name: &str, src: &str, w: &GWeight) -> Arc<wgpu::ComputePipeline> {
@@ -1096,7 +1104,7 @@ impl Backend for Wgpu {
         assert!(d <= 128, "attention kernel supports head_dim <= 128");
         assert!(heads % kv_heads == 0);
         if self.flash_ok && d % 16 == 0 {
-            self.flash(0, q, k, v, out, heads, kv_heads, sq, sk, d, 1.0 / (d as f32).sqrt(), causal, None);
+            self.flash(0, q, k, v, out, heads, kv_heads, sq, sk, d, 1.0 / (d as f32).sqrt(), causal, None, None);
             return;
         }
         let bk = self.attn_bk;
@@ -1175,6 +1183,7 @@ impl Backend for Wgpu {
             tile: plan.tile_elems,
             sub: plan.tile_elems / 64,
             qk8: spec.qk8.then(|| (self.alloc(h * d), self.alloc(h * plan.seq * d), self.alloc(h * plan.seq * d))),
+            pv8: spec.pv8.then(|| (self.alloc(h * d), self.alloc(h * plan.seq * d), self.alloc(h))),
         }
     }
 
@@ -1199,10 +1208,22 @@ impl Backend for Wgpu {
             let mut p1 = base;
             p1[5] = 1;
             self.dispatch(&pipe, &p1, &[q, k, &s.slot, &s.bsz, kmean, q8, k8], (s.nb as u32, s.heads as u32, 1));
-            self.flash(1, q8, k8, v, out, s.heads, s.heads, s.seq, s.seq, s.d, s.scale, false, Some((s, gate)));
+            if let Some((vmean, v8, vscale)) = &s.pv8 {
+                // V: mean (mode 0 on V), per-head scale (mode 3), codes (mode 4).
+                let pipe = self.pipeline("attn_qk8", || ATTN_QK8.to_string());
+                let mut pv = [s.heads as u32, s.heads as u32, s.seq as u32, s.seq as u32, s.d as u32, 0, 0, 0];
+                self.dispatch(&pipe, &pv, &[q, v, vmean, v8, vscale], (s.heads as u32, 1, 1));
+                pv[5] = 3;
+                self.dispatch(&pipe, &pv, &[q, v, vmean, v8, vscale], (s.heads as u32, 1, 1));
+                pv[5] = 4;
+                self.dispatch(&pipe, &pv, &[q, v, vmean, v8, vscale], (s.seq.div_ceil(64) as u32, s.heads as u32, 1));
+                self.flash(1, q8, k8, v8, out, s.heads, s.heads, s.seq, s.seq, s.d, s.scale, false, Some((s, gate)), Some((vmean, vscale)));
+                return;
+            }
+            self.flash(1, q8, k8, v, out, s.heads, s.heads, s.seq, s.seq, s.d, s.scale, false, Some((s, gate)), None);
             return;
         }
-        self.flash(1, q, k, v, out, s.heads, s.heads, s.seq, s.seq, s.d, s.scale, false, Some((s, gate)));
+        self.flash(1, q, k, v, out, s.heads, s.heads, s.seq, s.seq, s.d, s.scale, false, Some((s, gate)), None);
     }
 
     #[allow(clippy::too_many_arguments)]

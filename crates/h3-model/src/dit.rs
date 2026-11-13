@@ -116,7 +116,7 @@ pub enum Attention {
     Dense { qk8: bool, pv8: bool },
     /// Video sparse attention: target-region sparsity, tile size (64 / 128 /
     /// 256 tokens) and reference-region sparsity.
-    Vsa { sparsity: f64, tile: usize, ref_sparsity: f64, qk8: bool },
+    Vsa { sparsity: f64, tile: usize, ref_sparsity: f64, qk8: bool, pv8: bool },
 }
 
 #[derive(Debug, Clone)]
@@ -579,12 +579,12 @@ impl<B: Backend> H3Dit<B> {
         let rope = h3_rope(&layout.position_ids, c.rope_freq_dim, c.rope_theta);
         let (vsa, vsa_dense) = match attention {
             Attention::Dense { .. } => (None, None),
-            Attention::Vsa { sparsity, tile, ref_sparsity, qk8 } => {
+            Attention::Vsa { sparsity, tile, ref_sparsity, qk8, pv8 } => {
                 if !be.vsa_supported(c.head_dim) {
                     return Err(Error::Msg(format!("backend {} cannot run VSA at head_dim {}", be.name(), c.head_dim)));
                 }
                 let segs = segments_for_layout(layout, c.patch, sparsity, ref_sparsity);
-                let spec = VsaSpec::new(&segs, tile, c.heads, c.head_dim).with_qk8(qk8);
+                let spec = VsaSpec::new(&segs, tile, c.heads, c.head_dim).with_qk8(qk8).with_pv8(pv8);
                 (Some(be.vsa_prepare(&spec)), Some(be.vsa_prepare(&spec.dense())))
             }
         };

@@ -210,14 +210,24 @@ pub struct VsaSpec {
     /// reference and WebGPU round the same way ([`qk8_round`]); CUDA runs
     /// the int8 tensor cores on the codes.
     pub qk8: bool,
+    /// FP8 P·V in the fine stage as well (implies `qk8`): V smoothed by its
+    /// per-head mean over the sequence and rounded to E4M3 with one scale
+    /// per head ([`attn_v8_round`]), P rounded to E4M3 at a 64× scale with
+    /// the row maximum rounded up to an integer in log2 units
+    /// ([`attention_pv8_reference`]'s recipe); the gated pooled branch
+    /// stays exact.
+    pub pv8: bool,
 }
 
 impl VsaSpec {
     pub fn new(segments: &[Segment], tile_elems: usize, heads: usize, head_dim: usize) -> Self {
-        Self { plan: TilePlan::new(segments, tile_elems), heads, head_dim, scale: 1.0 / (head_dim as f32).sqrt(), qk8: false }
+        Self { plan: TilePlan::new(segments, tile_elems), heads, head_dim, scale: 1.0 / (head_dim as f32).sqrt(), qk8: false, pv8: false }
     }
     pub fn with_qk8(self, qk8: bool) -> Self {
-        Self { qk8, ..self }
+        Self { qk8: qk8 || self.pv8, ..self }
+    }
+    pub fn with_pv8(self, pv8: bool) -> Self {
+        Self { qk8: self.qk8 || pv8, pv8, ..self }
     }
     pub fn dense(&self) -> Self {
         Self { plan: self.plan.dense(), ..self.clone() }

@@ -962,12 +962,20 @@ ATTN_MMA_KERNELS(128)
 // and of K − mean(K) ([heads][seq][D] bytes), qsc / ksc one scale per
 // (head, tile); K is staged as int8 (ks8, swizzled 16-byte chunks) and the
 // scores come out of mma.s8 as int32, scaled by qsc·ksc. P·V stays bf16.
-template <int D, bool DB, bool QREG, bool SWZ, bool Q8>
+// PV8 (with Q8 and DB): FP8 P·V as in the dense fw_attention_pv8 kernels.
+// v8t holds V − mean(V) as E4M3 codes per head, transposed to [D][nb·te]
+// in tile-slot order with each 32-slot chunk in mma B-fragment key order
+// (fw_attn_v8 with the slot table); the running maxima are integers in
+// log2 units, P = exp2(s·log2e − ⌈m⌉ + 6) rounded to E4M3, and the
+// epilogue applies vsc[h] / l and adds vmean back before the gate term.
+template <int D, bool DB, bool QREG, bool SWZ, bool Q8, bool PV8 = false>
 __device__ __forceinline__ void vsa_fine3_body(const bf16_t* q, const bf16_t* k, const bf16_t* v, bf16_t* out,
         int heads, int seq, float scale, const unsigned* slot, const unsigned* sel, const unsigned* nsel,
         const float* pooled, const bf16_t* gate, int has_gate, int nb, int np, int dense_all, int te, int maxsel,
         bf16_t* ks, bf16_t* vs, unsigned char* kvalid,
-        const signed char* q8, const signed char* k8, const float* qsc, const float* ksc, unsigned char* ks8) {
+        const signed char* q8, const signed char* k8, const float* qsc, const float* ksc, unsigned char* ks8,
+        const unsigned char* v8t = 0, const float* vmean = 0, const float* vsc = 0, unsigned char* vs8 = 0) {
+    static_assert(!PV8 || (Q8 && DB), "PV8 needs Q8 and DB");
     constexpr int F3BK = 32;
     constexpr int KS_STRIDE = SWZ ? D : D + 8;
     // element offset of 16-byte chunk `chunk` of row `row` in the staging tile
@@ -1028,8 +1036,10 @@ __device__ __forceinline__ void vsa_fine3_body(const bf16_t* q, const bf16_t* k,
     int ntk8[Q8 ? NJ8 : 1];
     // The thread's NJ keys of chunk c are krow + RP·j: one tile lookup and one
     // base pointer per chunk, then immediate offsets.
+    int rtile = 0;    // the tile of the chunk last resolved (its V8 slice)
     auto resolve = [&](int c) {
         const unsigned tile = all_tiles ? (unsigned)(c >> cshift) : srow[c >> cshift];
+        rtile = (int)tile;
         const unsigned* sp = slot + tile * (unsigned)te + (unsigned)((c & cmask) * F3BK + krow);
         #pragma unroll
         for (int j = 0; j < NJ; ++j) {
@@ -1066,11 +1076,25 @@ __device__ __forceinline__ void vsa_fine3_body(const bf16_t* q, const bf16_t* k,
     auto kbuf = [&](int c) { return ks + (c % NBUF) * F3BK * KS_STRIDE; };
     auto vbuf = [&](int c) { return vs + (c % NBUF) * F3BK * KS_STRIDE; };
     auto valid_of = [&](int c) { return kvalid + (c % NBUF) * F3BK; };
+    // FP8 V: the chunk (resolved just before) is D rows × 32 bytes of the
+    // head's transposed codes, the two 16-byte halves swizzled by bit 2 of
+    // the row (as the dense kernel); row stride nb·te slots.
+    const long ntot = (long)nb * te;
+    const unsigned char* v8h = PV8 ? v8t + (long)h * D * ntot : 0;
+    auto at8v = [](int r, int half) -> int { return r * 32 + ((half ^ ((r >> 2) & 1)) << 4); };
+    auto vs8buf = [&](int c) { return vs8 + (c % NBUF) * F3BK * D; };
+    auto load_v8 = [&](int c, unsigned char* dst) {
+        #pragma unroll
+        for (int j = 0; j < (PV8 ? (2 * D) / 128 : 1); ++j) {
+            const int idx = tid + 128 * j, r = idx >> 1, half = idx & 1;
+            cp_async16(dst + at8v(r, half), v8h + (long)r * ntot + (long)rtile * te + (c & cmask) * F3BK + half * 16, true);
+        }
+    };
     if (nchunks > 0) {
         resolve(0);
         if constexpr (Q8) load8(k8buf(0), valid_of(0)); else load(kbuf(0), kbase, valid_of(0));
         cp_async_commit();
-        load(vbuf(0), vbase, 0);
+        if constexpr (PV8) load_v8(0, vs8buf(0)); else load(vbuf(0), vbase, 0);
         cp_async_commit();
     }
     for (int c = 0; c < nchunks; ++c) {
@@ -1084,7 +1108,7 @@ __device__ __forceinline__ void vsa_fine3_body(const bf16_t* q, const bf16_t* k,
             if (c + 1 < nchunks) {
                 if constexpr (Q8) load8(k8buf(c + 1), valid_of(c + 1)); else load(kbuf(c + 1), kbase, valid_of(c + 1));
                 cp_async_commit();
-                load(vbuf(c + 1), vbase, 0);
+                if constexpr (PV8) load_v8(c + 1, vs8buf(c + 1)); else load(vbuf(c + 1), vbase, 0);
                 cp_async_commit();
             }
         } else {
@@ -1149,7 +1173,7 @@ __device__ __forceinline__ void vsa_fine3_body(const bf16_t* q, const bf16_t* k,
                 }
             }
         }
-        float mx0 = m0, mx1 = m1;
+        float mx0 = PV8 ? -1e30f : m0, mx1 = PV8 ? -1e30f : m1;    // PV8: raw units here, m in log2 integers
         const bool full = __all_sync(0xffffffffu, *(const unsigned char*)(kv + lane) == 1u);
         if (full) {
             #pragma unroll
@@ -1181,14 +1205,20 @@ __device__ __forceinline__ void vsa_fine3_body(const bf16_t* q, const bf16_t* k,
             mx0 = fmaxf(mx0, __shfl_xor_sync(0xffffffffu, mx0, off));
             mx1 = fmaxf(mx1, __shfl_xor_sync(0xffffffffu, mx1, off));
         }
+        if constexpr (PV8) {
+            // Integer maxima in log2 units: the rescales below are exact powers of two.
+            mx0 = fmaxf(m0, mx0 > -1e29f ? ceilf(mx0 * sl2) : -1e30f);
+            mx1 = fmaxf(m1, mx1 > -1e29f ? ceilf(mx1 * sl2) : -1e30f);
+        }
         if (__any_sync(0xffffffffu, mx0 != m0 || mx1 != m1)) {
-            const float c0 = exp2f((m0 - mx0) * sl2), c1 = exp2f((m1 - mx1) * sl2);
+            const float c0 = PV8 ? exp2f(m0 - mx0) : exp2f((m0 - mx0) * sl2);
+            const float c1 = PV8 ? exp2f(m1 - mx1) : exp2f((m1 - mx1) * sl2);
             m0 = mx0; m1 = mx1;
             l0 *= c0; l1 *= c1;
             #pragma unroll
             for (int i = 0; i < DT; ++i) { o[i][0] *= c0; o[i][1] *= c0; o[i][2] *= c1; o[i][3] *= c1; }
         }
-        const float ms0 = -m0 * sl2, ms1 = -m1 * sl2;
+        const float ms0 = PV8 ? 6.0f - m0 : -m0 * sl2, ms1 = PV8 ? 6.0f - m1 : -m1 * sl2;
         if (DB) {
             // V_c landed (K_{c+1}, V_{c+1} may be in flight).
             if (c + 1 < nchunks) asm volatile("cp.async.wait_group 2;\n" ::);
@@ -1197,6 +1227,33 @@ __device__ __forceinline__ void vsa_fine3_body(const bf16_t* q, const bf16_t* k,
             cp_async_wait1();
         }
         __syncthreads();
+        if constexpr (PV8) {
+            // One k32 e4m3 step per chunk: A = P in the dense kernel's key order
+            // (rows g / g+8: n-tiles 0,1 then 2,3), B = ldmatrix.x2 over the
+            // transposed V8 rows (lanes 0-7 the first 16 bytes, 8-15 the second).
+            float pp[NT][4];
+            #pragma unroll
+            for (int nt = 0; nt < NT; ++nt) {
+                #pragma unroll
+                for (int cc = 0; cc < 4; ++cc) pp[nt][cc] = exp2f(fmaf(s[nt][cc], sl2, cc < 2 ? ms0 : ms1));
+            }
+            l0 += pp[0][0] + pp[0][1] + pp[1][0] + pp[1][1] + pp[2][0] + pp[2][1] + pp[3][0] + pp[3][1];
+            l1 += pp[0][2] + pp[0][3] + pp[1][2] + pp[1][3] + pp[2][2] + pp[2][3] + pp[3][2] + pp[3][3];
+            const unsigned a0 = pack_e4m3x2(pp[0][0], pp[0][1]) | (pack_e4m3x2(pp[1][0], pp[1][1]) << 16);
+            const unsigned a1 = pack_e4m3x2(pp[0][2], pp[0][3]) | (pack_e4m3x2(pp[1][2], pp[1][3]) << 16);
+            const unsigned a2 = pack_e4m3x2(pp[2][0], pp[2][1]) | (pack_e4m3x2(pp[3][0], pp[3][1]) << 16);
+            const unsigned a3 = pack_e4m3x2(pp[2][2], pp[2][3]) | (pack_e4m3x2(pp[3][2], pp[3][3]) << 16);
+            const unsigned vs8_l = (unsigned)__cvta_generic_to_shared(vs8buf(c));
+            const int lr = lane & 7, lhalf = (lane >> 3) & 1;
+            #pragma unroll
+            for (int dt = 0; dt < DT; ++dt) {
+                const int r = dt * 8 + lr;
+                const unsigned addr = vs8_l + r * 32 + ((lhalf ^ ((r >> 2) & 1)) << 4);
+                unsigned b0, b1;
+                asm volatile("ldmatrix.sync.aligned.m8n8.x2.shared.b16 {%0,%1}, [%2];\n" : "=r"(b0), "=r"(b1) : "r"(addr));
+                mma_e4m3(o[dt], a0, a1, a2, a3, b0, b1);
+            }
+        } else {
         const bf16_t* vcur = vbuf(c);
         // V rows are keys kk·16 + (lane & 7) + 8·((lane >> 3) & 1), chunk dt + (lane >> 4)
         // with dt even: the swizzle splits into a per-lane term and (dt ^ (lane & 6)).
@@ -1225,6 +1282,7 @@ __device__ __forceinline__ void vsa_fine3_body(const bf16_t* q, const bf16_t* k,
                 mma_bf16(o[dt + 1], a0, a1, a2, a3, b2, b3);
             }
         }
+        }
         if (!DB) {
             __syncthreads();           // every warp is done with vs
             if (c + 1 < nchunks) load(vbuf(c + 1), vbase, 0);
@@ -1236,11 +1294,16 @@ __device__ __forceinline__ void vsa_fine3_body(const bf16_t* q, const bf16_t* k,
         l0 += __shfl_xor_sync(0xffffffffu, l0, off);
         l1 += __shfl_xor_sync(0xffffffffu, l1, off);
     }
-    const float i0 = l0 > 0.0f ? 1.0f / l0 : 0.0f, i1 = l1 > 0.0f ? 1.0f / l1 : 0.0f;
+    const float vscale = PV8 ? vsc[h] : 1.0f;
+    const float i0 = l0 > 0.0f ? vscale / l0 : 0.0f, i1 = l1 > 0.0f ? vscale / l1 : 0.0f;
     #pragma unroll
     for (int dt = 0; dt < DT; ++dt) {
         const int c = dt * 8 + t * 2;
         float a0 = o[dt][0] * i0, a1 = o[dt][1] * i0, b0 = o[dt][2] * i1, b1 = o[dt][3] * i1;
+        if constexpr (PV8) {
+            const float m0v = vmean[(long)h * D + c], m1v = vmean[(long)h * D + c + 1];
+            a0 += m0v; a1 += m1v; b0 += m0v; b1 += m1v;
+        }
         if (has_gate) {
             const float* cr = pooled + ((long)h * nb + qt) * D + c;
             if (tok0 >= 0) { const bf16_t* gr = gate + ((long)h * seq + tok0) * D + c; a0 += cr[0] * ld(gr, 0); a1 += cr[1] * ld(gr, 1); }
@@ -1323,6 +1386,25 @@ VSA_FINE3Q8_KERNEL(64, fw_vsa_fine3e_mma, 3)
 VSA_FINE3Q8_KERNEL(128, fw_vsa_fine3e_mma, 3)
 VSA_FINE3Q8_KERNEL(64, fw_vsa_fine3f_mma, 4)
 VSA_FINE3Q8_KERNEL(128, fw_vsa_fine3f_mma, 4)
+
+// g: e with FP8 P·V (v8t transposed codes in slot order, per-head mean and
+// scale); sm_89+ only (mma.e4m3), 16 KB of staging.
+#define VSA_FINE3PV8_KERNEL(D, NAME, BLOCKS)                                                                          \
+extern "C" __global__ void __launch_bounds__(128, BLOCKS) NAME##D(u64 q_, u64 k_, u64 v_, u64 out_,                  \
+        int heads, int seq, float scale, u64 slot_, u64 sel_, u64 nsel_, u64 pooled_, u64 gate_, int has_gate,       \
+        int nb, int np, int dense_all, int te, int maxsel, u64 q8_, u64 k8_, u64 qsc_, u64 ksc_, u64 v8t_,           \
+        u64 vmean_, u64 vsc_) {                                                                                      \
+    __shared__ __align__(16) unsigned char ks8[2 * 32 * D];                                                          \
+    __shared__ __align__(16) unsigned char vs8[2 * 32 * D];                                                          \
+    __shared__ unsigned char kvalid[64];                                                                             \
+    vsa_fine3_body<D, true, true, true, true, true>((const bf16_t*)q_, (const bf16_t*)k_, (const bf16_t*)v_,         \
+        (bf16_t*)out_, heads, seq, scale, (const unsigned*)slot_, (const unsigned*)sel_, (const unsigned*)nsel_,     \
+        (const float*)pooled_, (const bf16_t*)gate_, has_gate, nb, np, dense_all, te, maxsel, (bf16_t*)0,            \
+        (bf16_t*)0, kvalid, (const signed char*)q8_, (const signed char*)k8_, (const float*)qsc_,                    \
+        (const float*)ksc_, ks8, (const unsigned char*)v8t_, (const float*)vmean_, (const float*)vsc_, vs8);         \
+}
+VSA_FINE3PV8_KERNEL(64, fw_vsa_fine3g_mma, 3)
+VSA_FINE3PV8_KERNEL(128, fw_vsa_fine3g_mma, 3)
 
 // Per-head mean of K over the sequence (the shift that makes the int8
 // rounding of K well conditioned; softmax does not see it). Two fixed-shape
@@ -1883,7 +1965,9 @@ ATTN_PV8_KERNEL(128)
 // max / 448 and writes the chunk's E4M3 codes of (v − mean) / vsc transposed
 // into v8t[head][channel][skp] with the 32 keys in mma B-fragment order:
 // position 4j + i holds key {2j, 2j+1, 8+2j, 9+2j}[i] for j < 4 and the same
-// + 16 for j ≥ 4. Keys ≥ sk are code 0.
+// + 16 for j ≥ 4. Keys ≥ sk are code 0. With `slot` (the VSA fine stage) the
+// positions are tile slots: position p holds the token slot[p] (0xffffffff
+// = empty, code 0), and skp is the slot count.
 extern "C" __global__ void __launch_bounds__(256) fw_attn_v8_max(u64 v_, u64 vmean_, u64 part_, int sk, int d) {
     __shared__ float red[8];
     const bf16_t* v = (const bf16_t*)v_;
@@ -1902,7 +1986,7 @@ extern "C" __global__ void __launch_bounds__(256) fw_attn_v8_max(u64 v_, u64 vme
         ((float*)part_)[(long)blockIdx.y * gridDim.x + blockIdx.x] = m;
     }
 }
-extern "C" __global__ void __launch_bounds__(128) fw_attn_v8(u64 v_, u64 vmean_, u64 part_, int nparts, u64 vsc_, u64 v8t_, int sk, int d) {
+extern "C" __global__ void __launch_bounds__(128) fw_attn_v8(u64 v_, u64 vmean_, u64 part_, int nparts, u64 vsc_, u64 v8t_, int sk, int d, u64 slot_) {
     __shared__ float scs;
     const bf16_t* v = (const bf16_t*)v_;
     const int h = blockIdx.y, c = blockIdx.x, tid = threadIdx.x;
@@ -1926,8 +2010,11 @@ extern "C" __global__ void __launch_bounds__(128) fw_attn_v8(u64 v_, u64 vmean_,
         #pragma unroll
         for (int i = 0; i < 4; ++i) {
             const int jj = j & 3, key = (j >> 2) * 16 + (i < 2 ? 2 * jj + i : 8 + 2 * jj + (i - 2));
-            const int tk = c * MMA2_BK + key;
-            const unsigned code = tk < sk ? mx_e4m3((ld(v, ((long)h * sk + tk) * d + tid) - mean) * inv) : 0u;
+            const int pos = c * MMA2_BK + key;
+            int tk;
+            if (slot_) { const unsigned s2 = ((const unsigned*)slot_)[pos]; tk = s2 == 0xffffffffu ? -1 : (int)s2; }
+            else tk = pos < sk ? pos : -1;
+            const unsigned code = tk >= 0 ? mx_e4m3((ld(v, ((long)h * sk + tk) * d + tid) - mean) * inv) : 0u;
             w |= code << (8 * i);
         }
         words[j] = w;

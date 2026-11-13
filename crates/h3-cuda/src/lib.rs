@@ -84,6 +84,9 @@ pub struct CuVsa {
     /// INT8 Q·Kᵀ: codes `[heads][seq][d]` (bytes in u16 words), per-(head,
     /// tile) scales, the per-head K mean.
     qk8: Option<(CuBuf, CuBuf, CuBuf, CuBuf, CuBuf, CuBuf)>,
+    /// FP8 P·V: V codes transposed per head to `[d][nb·te]` in slot order
+    /// (bytes in u16 words), the per-head V mean, chunk maxima, per-head scale.
+    pv8: Option<(CuBuf, CuBuf, CuBuf, CuBuf)>,
 }
 
 pub struct CuWeight {
@@ -131,6 +134,7 @@ pub struct Cuda {
     /// at `prefetch_begin`, once the previous prefetch's copies are done.
     bounce: std::sync::Mutex<Option<(cudarc::driver::PinnedHostSlice<u8>, usize)>>,
     pin_warned: std::sync::atomic::AtomicBool,
+    pv8_warned: std::sync::atomic::AtomicBool,
     blas: CudaBlas,
     /// cuBLASLt with the bias (+ tanh-GELU) epilogue fused into the GEMM;
     /// `None` when unavailable or `H3_CUDA_NO_LT=1`.
@@ -244,7 +248,7 @@ struct Kernels {
     vsa_pair: CudaFunction,
     vsa_coarse4: CudaFunction,
     vsa_pool_scalar: CudaFunction,
-    vsa_fine3: [[CudaFunction; 6]; 2],
+    vsa_fine3: [[CudaFunction; 7]; 2],
     vsa_kmean: CudaFunction,
     vsa_kmean2: CudaFunction,
     vsa_qk8: CudaFunction,
@@ -509,8 +513,8 @@ impl Cuda {
             vsa_coarse4: get("fw_vsa_coarse4")?,
             vsa_pool_scalar: get("fw_vsa_pool_scalar")?,
             vsa_fine3: [
-                [get("fw_vsa_fine3a_mma64")?, get("fw_vsa_fine3b_mma64")?, get("fw_vsa_fine3c_mma64")?, get("fw_vsa_fine3d_mma64")?, get("fw_vsa_fine3e_mma64")?, get("fw_vsa_fine3f_mma64")?],
-                [get("fw_vsa_fine3a_mma128")?, get("fw_vsa_fine3b_mma128")?, get("fw_vsa_fine3c_mma128")?, get("fw_vsa_fine3d_mma128")?, get("fw_vsa_fine3e_mma128")?, get("fw_vsa_fine3f_mma128")?],
+                [get("fw_vsa_fine3a_mma64")?, get("fw_vsa_fine3b_mma64")?, get("fw_vsa_fine3c_mma64")?, get("fw_vsa_fine3d_mma64")?, get("fw_vsa_fine3e_mma64")?, get("fw_vsa_fine3f_mma64")?, get("fw_vsa_fine3g_mma64")?],
+                [get("fw_vsa_fine3a_mma128")?, get("fw_vsa_fine3b_mma128")?, get("fw_vsa_fine3c_mma128")?, get("fw_vsa_fine3d_mma128")?, get("fw_vsa_fine3e_mma128")?, get("fw_vsa_fine3f_mma128")?, get("fw_vsa_fine3g_mma128")?],
             ],
             vsa_kmean: get("fw_vsa_kmean")?,
             vsa_kmean2: get("fw_vsa_kmean2")?,
@@ -541,6 +545,7 @@ impl Cuda {
             use_pin: !env1("H3_CUDA_NO_PIN"),
             bounce: std::sync::Mutex::new(None),
             pin_warned: std::sync::atomic::AtomicBool::new(false),
+            pv8_warned: std::sync::atomic::AtomicBool::new(false),
             blas,
             lt,
             module,
@@ -570,6 +575,7 @@ impl Cuda {
                 Ok("b") => Some(1),
                 Ok("e") => Some(4),
                 Ok("f") => Some(5),
+                Ok("g") => Some(6),
                 Ok("v1") => None,
                 _ => Some(3),
             },
@@ -724,7 +730,7 @@ impl Cuda {
 
     fn kernel_name(&self, f: &CudaFunction) -> &'static str {
         let k = &self.f;
-        let all: [(&CudaFunction, &'static str); 73] = [
+        let all: [(&CudaFunction, &'static str); 75] = [
             (&k.bias_act, "bias_act"),
             (&k.swiglu, "swiglu"),
             (&k.gate_residual, "gate_residual"),
@@ -785,6 +791,8 @@ impl Cuda {
             (&k.vsa_fine3[1][4], "vsa fine (3e int8 qk, d128)"),
             (&k.vsa_fine3[0][5], "vsa fine (3f int8 qk, d64)"),
             (&k.vsa_fine3[1][5], "vsa fine (3f int8 qk, d128)"),
+            (&k.vsa_fine3[0][6], "vsa fine (3g int8 qk + fp8 pv, d64)"),
+            (&k.vsa_fine3[1][6], "vsa fine (3g int8 qk + fp8 pv, d128)"),
             (&k.vsa_kmean, "vsa k mean"),
             (&k.vsa_kmean2, "vsa k mean (fold)"),
             (&k.vsa_qk8, "vsa int8 q/k quant"),
@@ -1682,7 +1690,7 @@ impl Backend for Cuda {
                 &self.f.attn_v8,
                 ((skp / 32) as u32, kv_heads as u32, 1),
                 (128, 1, 1),
-                &[Arg::P(self.ptr(v)), Arg::P(self.ptr(vmean)), Arg::P(self.ptr(vpart)), Arg::I(nparts as i32), Arg::P(self.ptr(vsc)), Arg::P(self.ptr(v8t)), Arg::I(sk as i32), Arg::I(d as i32)],
+                &[Arg::P(self.ptr(v)), Arg::P(self.ptr(vmean)), Arg::P(self.ptr(vpart)), Arg::I(nparts as i32), Arg::P(self.ptr(vsc)), Arg::P(self.ptr(v8t)), Arg::I(sk as i32), Arg::I(d as i32), Arg::P(0)],
             );
             args.extend([Arg::P(self.ptr(v8t)), Arg::P(self.ptr(vmean)), Arg::P(self.ptr(vsc))]);
         }
@@ -1730,6 +1738,14 @@ impl Backend for Cuda {
                     Backend::upload_table(self, &vec![0.0; h * nb]),
                     Backend::upload_table(self, &vec![0.0; h * d]),
                     Backend::upload_table(self, &vec![0.0; h * KMEAN_CHUNKS * d]),
+                )
+            }),
+            pv8: spec.pv8.then(|| {
+                (
+                    self.alloc((h * d * nb * plan.tile_elems).div_ceil(2)),
+                    Backend::upload_table(self, &vec![0.0; h * d]),
+                    Backend::upload_table(self, &vec![0.0; h * plan.seq.div_ceil(64)]),
+                    Backend::upload_table(self, &vec![0.0; h]),
                 )
             }),
             d,
@@ -1846,12 +1862,19 @@ impl Backend for Cuda {
             args.push(Arg::F(s.scale));
             tail(&mut args);
             // INT8 Q·Kᵀ: the per-head K mean, then codes + scales per (head, tile), then the e / f body.
-            let var = match (&s.qk8, var) {
+            let mut var = match (&s.qk8, var) {
                 (Some(_), 4 | 5) => var,
                 (Some(_), _) => 4,
-                (None, 4 | 5) => 3,
+                (None, 4 | 5 | 6) => 3,
                 (None, v) => v,
             };
+            if s.pv8.is_some() {
+                if self.ada {
+                    var = 6;
+                } else if !self.pv8_warned.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                    eprintln!("cuda: no FP8 tensor cores before sm_89; the VSA fine stage runs INT8 Q·Kᵀ with bf16 P·V (pv8 ignored)");
+                }
+            }
             if let Some((q8, k8, qsc, ksc, kmean, kpart)) = &s.qk8 {
                 let nch = KMEAN_CHUNKS as i32;
                 self.launch(&self.f.vsa_kmean, (KMEAN_CHUNKS as u32, s.heads as u32, 1), (128, 1, 1), &[Arg::P(self.ptr(k)), Arg::P(self.ptr(kpart)), Arg::I(s.seq as i32), Arg::I(s.d as i32), Arg::I(nch)]);
@@ -1878,6 +1901,21 @@ impl Backend for Cuda {
                     ],
                 );
                 args.extend([Arg::P(self.ptr(q8)), Arg::P(self.ptr(k8)), Arg::P(self.ptr(qsc)), Arg::P(self.ptr(ksc))]);
+                if let (Some((v8t, vmean, vpart, vsc)), 6) = (&s.pv8, var) {
+                    // V: per-head mean (the K-mean kernels on V), chunk maxima,
+                    // then the transposed codes in slot order (fw_attn_v8 with slot).
+                    let nparts = s.seq.div_ceil(64);
+                    self.launch(&self.f.vsa_kmean, (KMEAN_CHUNKS as u32, s.heads as u32, 1), (128, 1, 1), &[Arg::P(self.ptr(v)), Arg::P(self.ptr(kpart)), Arg::I(s.seq as i32), Arg::I(s.d as i32), Arg::I(nch)]);
+                    self.launch(&self.f.vsa_kmean2, (s.heads as u32, 1, 1), (128, 1, 1), &[Arg::P(self.ptr(kpart)), Arg::P(self.ptr(vmean)), Arg::I(s.seq as i32), Arg::I(s.d as i32), Arg::I(nch)]);
+                    self.launch(&self.f.attn_v8_max, (nparts as u32, s.heads as u32, 1), (256, 1, 1), &[Arg::P(self.ptr(v)), Arg::P(self.ptr(vmean)), Arg::P(self.ptr(vpart)), Arg::I(s.seq as i32), Arg::I(s.d as i32)]);
+                    self.launch(
+                        &self.f.attn_v8,
+                        ((s.nb * s.te / 32) as u32, s.heads as u32, 1),
+                        (128, 1, 1),
+                        &[Arg::P(self.ptr(v)), Arg::P(self.ptr(vmean)), Arg::P(self.ptr(vpart)), Arg::I(nparts as i32), Arg::P(self.ptr(vsc)), Arg::P(self.ptr(v8t)), Arg::I(s.seq as i32), Arg::I(s.d as i32), Arg::P(self.ptr(&s.slot))],
+                    );
+                    args.extend([Arg::P(self.ptr(v8t)), Arg::P(self.ptr(vmean)), Arg::P(self.ptr(vsc))]);
+                }
             }
             let f = &self.f.vsa_fine3[if s.d == 128 { 1 } else { 0 }][var];
             self.launch(f, (s.nb as u32 * (s.te / 64) as u32, s.heads as u32, 1), (128, 1, 1), &args);

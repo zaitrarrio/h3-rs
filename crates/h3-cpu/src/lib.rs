@@ -203,6 +203,11 @@ pub fn vsa_reference(q: &[f32], k: &[f32], v: &[f32], gate: Option<&[f32]>, spec
         Some((qr, kr)) => (qr, kr),
         None => (q, k),
     };
+    // FP8 P·V: V − mean(V) as E4M3 codes with one scale per head; the fine
+    // stage rounds P to E4M3 at 64× with the row maximum rounded up to an
+    // integer (h3_core::vsa::attention_pv8_reference's recipe, over the
+    // selected tiles).
+    let v8 = spec.pv8.then(|| h3_core::vsa::attn_v8_round(v, heads, seq, d));
     let per_head: Vec<Vec<(usize, Vec<f32>)>> = (0..heads)
         .into_par_iter()
         .map(|h| {
@@ -257,6 +262,42 @@ pub fn vsa_reference(q: &[f32], k: &[f32], v: &[f32], gate: Option<&[f32]>, spec
                     let qr = row(qf, qtok);
                     let (mut m, mut z) = (f32::NEG_INFINITY, 0f64);
                     let mut acc = vec![0f64; d];
+                    if let Some((codes, vmean, vs)) = &v8 {
+                        let sl2 = scale as f32 * std::f32::consts::LOG2_E;
+                        let mut s2 = Vec::new();
+                        let mut mx = f32::NEG_INFINITY;
+                        for &kt in &keep[qt] {
+                            for ks in 0..plan.block_sizes[kt] as usize {
+                                let ktok = plan.slot_src[kt * te + ks] as usize;
+                                let kr = row(kf, ktok);
+                                let s = (0..d).map(|c| qr[c] * kr[c]).sum::<f32>() * sl2;
+                                mx = mx.max(s);
+                                s2.push((ktok, s));
+                            }
+                        }
+                        let mi = mx.ceil();
+                        let mut l = 0f32;
+                        let mut a = vec![0f32; d];
+                        for &(ktok, s) in &s2 {
+                            let pr = (s - mi + h3_core::vsa::PV8_SHIFT).exp2();
+                            l += pr;
+                            let p8 = h3_core::quant::e4m3_decode(h3_core::quant::e4m3_satfinite(pr));
+                            let vr = &codes[(h * seq + ktok) * d..][..d];
+                            for c in 0..d {
+                                a[c] += p8 * vr[c];
+                            }
+                        }
+                        let inv = if l > 0.0 { vs[h] / l } else { 0.0 };
+                        let mut o: Vec<f32> = (0..d).map(|c| a[c] * inv + vmean[h * d + c]).collect();
+                        if let Some(g) = gate {
+                            let gr = row(g, qtok);
+                            for c in 0..d {
+                                o[c] += pooled[qt * d + c] * gr[c];
+                            }
+                        }
+                        rows.push((qtok, o));
+                        continue;
+                    }
                     for &kt in &keep[qt] {
                         for ks in 0..plan.block_sizes[kt] as usize {
                             let ktok = plan.slot_src[kt * te + ks] as usize;

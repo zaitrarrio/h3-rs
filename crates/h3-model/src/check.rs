@@ -556,6 +556,11 @@ fn ops<B: Backend>(p: &mut Pair<'_, B>, rng: &mut Rng) {
         let kshift: Vec<f32> = k.iter().enumerate().map(|(i, x)| if i % d == 1 { x + 3.0 } else { *x }).collect();
         p.op(format!("vsa tile{tile} d{d} qk8 gate"), |r| r.vsa(&q, &kshift, &v, Some(&g), &spec8));
         p.op(format!("vsa tile{tile} d{d} qk8 no-gate"), |r| r.vsa(&q, &kshift, &v, None, &spec8));
+        // FP8 P·V on top: V shifted on one channel so its mean matters.
+        let spec88 = spec.clone().with_pv8(true);
+        let vshift: Vec<f32> = v.iter().enumerate().map(|(i, x)| if i % d == 2 { x + 2.0 } else { *x }).collect();
+        p.op(format!("vsa tile{tile} d{d} qk8+pv8 gate"), |r| r.vsa(&q, &kshift, &vshift, Some(&g), &spec88));
+        p.op(format!("vsa tile{tile} d{d} qk8+pv8 no-gate"), |r| r.vsa(&q, &kshift, &vshift, None, &spec88));
     }
     // patchify / unpatchify with offsets.
     {
@@ -720,10 +725,12 @@ pub fn synth_nvfp4(w: &[f32], rows: usize, cols: usize) -> Nvfp4 {
 fn models<B: Backend>(p: &mut Pair<'_, B>) {
     for quant in [WeightQuant::Native, WeightQuant::Int8, WeightQuant::Int4 { group: 32, hqq: true, ffn_only: false }] {
         dit_check(p, Attention::Dense { qk8: false, pv8: false }, quant, false);
-        dit_check(p, Attention::Vsa { sparsity: 0.5, tile: 64, ref_sparsity: 0.5, qk8: false }, quant, true);
+        dit_check(p, Attention::Vsa { sparsity: 0.5, tile: 64, ref_sparsity: 0.5, qk8: false, pv8: false }, quant, true);
     }
     dit_check(p, Attention::Dense { qk8: true, pv8: false }, WeightQuant::Native, false);
     dit_check(p, Attention::Dense { qk8: true, pv8: true }, WeightQuant::Native, false);
+    dit_check(p, Attention::Vsa { sparsity: 0.5, tile: 64, ref_sparsity: 0.5, qk8: true, pv8: false }, WeightQuant::Native, false);
+    dit_check(p, Attention::Vsa { sparsity: 0.5, tile: 64, ref_sparsity: 0.5, qk8: true, pv8: true }, WeightQuant::Native, false);
     vae_check(p);
     audio_check(p);
     tae_check(p);
