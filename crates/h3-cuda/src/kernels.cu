@@ -1218,7 +1218,9 @@ __device__ __forceinline__ void vsa_fine3_body(const bf16_t* q, const bf16_t* k,
             #pragma unroll
             for (int i = 0; i < DT; ++i) { o[i][0] *= c0; o[i][1] *= c0; o[i][2] *= c1; o[i][3] *= c1; }
         }
-        const float ms0 = PV8 ? 6.0f - m0 : -m0 * sl2, ms1 = PV8 ? 6.0f - m1 : -m1 * sl2;
+        // PV8: a row without a key yet keeps p = 0 (6 + 1e30 would overflow the fma).
+        const float ms0 = PV8 ? (m0 > -1e29f ? 6.0f - m0 : -1e30f) : -m0 * sl2;
+        const float ms1 = PV8 ? (m1 > -1e29f ? 6.0f - m1 : -1e30f) : -m1 * sl2;
         if (DB) {
             // V_c landed (K_{c+1}, V_{c+1} may be in flight).
             if (c + 1 < nchunks) asm volatile("cp.async.wait_group 2;\n" ::);

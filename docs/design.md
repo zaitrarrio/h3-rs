@@ -132,6 +132,25 @@ time); when the tables do not fit, they are uploaded per step.
    6.8 s, which puts its attention near 80 ms per call: FP8 P·V and a
    tighter pipeline are the remaining dense work. The base model, Pika
    and Regen-2K are all dense.
+7c. FP8 P·V (`--pv8`, SageAttention2's second half) in both kernels: the
+   dense `fw_attention_pv8` and the VSA `fw_vsa_fine3g`. The point of the
+   design is that the CPU can reproduce the kernel's arithmetic bit for
+   bit where it matters: V is smoothed by its per-channel mean and rounded
+   to E4M3 with one scale per (KV) head, so a channel offset does not eat
+   the 3-bit mantissa; the softmax row maximum is rounded up to an
+   integer in log2 units, so the kernel's running rescales are exact
+   powers of two and the E4M3 rounding of P at a chunk equals the
+   oracle's rounding at the final maximum (E4M3 rounding commutes with
+   powers of two inside the normal range); P is scaled by 2^6 so every
+   weight down to 2^-12 of the row's largest is normal; the denominator
+   sums the unrounded P. V is transposed once per call into `[d][keys]`
+   with each 32-key chunk in the mma B-fragment key order (and, for VSA,
+   in tile-slot order), so the P·V half reads V with one `ldmatrix.x2`
+   per eight channels and no shared-memory transpose: one k32 FP8 mma
+   replaces two k16 bf16 ones and the V staging halves. `cvt.rn.satfinite
+   .e4m3x2` packs P (sm_89+; the host oracle's `e4m3_satfinite` is its
+   twin, the same one MXFP8 uses). Measured on a 5090: see
+   `docs/runs/2026-11-13-runpod-5090-fp8-pv`.
 8. Variants: all of them run (Pika Flex and Regen-2K on RunPod,
    `docs/runs/2026-11-12-runpod-pro6000-variants`). The RunPod volume
    (750 GB) holds every variant's weights, the AdaLN tables and a stored
