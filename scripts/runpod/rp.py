@@ -8,7 +8,7 @@
                                        /workspace), image nvidia/cuda:12.8.1-runtime-
                                        ubuntu24.04, START_LINE as `bash -c`, the API
                                        key in its env for self-termination
-    rp.py get POD | list | stop POD | terminate POD
+    rp.py get POD | list | stop POD | start POD | terminate POD
 """
 import json, os, sys, urllib.request
 KEY = os.environ["RUNPOD_API_KEY"]
@@ -63,6 +63,8 @@ elif op == "list":
         print(p["id"], p["desiredStatus"], p.get("costPerHr"), p["name"])
 elif op == "stop":
     print(rest("POST", f"/pods/{sys.argv[2]}/stop"))
+elif op == "start":
+    print(rest("POST", f"/pods/{sys.argv[2]}/start"))
 elif op == "terminate":
     print(rest("DELETE", f"/pods/{sys.argv[2]}"))
 else:
