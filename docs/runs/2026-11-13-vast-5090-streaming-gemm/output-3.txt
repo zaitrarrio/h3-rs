@@ -1,0 +1,188 @@
++ cat
++ O=/w/out
++ mkdir -p /w/out
++ cd /w
++ T=/w/tables
++ BASE='--variant h3 --model-dir /w/h3-base --weights mxfp8 --decoder-weights mxfp8 --attention dense --stream-blocks --pv8'
++ V2='--variant fasth3-v2 --model-dir /w/h3-8step --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --pv8 --tables /w/tables/v2.tables --stream-blocks'
++ echo '== fix: the one shard the boot download lost, then the V2 tables and the V2 runs of cmd 2'
+== fix: the one shard the boot download lost, then the V2 tables and the V2 runs of cmd 2
++ grep FAILED /root/boot.log
+FAILED /w/h3-8step/transformer/diffusion_pytorch_model-00008-of-00014.safetensors
+++ grep FAILED /root/boot.log
+++ awk '{print $2}'
++ for f in $(grep FAILED /root/boot.log | awk '{print $2}')
+++ grep ' /w/h3-8step/transformer/diffusion_pytorch_model-00008-of-00014.safetensors$' /root/files.txt
+++ cut '-d ' -f1
++ rm -f /w/h3-8step/transformer/diffusion_pytorch_model-00008-of-00014.safetensors
+++ stat -c %s /w/h3-8step/transformer/diffusion_pytorch_model-00008-of-00014.safetensors
++ echo 'refetched /w/h3-8step/transformer/diffusion_pytorch_model-00008-of-00014.safetensors 5318721248 bytes'
+refetched /w/h3-8step/transformer/diffusion_pytorch_model-00008-of-00014.safetensors 5318721248 bytes
++ ls -la /w/h3-8step/transformer
++ head -20
+total 68456716
+drwxr-xr-x 2 root root       4096 Nov 13 23:46 .
+drwxr-xr-x 7 root root         90 Nov 13 22:57 ..
+-rw-r--r-- 1 root root        546 Nov 13 22:52 config.json
+-rw-r--r-- 1 root root 5331008552 Nov 13 22:56 diffusion_pytorch_model-00001-of-00014.safetensors
+-rw-r--r-- 1 root root 5318721256 Nov 13 22:55 diffusion_pytorch_model-00002-of-00014.safetensors
+-rw-r--r-- 1 root root 5318721248 Nov 13 22:56 diffusion_pytorch_model-00003-of-00014.safetensors
+-rw-r--r-- 1 root root 4875566048 Nov 13 22:56 diffusion_pytorch_model-00004-of-00014.safetensors
+-rw-r--r-- 1 root root 5318505992 Nov 13 22:57 diffusion_pytorch_model-00005-of-00014.safetensors
+-rw-r--r-- 1 root root 5164580688 Nov 13 22:57 diffusion_pytorch_model-00006-of-00014.safetensors
+-rw-r--r-- 1 root root 5318721240 Nov 13 22:57 diffusion_pytorch_model-00007-of-00014.safetensors
+-rw-r--r-- 1 root root 5318721248 Nov 13 23:47 diffusion_pytorch_model-00008-of-00014.safetensors
+-rw-r--r-- 1 root root 4875566056 Nov 13 22:57 diffusion_pytorch_model-00009-of-00014.safetensors
+-rw-r--r-- 1 root root 5318505984 Nov 13 22:58 diffusion_pytorch_model-00010-of-00014.safetensors
+-rw-r--r-- 1 root root 5164580688 Nov 13 22:59 diffusion_pytorch_model-00011-of-00014.safetensors
+-rw-r--r-- 1 root root 5318721256 Nov 13 22:59 diffusion_pytorch_model-00012-of-00014.safetensors
+-rw-r--r-- 1 root root 5318721208 Nov 13 22:59 diffusion_pytorch_model-00013-of-00014.safetensors
+-rw-r--r-- 1 root root 2138941296 Nov 13 22:58 diffusion_pytorch_model-00014-of-00014.safetensors
+-rw-r--r-- 1 root root      70079 Nov 13 22:57 diffusion_pytorch_model.safetensors.index.json
++ echo '== V2 AdaLN tables'
+== V2 AdaLN tables
++ tail -8
++ timeout 2400 /w/h3-bin adaln-tables --backend cuda --variant fasth3-v2 --model-dir /w/h3-8step --out /w/tables/v2.tables
+18 timesteps [0.0001001358, 0.0003336072, 0.014211655, 0.032424748, 0.04585159, 0.056831896, 0.090909064, 0.10048044, 0.14285713, 0.16725987, 0.23076922, 0.25, 0.35714287, 0.41176468, 0.5, 0.7, 0.999, 1.0] → /w/tables/v2.tables (174.6 MB) in 195.5s
+
+real	3m23.716s
+user	1m28.258s
+sys	1m53.143s
++ ls -la /w/tables
+total 653512
+drwxr-xr-x 2 root root        44 Nov 13 23:50 .
+drwxr-xr-x 6 root root        96 Nov 13 23:04 ..
+-rw------- 1 root root 494618052 Nov 13 23:07 base25.tables
+-rw------- 1 root root 174573856 Nov 13 23:50 v2.tables
++ echo '== item 1 on V2: streamed forward stalls (H3_STALL=1)'
+== item 1 on V2: streamed forward stalls (H3_STALL=1)
++ H3_STALL=1
++ run v2-stall 1500 --variant fasth3-v2 --model-dir /w/h3-8step --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --pv8 --tables /w/tables/v2.tables --stream-blocks
++ n=v2-stall
++ t=1500
++ shift 2
++ echo '== v2-stall: --variant fasth3-v2 --model-dir /w/h3-8step --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --pv8 --tables /w/tables/v2.tables --stream-blocks'
+== v2-stall: --variant fasth3-v2 --model-dir /w/h3-8step --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --pv8 --tables /w/tables/v2.tables --stream-blocks
++ sp=10171
++ nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits -lms 500
++ rc=0
++ kill 10171
+++ sort -n /w/out/v2-stall.mem
+++ tail -1
++ echo 'peak VRAM MiB: 18592; exit 0'
+peak VRAM MiB: 18592; exit 0
++ grep -E '^cuda|^load|prompt:|^run |^prefetch|h2d probe|rror|panick|warning|real' /w/out/v2-stall.log
++ cut -c1-400
+cuda NVIDIA GeForce RTX 5090 (sm_120)
+load 103.3s
+prompt: 462 rows in 110.4s
+prefetch: 400 blocks; compute stream waited 0 ms total, 0.0 ms/block, worst 0.0 ms; copies 0 ms for 191.29 GB (0.0 GB/s while copying, 0.48 GB/block)
+run 0: total 71.53s  prepare 0.44s  adaln 0.00s  denoise 63.81s (["8.33", "7.92", "7.91", "7.93", "7.96", "7.92", "7.91", "7.92"])  decode 7.00s  audio 0.20s
+real	4m55.172s
++ '[' -f /w/out/v2-stall.y4m ']'
+++ stats /w/out/v2-stall.y4m
+++ ffmpeg -v info -i /w/out/v2-stall.y4m -frames:v 2 -vf signalstats,metadata=print:key=lavfi.signalstats.YAVG -f null -
+++ grep -o 'YAVG=[0-9.]*'
+++ head -2
+++ tr '\n' ' '
++ echo 'luma: YAVG=78.4373 YAVG=78.5172 '
+luma: YAVG=78.4373 YAVG=78.5172 
++ '[' -f /w/out/v2-stall.y4m ']'
++ grid /w/out/v2-stall.y4m /w/out/v2-stall.grid.png
++ ffmpeg -loglevel error -y -i /w/out/v2-stall.y4m -vf 'select='\''eq(n\,0)+eq(n\,40)+eq(n\,80)+eq(n\,120)'\'',scale=448:-1,tile=2x2' -vframes 1 /w/out/v2-stall.grid.png
++ ffmpeg -loglevel error -y -i /w/out/v2-stall.y4m -i /w/out/v2-stall.wav -c:v libx264 -crf 18 -pix_fmt yuv420p -c:a aac -b:a 192k -shortest /w/out/v2-stall.mp4
++ H3_STALL=1
++ H3_PREFETCH_DEPTH=2
++ run v2-stall-depth2 1500 --variant fasth3-v2 --model-dir /w/h3-8step --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --pv8 --tables /w/tables/v2.tables --stream-blocks
++ n=v2-stall-depth2
++ t=1500
++ shift 2
++ echo '== v2-stall-depth2: --variant fasth3-v2 --model-dir /w/h3-8step --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --pv8 --tables /w/tables/v2.tables --stream-blocks'
+== v2-stall-depth2: --variant fasth3-v2 --model-dir /w/h3-8step --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --pv8 --tables /w/tables/v2.tables --stream-blocks
++ sp=10524
++ nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits -lms 500
++ rc=0
++ kill 10524
+++ sort -n /w/out/v2-stall-depth2.mem
+++ tail -1
++ echo 'peak VRAM MiB: 19392; exit 0'
+peak VRAM MiB: 19392; exit 0
++ grep -E '^cuda|^load|prompt:|^run |^prefetch|h2d probe|rror|panick|warning|real' /w/out/v2-stall-depth2.log
++ cut -c1-400
+cuda NVIDIA GeForce RTX 5090 (sm_120)
+load 111.2s
+prompt: 462 rows in 111.1s
+prefetch: 400 blocks; compute stream waited 0 ms total, 0.0 ms/block, worst 0.0 ms; copies 0 ms for 191.29 GB (0.0 GB/s while copying, 0.48 GB/block)
+run 0: total 74.59s  prepare 0.46s  adaln 0.00s  denoise 67.01s (["9.23", "8.24", "8.24", "8.29", "8.26", "8.25", "8.27", "8.23"])  decode 6.83s  audio 0.20s
+real	5m6.914s
++ '[' -f /w/out/v2-stall-depth2.y4m ']'
+++ stats /w/out/v2-stall-depth2.y4m
+++ ffmpeg -v info -i /w/out/v2-stall-depth2.y4m -frames:v 2 -vf signalstats,metadata=print:key=lavfi.signalstats.YAVG -f null -
+++ grep -o 'YAVG=[0-9.]*'
+++ head -2
+++ tr '\n' ' '
++ echo 'luma: YAVG=78.3659 YAVG=78.4653 '
+luma: YAVG=78.3659 YAVG=78.4653 
++ '[' -f /w/out/v2-stall-depth2.y4m ']'
++ grid /w/out/v2-stall-depth2.y4m /w/out/v2-stall-depth2.grid.png
++ ffmpeg -loglevel error -y -i /w/out/v2-stall-depth2.y4m -vf 'select='\''eq(n\,0)+eq(n\,40)+eq(n\,80)+eq(n\,120)'\'',scale=448:-1,tile=2x2' -vframes 1 /w/out/v2-stall-depth2.grid.png
++ ffmpeg -loglevel error -y -i /w/out/v2-stall-depth2.y4m -i /w/out/v2-stall-depth2.wav -c:v libx264 -crf 18 -pix_fmt yuv420p -c:a aac -b:a 192k -shortest /w/out/v2-stall-depth2.mp4
++ H3_STALL=1
++ H3_CUDA_NO_PIN=1
++ run v2-stall-nopin 1500 --variant fasth3-v2 --model-dir /w/h3-8step --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --pv8 --tables /w/tables/v2.tables --stream-blocks
++ n=v2-stall-nopin
++ t=1500
++ shift 2
++ echo '== v2-stall-nopin: --variant fasth3-v2 --model-dir /w/h3-8step --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --pv8 --tables /w/tables/v2.tables --stream-blocks'
+== v2-stall-nopin: --variant fasth3-v2 --model-dir /w/h3-8step --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --pv8 --tables /w/tables/v2.tables --stream-blocks
++ sp=10880
++ nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits -lms 500
++ rc=0
++ kill 10880
+++ sort -n /w/out/v2-stall-nopin.mem
+++ tail -1
++ echo 'peak VRAM MiB: 18572; exit 0'
+peak VRAM MiB: 18572; exit 0
++ grep -E '^cuda|^load|prompt:|^run |^prefetch|h2d probe|rror|panick|warning|real' /w/out/v2-stall-nopin.log
++ cut -c1-400
+cuda NVIDIA GeForce RTX 5090 (sm_120)
+load 101.7s
+prompt: 462 rows in 113.0s
+prefetch: 400 blocks; compute stream waited 0 ms total, 0.0 ms/block, worst 0.0 ms; copies 0 ms for 191.29 GB (0.0 GB/s while copying, 0.48 GB/block)
+run 0: total 75.66s  prepare 0.49s  adaln 0.00s  denoise 67.94s (["11.41", "8.03", "8.07", "8.06", "8.08", "8.11", "8.09", "8.08"])  decode 6.94s  audio 0.19s
+real	4m59.953s
++ '[' -f /w/out/v2-stall-nopin.y4m ']'
+++ stats /w/out/v2-stall-nopin.y4m
+++ grep -o 'YAVG=[0-9.]*'
+++ ffmpeg -v info -i /w/out/v2-stall-nopin.y4m -frames:v 2 -vf signalstats,metadata=print:key=lavfi.signalstats.YAVG -f null -
+++ head -2
+++ tr '\n' ' '
++ echo 'luma: YAVG=77.6317 YAVG=77.67 '
+luma: YAVG=77.6317 YAVG=77.67 
++ '[' -f /w/out/v2-stall-nopin.y4m ']'
++ grid /w/out/v2-stall-nopin.y4m /w/out/v2-stall-nopin.grid.png
++ ffmpeg -loglevel error -y -i /w/out/v2-stall-nopin.y4m -vf 'select='\''eq(n\,0)+eq(n\,40)+eq(n\,80)+eq(n\,120)'\'',scale=448:-1,tile=2x2' -vframes 1 /w/out/v2-stall-nopin.grid.png
++ ffmpeg -loglevel error -y -i /w/out/v2-stall-nopin.y4m -i /w/out/v2-stall-nopin.wav -c:v libx264 -crf 18 -pix_fmt yuv420p -c:a aac -b:a 192k -shortest /w/out/v2-stall-nopin.mp4
++ echo '== clips identical across depth / pin?'
+== clips identical across depth / pin?
++ psnr v2-stall-depth2 v2-stall
++ echo '== psnr v2-stall-depth2 vs v2-stall'
+== psnr v2-stall-depth2 vs v2-stall
++ ffmpeg -loglevel info -i /w/out/v2-stall-depth2.y4m -i /w/out/v2-stall.y4m -lavfi psnr -f null -
++ grep -E PSNR
+[Parsed_psnr_0 @ 0x5ff52bb88340] PSNR y:17.504151 u:33.087600 v:35.328902 average:22.087739 min:20.911324 max:24.748599
++ psnr v2-stall-nopin v2-stall
++ echo '== psnr v2-stall-nopin vs v2-stall'
+== psnr v2-stall-nopin vs v2-stall
++ ffmpeg -loglevel info -i /w/out/v2-stall-nopin.y4m -i /w/out/v2-stall.y4m -lavfi psnr -f null -
++ grep -E PSNR
+[Parsed_psnr_0 @ 0x6188b3e18340] PSNR y:16.798140 u:33.595816 v:35.404903 average:21.421265 min:20.205186 max:23.919208
++ cmp /w/out/v2-stall.y4m /w/out/v2-stall-depth2.y4m
+/w/out/v2-stall.y4m /w/out/v2-stall-depth2.y4m differ: char 64, line 3
++ rm -f /w/out/v2-stall-nopin.y4m /w/out/v2-stall-nopin.wav
++ tar czf /root/fix.tgz -C /w/out '--exclude=*.y4m' '--exclude=*.wav' '--exclude=*.mp4' .
+++ date -u
++ echo 'cmd3 done Sat Nov 14 00:05:55 UTC 2026'
+cmd3 done Sat Nov 14 00:05:55 UTC 2026
+exit 0
+

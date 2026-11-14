@@ -668,6 +668,11 @@ impl Cuda {
         st.synchronize().expect("sync");
     }
 
+    /// An event with timing enabled (cudarc's default disables it), recorded on `st`.
+    fn timed_event(&self, st: &Arc<CudaStream>) -> cudarc::driver::CudaEvent {
+        st.record_event(Some(cudarc::driver::sys::CUevent_flags::CU_EVENT_DEFAULT)).expect("event")
+    }
+
     /// Bytes of an upload issued during a prefetch, for the stall summary.
     fn count_upload(&self, n: usize) {
         if let Some(st) = &self.stall {
@@ -692,9 +697,9 @@ impl Cuda {
             let Some(src) = src else { continue };
             let mut best = f32::INFINITY;
             for _ in 0..3 {
-                let e0 = self.stream.record_event(None).ok()?;
+                let e0 = self.timed_event(&self.stream);
                 unsafe { cudarc::driver::result::memcpy_htod_async(p, src, self.stream.cu_stream()).ok()? };
-                let e1 = self.stream.record_event(None).ok()?;
+                let e1 = self.timed_event(&self.stream);
                 self.stream.synchronize().ok()?;
                 best = best.min(e0.elapsed_ms(&e1).ok()?);
             }
@@ -1195,14 +1200,14 @@ impl Backend for Cuda {
             st.bytes = 0;
             // Recorded behind the release wait already queued on the copy
             // stream, so it marks when this prefetch's copies actually start.
-            st.open = Some(self.copy.record_event(None).expect("event"));
+            st.open = Some(self.timed_event(&self.copy));
         }
         self.staging.store(true, std::sync::atomic::Ordering::Relaxed);
     }
 
     fn prefetch_end(&self) {
         self.staging.store(false, std::sync::atomic::Ordering::Relaxed);
-        let ev = Arc::new(self.copy.record_event(None).expect("event"));
+        let ev = Arc::new(if self.stall.is_some() { self.timed_event(&self.copy) } else { self.copy.record_event(None).expect("event") });
         if let Some(st) = &self.stall {
             let mut st = st.lock().unwrap();
             if let Some(e0) = st.open.take() {
@@ -1263,9 +1268,9 @@ impl Backend for Cuda {
         };
         if let Some(ev) = ev {
             if let Some(st) = &self.stall {
-                let w0 = self.stream.record_event(None).expect("event");
+                let w0 = self.timed_event(&self.stream);
                 self.stream.wait(&*ev).expect("wait");
-                let w1 = self.stream.record_event(None).expect("event");
+                let w1 = self.timed_event(&self.stream);
                 st.lock().unwrap().waits.push((w0, w1));
             } else {
                 self.stream.wait(&*ev).expect("wait");

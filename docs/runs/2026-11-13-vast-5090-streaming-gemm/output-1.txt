@@ -1,0 +1,185 @@
+destroy timer armed (7 h) for 60557523
++ cat
++ O=/w/out
++ mkdir -p /w/out
++ cd /w
++ T=/w/tables
++ BASE='--variant h3 --model-dir /w/h3-base --weights mxfp8 --decoder-weights mxfp8 --attention dense --stream-blocks --pv8'
++ V2='--variant fasth3-v2 --model-dir /w/h3-8step --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --pv8 --tables /w/tables/v2.tables --stream-blocks'
++ nvidia-smi --query-gpu=name,driver_version,power.limit,power.max_limit,memory.total,pcie.link.gen.current,pcie.link.gen.max,pcie.link.width.current,pcie.link.width.max,clocks.max.sm --format=csv,noheader
+NVIDIA GeForce RTX 5090, 595.91.07, 550.00 W, 600.00 W, 32607 MiB, 1, 5, 16, 16, 3180 MHz
++ nvidia-smi -q
++ grep -iE 'Product Name|Power Limit|Link Gen|Link Width|Max Clocks' -A0
++ head -20
+    Product Name                                       : NVIDIA GeForce RTX 5090
+--
+            Link Width
+--
+        Current Power Limit                            : 550.00 W
+        Requested Power Limit                          : 550.00 W
+        Default Power Limit                            : 600.00 W
+        Min Power Limit                                : 400.00 W
+        Max Power Limit                                : 600.00 W
+--
+        Current Power Limit                            : N/A
+        Requested Power Limit                          : N/A
+        Default Power Limit                            : N/A
+        Min Power Limit                                : N/A
+        Max Power Limit                                : N/A
+--
+    Max Clocks
++ lscpu
++ grep -E 'Model name|^CPU\(s\)|NUMA'
+CPU(s):                                  32
+Model name:                              AMD Ryzen 9 7950X3D 16-Core Processor
+CPU(s) scaling MHz:                      59%
+NUMA node(s):                            1
+NUMA node0 CPU(s):                       0-31
++ free -g
++ head -2
+               total        used        free      shared  buff/cache   available
+Mem:              92           3          62           0          27          88
++ df -h /w
++ cat
+Filesystem      Size  Used Avail Use% Mounted on
+overlay         400G  704M  400G   1% /
+++ seq 1 90
++ for i in $(seq 1 90)
++ '[' -f /w/weights.done ']'
++ sleep 60
++ for i in $(seq 1 90)
++ '[' -f /w/weights.done ']'
++ sleep 60
++ for i in $(seq 1 90)
++ '[' -f /w/weights.done ']'
++ sleep 60
++ for i in $(seq 1 90)
++ '[' -f /w/weights.done ']'
++ sleep 60
++ for i in $(seq 1 90)
++ '[' -f /w/weights.done ']'
++ sleep 60
++ for i in $(seq 1 90)
++ '[' -f /w/weights.done ']'
++ sleep 60
++ for i in $(seq 1 90)
++ '[' -f /w/weights.done ']'
++ sleep 60
++ for i in $(seq 1 90)
++ '[' -f /w/weights.done ']'
++ sleep 60
++ for i in $(seq 1 90)
++ '[' -f /w/weights.done ']'
++ sleep 60
++ for i in $(seq 1 90)
++ '[' -f /w/weights.done ']'
++ sleep 60
++ for i in $(seq 1 90)
++ '[' -f /w/weights.done ']'
++ sleep 60
++ for i in $(seq 1 90)
++ '[' -f /w/weights.done ']'
++ sleep 60
++ for i in $(seq 1 90)
++ '[' -f /w/weights.done ']'
++ sleep 60
++ for i in $(seq 1 90)
++ '[' -f /w/weights.done ']'
++ sleep 60
++ for i in $(seq 1 90)
++ '[' -f /w/weights.done ']'
++ sleep 60
++ for i in $(seq 1 90)
++ '[' -f /w/weights.done ']'
++ break
++ grep -E 'weights .* in' /root/boot.log
++ tail -1
+weights 198G in 885s
++ du -sh /w/h3-8step /w/h3-base
+136G	/w/h3-8step
+62G	/w/h3-base
++ grep -c FAILED /root/boot.log
+1
++ for c in vae audio_vae text_encoder tokenizer model_index.json
++ '[' -e /w/h3-base/vae ']'
++ ln -s /w/h3-8step/vae /w/h3-base/vae
++ for c in vae audio_vae text_encoder tokenizer model_index.json
++ '[' -e /w/h3-base/audio_vae ']'
++ ln -s /w/h3-8step/audio_vae /w/h3-base/audio_vae
++ for c in vae audio_vae text_encoder tokenizer model_index.json
++ '[' -e /w/h3-base/text_encoder ']'
++ ln -s /w/h3-8step/text_encoder /w/h3-base/text_encoder
++ for c in vae audio_vae text_encoder tokenizer model_index.json
++ '[' -e /w/h3-base/tokenizer ']'
++ ln -s /w/h3-8step/tokenizer /w/h3-base/tokenizer
++ for c in vae audio_vae text_encoder tokenizer model_index.json
++ '[' -e /w/h3-base/model_index.json ']'
++ ln -s /w/h3-8step/model_index.json /w/h3-base/model_index.json
++ ls -la /w/h3-base /w/h3-8step
++ head -20
+/w/h3-8step:
+total 12
+drwxr-xr-x 7 root root   90 Nov 13 22:57 .
+drwxr-xr-x 5 root root   82 Nov 13 23:04 ..
+drwxr-xr-x 2 root root   68 Nov 13 22:49 audio_vae
+drwxr-xr-x 2 root root 4096 Nov 13 22:52 text_encoder
+drwxr-xr-x 2 root root   93 Nov 13 22:52 tokenizer
+drwxr-xr-x 2 root root 4096 Nov 13 22:57 transformer
+drwxr-xr-x 2 root root 4096 Nov 13 22:58 vae
+
+/w/h3-base:
+total 4
+drwxr-xr-x 3 root root  114 Nov 13 23:04 .
+drwxr-xr-x 5 root root   82 Nov 13 23:04 ..
+lrwxrwxrwx 1 root root   21 Nov 13 23:04 audio_vae -> /w/h3-8step/audio_vae
+lrwxrwxrwx 1 root root   28 Nov 13 23:04 model_index.json -> /w/h3-8step/model_index.json
+lrwxrwxrwx 1 root root   24 Nov 13 23:04 text_encoder -> /w/h3-8step/text_encoder
+lrwxrwxrwx 1 root root   21 Nov 13 23:04 tokenizer -> /w/h3-8step/tokenizer
+drwxr-xr-x 2 root root 4096 Nov 13 23:02 transformer
+lrwxrwxrwx 1 root root   15 Nov 13 23:04 vae -> /w/h3-8step/vae
++ mkdir -p /w/tables
++ echo '== V2 AdaLN tables'
+== V2 AdaLN tables
++ tail -4
+
+real	0m0.012s
+user	0m0.001s
+sys	0m0.004s
++ echo '== base 25-step AdaLN tables'
+== base 25-step AdaLN tables
++ tail -4
+
+real	3m19.187s
+user	1m29.357s
+sys	1m50.755s
++ echo '== conformance'
+== conformance
++ grep -E 'checks|panick|FAIL' /w/out/check.log
+all 143 checks pass (tolerance 3e-2)
++ grep -E pv8 /w/out/check.log
++ head -12
+attention qk8+pv8 h3 kv3 37x37 d16 causal=false      rel 2.80e-3  ok
+attention qk8+pv8 h4 kv2 70x102 d32 causal=true      rel 3.08e-3  ok
+attention qk8+pv8 h2 kv2 130x65 d64 causal=false     rel 2.98e-3  ok
+attention qk8+pv8 h2 kv1 33x65 d128 causal=true      rel 2.88e-3  ok
+vsa tile64 d32 qk8+pv8 gate                          rel 2.80e-3  ok
+vsa tile64 d32 qk8+pv8 no-gate                       rel 3.12e-3  ok
+vsa tile128 d64 qk8+pv8 gate                         rel 2.06e-3  ok
+vsa tile128 d64 qk8+pv8 no-gate                      rel 3.11e-3  ok
+vsa tile64 d128 qk8+pv8 gate                         rel 2.99e-3  ok
+vsa tile64 d128 qk8+pv8 no-gate                      rel 3.03e-3  ok
+dit tiny Dense { qk8: false, pv8: false } native     rel 5.89e-3  ok
+dit tiny Dense { qk8: false, pv8: false } native streamed rel 5.89e-3  ok
++ echo '== h2d probe'
+== h2d probe
++ H3_STALL=1
++ timeout 600 /w/h3-bin bench --backend cuda --variant fasth3-v2 --layers 1 --steps 1
++ grep -E 'h2d|rror'
++ head -3
+error: the following required argument was not provided: steps
++ tar czf /root/cmd1.tgz -C /w/out .
+++ date -u
++ echo 'cmd1 done Fri Nov 13 23:08:04 UTC 2026'
+cmd1 done Fri Nov 13 23:08:04 UTC 2026
+exit 0
+
