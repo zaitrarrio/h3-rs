@@ -158,7 +158,11 @@ time); when the tables do not fit, they are uploaded per step.
    against the INT8-only clips, the 8-bit band. Attention is 52 % of the
    dense step now and the rest of the gap is the MXFP8 GEMM side (478
    TFLOP/s with per-call activation quantisation) plus the small kernels
-   between them. The checker's lesson: an E4M3 quantiser is sensitive to
+   between them. The dense first steps of a VSA run and the dense layers
+   now go through the dense kernel plus the gated pooled branch (a dense
+   plan is defined that way in the CPU reference), where the all-tiles
+   fine stage had cost ~2× for the same softmax. The checker's lesson:
+   an E4M3 quantiser is sensitive to
    whether its input was already bf16, so the pv8 cases feed both sides
    bf16-representable values, and the oracle reports the outputs whose P
    rounding sits within a few f32 ulps of a boundary as slack, so an
