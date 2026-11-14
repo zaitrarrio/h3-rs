@@ -1604,14 +1604,16 @@ impl Backend for Cuda {
                             }
                         }
                         self.mx_choice.lock().unwrap().insert(key, choice);
-                        if choice != parts || probed {
-                            // Recompute y with the chosen plan: the timing runs left the last
-                            // one's output, and the plain-FP8 probe its unscaled one. Skipping
-                            // this when the choice kept `parts` left the probe's output in y
-                            // (the first block's QKV of a clip on a Server Edition, where the
-                            // QKV shape stays whole: every H3_STALL=1 clip of that run garbage,
-                            // and a decoder tile on the 5090, where only the small shape kept
-                            // whole; `docs/runs/2026-11-14-runpod-6000s-probe-bug`).
+                        if choice != sp || probed {
+                            // y must come from the chosen plan: the timing runs left the
+                            // split's output, the plain-FP8 probe its unscaled one. The first
+                            // version recomputed only when the choice differed from the
+                            // initial `parts`, so a shape that kept whole returned the split's
+                            // rounding on its first call (the clip moved into the usual band
+                            // against the previous binary's on a Server Edition, where the QKV
+                            // shape stays whole) and, under `H3_STALL=1` / `H3_PROFILE=1`, the
+                            // probe's garbage (every diagnostic clip of that run, and a decoder
+                            // tile on the 5090; `docs/runs/2026-11-14-runpod-6000s-probe-bug`).
                             let p = plans.get(&(n / choice, k, rows, n, epi)).unwrap().as_ref().unwrap();
                             run(p, choice);
                         }
