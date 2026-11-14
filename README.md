@@ -169,7 +169,9 @@ are dequantized to bf16 on the device at load.
 
 `--weights int8 | int4[-hqq][-gN][-ffn] | nvfp4` quantizes at load as well;
 `--stream-blocks` keeps the block weights in host memory and uploads them per
-step; `h3 plan` tells what fits.
+step; `h3 plan` tells what fits. On a 24 GB RTX 4090 (450 W) FastH3-V2 at
+1344×768×124 streams in 19.1 GB: denoise 107 s, 125.7 s with decode, with
+bf16 weights and `--vsa-qk8 --pv8` (`docs/runs/2026-11-14-vast-4090-24gb`).
 
 ### One clip
 

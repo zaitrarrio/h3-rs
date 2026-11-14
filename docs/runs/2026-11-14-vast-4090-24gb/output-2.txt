@@ -1,0 +1,36 @@
++ cat
++ O=/w/out
++ mkdir -p /w/out
++ cd /w
++ T=/w/tables
++ V2='--variant fasth3-v2 --model-dir /w/h3-8step --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --pv8 --tables /w/tables/v2.tables'
++ mkdir -p /w/tables
++ echo '== V2 AdaLN tables'
+== V2 AdaLN tables
++ tail -3
+real	6m9.195s
+user	2m39.938s
+sys	3m31.952s
++ echo '== conformance'
+== conformance
++ timeout 1800 /w/h3-bin check --backend cuda
++ grep -E 'checks|FAIL|panick' /w/out/check.log
+all 170 checks pass (tolerance 3e-2)
++ echo '== conformance, H3_STALL=1'
+== conformance, H3_STALL=1
++ H3_STALL=1
++ timeout 1800 /w/h3-bin check --backend cuda
++ grep -E 'checks|FAIL|panick' /w/out/check-stall.log
+all 170 checks pass (tolerance 3e-2)
++ echo '== conformance, H3_STREAM_STRESS=1'
+== conformance, H3_STREAM_STRESS=1
++ H3_STREAM_STRESS=1
++ timeout 1800 /w/h3-bin check --backend cuda
++ grep -E 'checks|FAIL|panick' /w/out/check-stress.log
+all 170 checks pass (tolerance 3e-2)
++ tar czf /root/cmd1.tgz -C /w/out .
+++ date -u
++ echo 'cmd2 done Sat Nov 14 20:51:02 UTC 2026'
+cmd2 done Sat Nov 14 20:51:02 UTC 2026
+exit 0
+

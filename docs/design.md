@@ -121,9 +121,11 @@ time); when the tables do not fit, they are uploaded per step.
    are chunked more widely).
 7. ~~Block streaming with overlapped uploads~~: done (prefetch on a side
    stream, byte uploads, page-locked weights with a pinned bounce for the
-   small copies; 5090 record: the forward is compute-bound now). A 24 GB
-   card run is still open: the 5090 peaks at 15.9–18 GB streamed at 124
-   frames.
+   small copies; 5090 record: the forward is compute-bound now). On a
+   24 GB card (RTX 4090, `docs/runs/2026-11-14-vast-4090-24gb`) V2 at
+   1344×768×124 streams in 19.1 GB with the GPU waiting 0.6 ms per block
+   over PCIe 4: denoise 107 s, 125.7 s with decode, bf16 weights (the
+   MXFP8 path is emulated on Ada and only costs decode time).
 7b. INT8 dense attention (`--qk8`): the VSA fine stage's recipe
    (per-64-row-tile int8 Q and mean-shifted K, `mma.s8` scores, bf16
    P·V) inside the dense `attn_mma2` kernel, with the CPU oracle and the

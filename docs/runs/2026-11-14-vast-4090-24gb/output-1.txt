@@ -1,0 +1,89 @@
+destroy timer armed (3.5 h) for 60692904
++ cat
++ O=/w/out
++ mkdir -p /w/out
++ cd /w
++ T=/w/tables
++ V2='--variant fasth3-v2 --model-dir /w/h3-8step --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --pv8 --tables /w/tables/v2.tables'
++ nvidia-smi --query-gpu=name,driver_version,power.limit,memory.total,pcie.link.gen.max,pcie.link.width.max,clocks.max.sm --format=csv,noheader
+NVIDIA GeForce RTX 4090, 595.99.02, 450.00 W, 24564 MiB, 4, 16, 3120 MHz
++ lscpu
++ grep 'Model name'
+Model name:                              AMD EPYC 7742 64-Core Processor
++ free -g
++ head -2
+               total        used        free      shared  buff/cache   available
+Mem:            1007          57         533           0         423         949
+++ seq 1 85
++ for i in $(seq 1 85)
++ '[' -f /w/weights.done ']'
++ sleep 60
++ for i in $(seq 1 85)
++ '[' -f /w/weights.done ']'
++ sleep 60
++ for i in $(seq 1 85)
++ '[' -f /w/weights.done ']'
++ sleep 60
++ for i in $(seq 1 85)
++ '[' -f /w/weights.done ']'
++ sleep 60
++ for i in $(seq 1 85)
++ '[' -f /w/weights.done ']'
++ sleep 60
++ for i in $(seq 1 85)
++ '[' -f /w/weights.done ']'
++ sleep 60
++ for i in $(seq 1 85)
++ '[' -f /w/weights.done ']'
++ sleep 60
++ for i in $(seq 1 85)
++ '[' -f /w/weights.done ']'
++ sleep 60
++ for i in $(seq 1 85)
++ '[' -f /w/weights.done ']'
++ sleep 60
++ for i in $(seq 1 85)
++ '[' -f /w/weights.done ']'
++ sleep 60
++ for i in $(seq 1 85)
++ '[' -f /w/weights.done ']'
++ sleep 60
++ for i in $(seq 1 85)
++ '[' -f /w/weights.done ']'
++ sleep 60
++ for i in $(seq 1 85)
++ '[' -f /w/weights.done ']'
++ sleep 60
++ for i in $(seq 1 85)
++ '[' -f /w/weights.done ']'
++ sleep 60
++ for i in $(seq 1 85)
++ '[' -f /w/weights.done ']'
++ sleep 60
++ for i in $(seq 1 85)
++ '[' -f /w/weights.done ']'
++ sleep 60
++ for i in $(seq 1 85)
++ '[' -f /w/weights.done ']'
++ sleep 60
++ for i in $(seq 1 85)
++ '[' -f /w/weights.done ']'
++ break
++ grep -E 'weights .* in' /root/boot.log
++ tail -1
+weights 138G in 990s
+++ grep -c FAILED /root/boot.log
++ echo 'failed transfers: 0'
+failed transfers: 0
++ grep FAILED /root/boot.log
++ awk '{print $2}'
++ read f
++ '[' -s /root/refetch.txt ']'
++ ls -la /w/h3-8step/transformer
++ awk '{s+=$5} END{print "transformer bytes", s}'
+transformer bytes 70099657595
+++ date -u
++ echo 'cmd1 done Sat Nov 14 20:43:59 UTC 2026'
+cmd1 done Sat Nov 14 20:43:59 UTC 2026
+exit 0
+

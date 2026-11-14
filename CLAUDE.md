@@ -200,7 +200,12 @@ State and invariants only; the reasoning is in `docs/design.md`.
   5090 the V2 forward 7.2 → 6.45 s and the 15 s clip's 27.2 → 23.8 s on
   one pod, 127 / 127 checks either way; a pinned staging ring (memcpy of
   the whole block) had measured nothing and was removed.
-  `H3_CUDA_NO_PIN=1` compares. The prefetch fence must outlive
+  `H3_CUDA_NO_PIN=1` compares. A 24 GB RTX 4090 (450 W, PCIe 4 ×16,
+  driver 595.99.02) streams V2 at 1344×768×124 in 19.1 GB, the GPU
+  waiting 0.6 ms per block: forward 13.4 s, denoise 107 s, 125.7 s with
+  decode, bf16 weights (MXFP8 is emulated on sm_89 and costs 2.6 s of
+  decode for nothing); 170 / 170 checks there plain, `H3_STALL=1` and
+  under stress (`docs/runs/2026-11-14-vast-4090-24gb`). The prefetch fence must outlive
   `prefetch_wait`: `prefetch_begin` synchronises it on the host before
   the bounce buffer is reused, and taking it early let the next block's
   small copies overwrite slots still queued on the copy stream (clips
