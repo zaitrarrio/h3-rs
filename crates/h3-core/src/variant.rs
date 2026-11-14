@@ -93,6 +93,10 @@ pub struct Variant {
 
 const BASE: &str = "MiniMaxAI/MiniMax-H3";
 
+/// LongLive-Plug's few-step adapter as `scripts/reference/convert_longlive_plug.py`
+/// writes it next to the release's `generator_lora.pt`.
+pub const PLUG4_ADAPTER: &str = "generator_lora.safetensors";
+
 impl Variant {
     pub fn all() -> Vec<Variant> {
         vec![
@@ -107,6 +111,31 @@ impl Variant {
                 shifts: Shifts::H3,
                 vsa: None,
                 adapters: vec![],
+                tasks: vec![Task::T2va, Task::Fl2va, Task::Ref2va],
+                nvfp4: false,
+                pika_buckets: false,
+                reference_regions: false,
+            },
+            Variant {
+                name: "h3-plug4".into(),
+                repo: "Efficient-Large-Model/LongLive-Plug-MiniMax-H3-few-step".into(),
+                summary: "LongLive-Plug few-step LoRA over the base DiT: 4 forwards, predict-x0 and fresh re-noise on linspace(1, 0, 5) shifted 12 / 3, no CFG; T2VA (trained), FL2VA and Ref2VA (transfer)".into(),
+                transformer_dir: "transformer".into(),
+                base_repo: BASE.into(),
+                config: H3Config::h3(),
+                // diffusers' MiniMaxH3Scheduler(num_inference_steps=5) with the
+                // release's fresh-noise step: the grid is linspace(1, 0, 5), i.e.
+                // the knots 1000 / 750 / 500 / 250 on the base clock, and the step
+                // is Pika's renoise rule (`schedule::StepRule::Renoise`).
+                sampler: Sampler::Renoise(schedule::PLUG4_KNOTS.to_vec()),
+                shifts: Shifts::H3,
+                vsa: None,
+                adapters: vec![AdapterSpec {
+                    path: PLUG4_ADAPTER.into(),
+                    alpha: Some(128.0),
+                    rank: Some(128),
+                    task: None,
+                }],
                 tasks: vec![Task::T2va, Task::Fl2va, Task::Ref2va],
                 nvfp4: false,
                 pika_buckets: false,
@@ -223,6 +252,7 @@ impl Variant {
         let n = name.trim().to_ascii_lowercase().replace('_', "-");
         let alias = match n.as_str() {
             "base" | "minimax-h3" => "h3",
+            "plug4" | "plug" | "longlive-plug" | "h3-4step" => "h3-plug4",
             "v1" | "fasth3-4-step" | "4-step" => "fasth3-v1",
             "v2" | "fasth3-8-step" | "8-step" => "fasth3-v2",
             "trim" | "nvfp4" => "fasth3-trim",
@@ -335,6 +365,10 @@ mod tests {
         assert_eq!(Variant::by_name("pika").unwrap().forwards(), 6);
         assert_eq!(Variant::by_name("h3").unwrap().forwards(), 49);
         assert_eq!(Variant::by_name("regen").unwrap().forwards(), 3);
+        let plug = Variant::by_name("longlive-plug").unwrap();
+        assert_eq!((plug.name.as_str(), plug.forwards()), ("h3-plug4", 4));
+        assert_eq!(plug.schedules().unwrap().0.rule, StepRule::Renoise);
+        assert_eq!(plug.adapters.len(), 1);
         assert!(Variant::by_name("wan").is_err());
         for v in Variant::all() {
             let (vs, as_) = v.schedules().unwrap();

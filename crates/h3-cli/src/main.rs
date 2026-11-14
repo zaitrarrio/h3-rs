@@ -57,7 +57,7 @@ enum AttnKind {
 
 #[derive(clap::Args, Clone)]
 struct ModelArgs {
-    /// Which release: h3 | fasth3-v1 | fasth3-v2 | fasth3-trim | fasth3-omni | pika-flex | regen-2k.
+    /// Which release: h3 | h3-plug4 | fasth3-v1 | fasth3-v2 | fasth3-trim | fasth3-omni | pika-flex | regen-2k.
     #[arg(long, default_value = "fasth3-v2")]
     variant: String,
     /// t2va | fl2va | ref2va (default: the variant's first task).
@@ -497,7 +497,19 @@ impl ModelArgs {
                     eprintln!("adapter: {}", p.display());
                     adapters.push(Adapter::open(&p, spec.alpha, spec.rank)?);
                 }
-                None => eprintln!("warning: adapter {} not found under --variant-dir; the base weights run unadapted", spec.path),
+                // The variant's sampler is the adapter's (Pika's renoise knots, the
+                // LongLive-Plug four steps): without it the base weights would run a
+                // schedule they were never trained for and make noise, not a clip.
+                None => bail!(
+                    "{} needs its adapter {} under --variant-dir{}",
+                    variant.name,
+                    spec.path,
+                    if spec.path == h3_core::variant::PLUG4_ADAPTER {
+                        " (convert the release's generator_lora.pt with scripts/reference/convert_longlive_plug.py)"
+                    } else {
+                        ""
+                    }
+                ),
             }
         }
         for p in &self.adapters {

@@ -147,6 +147,10 @@ pub fn linspace_f64(start: f64, end: f64, n: usize) -> Vec<f64> {
 pub const FASTH3_V1_RUNGS: [u32; 4] = [999, 749, 500, 250];
 pub const FASTH3_V2_RUNGS: [u32; 8] = [999, 874, 749, 624, 500, 375, 250, 125];
 pub const PIKA_KNOTS: [u32; 6] = [1000, 750, 500, 250, 100, 40];
+/// LongLive-Plug's four-step H3 student: `linspace(1, 0, 5)` without the
+/// terminal 0, i.e. diffusers' `MiniMaxH3Scheduler.set_timesteps(5)` grid, run
+/// with the fresh re-noise step it was trained for.
+pub const PLUG4_KNOTS: [u32; 4] = [1000, 750, 500, 250];
 /// Base H3's uniform grid: 50 points, 49 forwards.
 pub const H3_BASE_POINTS: usize = 50;
 
@@ -323,6 +327,28 @@ mod tests {
         assert_eq!(s.steps(), 6);
         assert_eq!(s.sigmas[0], 1.0);
         assert!((s.sigmas[5] - shift_sigma(0.04, 12.0)).abs() < 1e-7);
+    }
+
+    /// The four-step LongLive-Plug grid equals diffusers'
+    /// `MiniMaxH3Scheduler(shift).set_timesteps(5)` bit for bit (diffusers
+    /// 0.43.0, printed as f32 bits), for both modality shifts.
+    #[test]
+    fn plug4_grid_matches_diffusers() {
+        let want: [(f32, [u32; 5]); 2] = [
+            (12.0, [0x3f800000, 0x3f7914c2, 0x3f6c4ec5, 0x3f4ccccd, 0]),
+            (3.0, [0x3f800000, 0x3f666666, 0x3f400000, 0x3f000000, 0]),
+        ];
+        for (shift, bits) in want {
+            let s = Schedule::from_rungs(&PLUG4_KNOTS, shift, StepRule::Renoise).unwrap();
+            let got: Vec<u32> = s.sigmas.iter().map(|x| x.to_bits()).collect();
+            assert_eq!(got, bits, "shift {shift}");
+            // The uniform constructor builds the same grid (the release's form).
+            assert_eq!(Schedule::uniform(5, shift).unwrap().sigmas, s.sigmas);
+            // The reference recovers σ as 1 − t; both are exact in f32 here.
+            for i in 0..4 {
+                assert_eq!(1.0 - s.timestep(i), s.sigmas[i]);
+            }
+        }
     }
 
     #[test]

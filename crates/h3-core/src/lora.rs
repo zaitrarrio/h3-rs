@@ -197,6 +197,31 @@ mod tests {
     use safetensors::Dtype;
     use std::collections::HashMap;
 
+    /// The converted LongLive-Plug few-step adapter
+    /// (`scripts/reference/convert_longlive_plug.py`): every LoRA pair lands on
+    /// a linear of the H3 manifest with the shapes the merge needs, scale 1.
+    /// `H3_PLUG_LORA=<generator_lora.safetensors> cargo test -p h3-core --
+    /// --ignored longlive_plug_adapter_maps_onto_h3`.
+    #[test]
+    #[ignore]
+    fn longlive_plug_adapter_maps_onto_h3() {
+        let path = std::env::var("H3_PLUG_LORA").expect("set H3_PLUG_LORA");
+        let a = Adapter::open(std::path::Path::new(&path), Some(128.0), Some(128)).unwrap();
+        assert_eq!(a.scale, 1.0);
+        let cfg = crate::config::H3Config::h3();
+        let shapes: HashMap<String, Vec<usize>> = crate::weights::h3_manifest(&cfg, false).into_iter().collect();
+        let mods = a.modules();
+        assert_eq!(mods.len(), 312, "the release targets 312 linears");
+        for m in &mods {
+            let w = shapes.get(&format!("{m}.weight")).unwrap_or_else(|| panic!("{m} is not an H3 linear"));
+            let (la, lb) = a.lora_names(m).unwrap_or_else(|| panic!("{m} has no A/B pair"));
+            let (_, sa, _) = a.src.raw(&la).unwrap();
+            let (_, sb, _) = a.src.raw(&lb).unwrap();
+            assert_eq!((sa[0], sa[1], sb[0], sb[1]), (128, w[1], w[0], 128), "{m}");
+        }
+        assert_eq!(mods.iter().filter(|m| m.starts_with("token_refiner.")).count(), 12);
+    }
+
     fn tmp(name: &str) -> std::path::PathBuf {
         let d = std::env::temp_dir().join(format!("h3-lora-{}-{name}", std::process::id()));
         std::fs::create_dir_all(&d).unwrap();
