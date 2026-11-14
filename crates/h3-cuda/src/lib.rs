@@ -1551,6 +1551,8 @@ impl Backend for Cuda {
                             }
                         }
                         let mut choice = 1;
+                        // The plain-FP8 probe below writes y too (unscaled codes: garbage).
+                        let mut probed = false;
                         if let (Some(Some(whole)), Some(Some(split))) = (plans.get(&(n, k, rows, n, epi)), plans.get(&sk)) {
                             let time = |p: &LtPlan, parts: usize| {
                                 self.stream.synchronize().expect("sync");
@@ -1590,6 +1592,7 @@ impl Backend for Cuda {
                             if ts < tw * 0.9 {
                                 choice = sp;
                             }
+                            probed = plain.is_some();
                             if self.prof.is_some() || self.stall.is_some() {
                                 eprintln!(
                                     "mxfp8 n={n} k={k} rows={rows}: whole {:.2} ms, ×{sp} {:.2} ms → {}{}",
@@ -1601,8 +1604,14 @@ impl Backend for Cuda {
                             }
                         }
                         self.mx_choice.lock().unwrap().insert(key, choice);
-                        if choice != parts {
-                            // Recompute y with the chosen plan (the timing runs left the last one's output).
+                        if choice != parts || probed {
+                            // Recompute y with the chosen plan: the timing runs left the last
+                            // one's output, and the plain-FP8 probe its unscaled one. Skipping
+                            // this when the choice kept `parts` left the probe's output in y
+                            // (the first block's QKV of a clip on a Server Edition, where the
+                            // QKV shape stays whole: every H3_STALL=1 clip of that run garbage,
+                            // and a decoder tile on the 5090, where only the small shape kept
+                            // whole; `docs/runs/2026-11-14-runpod-6000s-probe-bug`).
                             let p = plans.get(&(n / choice, k, rows, n, epi)).unwrap().as_ref().unwrap();
                             run(p, choice);
                         }
