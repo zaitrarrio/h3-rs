@@ -366,6 +366,16 @@ extern "C" __global__ void fw_channel_affine(u64 x_, u64 out_, long n, int inner
     out[i] = bf(ld(x, i) * ld(s, c) + (has_shift ? ld(sh, c) : 0.0f));
 }
 
+// H3_STREAM_STRESS: one block spins ~`ns` nanoseconds on the copy stream ahead of a
+// prefetch's copies, so a compute stream that does not wait on the right fence reads a
+// block before it has landed (the streamed tiny-DiT checks then fail instead of passing
+// by timing luck).
+extern "C" __global__ void fw_spin(long long ns) {
+    const long long t0 = clock64();
+    // ~1 cycle per ns at the clocks that matter; the exact length is irrelevant.
+    while (clock64() - t0 < ns * 2) { }
+}
+
 extern "C" __global__ void fw_fill(u64 x_, long off, long n, float v) {
     bf16_t* x = (bf16_t*)x_;
     long i = (long)blockIdx.x * blockDim.x + threadIdx.x;

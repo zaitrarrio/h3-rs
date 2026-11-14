@@ -143,7 +143,33 @@ Half the host memory for those blocks, too. Measured on this box
 (`bf16pin/`), the cuBLASLt candidate pinned so the clip can be compared
 byte for byte with the f32-host path:
 
-BF16_TBD
+| | per forward (V2) / per step (base) | GPU waited on the fence | copy windows |
+|---|---|---|---|
+| f32-host edge blocks (the released path) | 7.92 s / 10.1 s | 1 ms / 0 ms | 5.7 / 2.8 GB/s |
+| bf16 host path, depth 1 | 6.32 s / 8.83 s | 8 ms / 6 ms | 10.9 / 3.5 GB/s |
+| bf16 host path, depth 2 | **6.33 s** (byte-identical to the released path) | 1 ms | 11.4 GB/s |
+| bf16 host path + QKV split, depth 1 | 6.01 s / 8.50 s | 4 / 3 ms | 13.6 / 3.9 GB/s |
+| bf16 host path + QKV split, 25 steps | 8.57 s per step, denoise 214.1 s (was 253.6) | | |
+
+20 % off the V2 forward and 13 % off the base step with no change to
+the arithmetic, which the depth-2 run proves: its clip is byte for byte
+the released path's. The depth-1 clips were **not**, and that found a
+second bug: the FIFO fences of 3eb1d82 kept the front entry when it was
+the only one, so with one prefetch in flight every block after the first
+waited on the *previous* block's fence and could start before its own
+weights had landed. With the slow f32-host path the host was always
+late enough for the copies to be done; with fast uploads (the bf16 path,
+or all blocks MXFP8) the race was live: the all-blocks clips of this
+round with their "anime" look and the depth-1 bf16 clips all carry the
+same first-frame luma signature, and two depth-1 runs reproduced the
+same wrong clip bit for bit. Fixed in FENCE_COMMIT (each fence popped
+once; the host sync takes the newest fence by its own handle), with
+`H3_STREAM_STRESS=1` adding a 20 ms spin on the copy stream ahead of each
+prefetch so the streamed tiny-DiT checks fail on such a bug instead of
+passing by timing; the timing of the depth-1 rows above stands (the
+depth-2 run, correct, took the same 6.33 s), **the all-blocks quality
+claims of this round do not**, and the edge-block question is re-run on
+the second box (REBOX_TBD).
 
 ## Item 5: ComfyUI's block-sparse rows, and V2 at its budget
 

@@ -133,11 +133,21 @@ pub struct Cuda {
     copy: Arc<CudaStream>,
     /// Uploads go to `copy` between `prefetch_begin` and `prefetch_end`.
     staging: std::sync::atomic::AtomicBool,
-    /// The ends of the prefetches in flight, oldest first: `prefetch_wait`
-    /// takes the front, `prefetch_begin` synchronises the back on the host
-    /// before the bounce buffer is reused (with one prefetch in flight that is
-    /// the same event; `H3_PREFETCH_DEPTH=2` keeps two).
+    /// The ends of the prefetches whose blocks have not run yet, oldest
+    /// first: `prefetch_wait` pops the front (the block about to run). A
+    /// first version of this FIFO kept the front when it was the only entry,
+    /// so with one prefetch in flight every block after the first waited on
+    /// the previous block's fence and could run before its own weights had
+    /// landed (clips that differed between depth 1 and depth 2, 3eb1d82).
     fence: std::sync::Mutex<std::collections::VecDeque<Arc<cudarc::driver::CudaEvent>>>,
+    /// The end of the newest prefetch, whatever `prefetch_wait` has popped:
+    /// `prefetch_begin` synchronises it on the host before the bounce buffer
+    /// is reused (every earlier prefetch's copies are behind it).
+    last_fence: std::sync::Mutex<Option<Arc<cudarc::driver::CudaEvent>>>,
+    /// `H3_STREAM_STRESS=1`: a ~20 ms spin kernel on the copy stream ahead of
+    /// every prefetch's copies, so a missing or wrong fence wait shows up as
+    /// a wrong result in the streamed checks rather than passing by timing.
+    stream_stress: bool,
     /// `H3_STALL=1`: event pairs around every `prefetch_wait` on the compute
     /// stream and around every prefetch's copies on the copy stream, with the
     /// bytes copied, so the per-forward summary can say how long the GPU sat
@@ -233,6 +243,7 @@ struct Kernels {
     axpby: CudaFunction,
     channel_affine: CudaFunction,
     fill: CudaFunction,
+    spin: CudaFunction,
     tanh_clamp: CudaFunction,
     clamp: CudaFunction,
     snake: CudaFunction,
@@ -497,6 +508,7 @@ impl Cuda {
             axpby: get("fw_axpby")?,
             channel_affine: get("fw_channel_affine")?,
             fill: get("fw_fill")?,
+            spin: get("fw_spin")?,
             tanh_clamp: get("fw_tanh_clamp")?,
             clamp: get("fw_clamp")?,
             snake: get("fw_snake")?,
@@ -562,6 +574,8 @@ impl Cuda {
             copy,
             staging: std::sync::atomic::AtomicBool::new(false),
             fence: std::sync::Mutex::new(std::collections::VecDeque::new()),
+            last_fence: std::sync::Mutex::new(None),
+            stream_stress: env1("H3_STREAM_STRESS"),
             stall: env1("H3_STALL").then(Default::default),
             pinned: Arc::new(std::sync::Mutex::new(Vec::new())),
             use_pin: !env1("H3_CUDA_NO_PIN"),
@@ -798,7 +812,7 @@ impl Cuda {
 
     fn kernel_name(&self, f: &CudaFunction) -> &'static str {
         let k = &self.f;
-        let all: [(&CudaFunction, &'static str); 75] = [
+        let all: [(&CudaFunction, &'static str); 76] = [
             (&k.bias_act, "bias_act"),
             (&k.swiglu, "swiglu"),
             (&k.gate_residual, "gate_residual"),
@@ -811,6 +825,7 @@ impl Cuda {
             (&k.axpby, "axpby"),
             (&k.channel_affine, "channel_affine"),
             (&k.fill, "fill"),
+            (&k.spin, "stream stress spin"),
             (&k.tanh_clamp, "tanh_clamp"),
             (&k.clamp, "clamp"),
             (&k.snake, "snake"),
@@ -1200,8 +1215,8 @@ impl Backend for Cuda {
     }
 
     fn prefetch_begin(&self) {
-        if let Some(ev) = self.fence.lock().unwrap().back() {
-            // Every prefetch in flight has run its copies (some from the bounce
+        if let Some(ev) = self.last_fence.lock().unwrap().as_ref() {
+            // Every earlier prefetch has run its copies (some from the bounce
             // buffer) before the buffer is reused: the host blocks here until
             // the copy stream has run the newest, at most two blocks behind.
             ev.synchronize().expect("event");
@@ -1216,6 +1231,13 @@ impl Backend for Cuda {
             // stream, so it marks when this prefetch's copies actually start.
             st.open = Some(self.timed_event(&self.copy));
         }
+        if self.stream_stress {
+            let mut lb = self.copy.launch_builder(&self.f.spin);
+            let ns: i64 = 20_000_000;
+            lb.arg(&ns);
+            // SAFETY: a kernel with one scalar argument and no memory access.
+            unsafe { lb.launch(LaunchConfig { grid_dim: (1, 1, 1), block_dim: (1, 1, 1), shared_mem_bytes: 0 }) }.expect("spin");
+        }
         self.staging.store(true, std::sync::atomic::Ordering::Relaxed);
     }
 
@@ -1229,6 +1251,7 @@ impl Backend for Cuda {
                 st.copies.push((e0, Arc::clone(&ev), bytes));
             }
         }
+        *self.last_fence.lock().unwrap() = Some(Arc::clone(&ev));
         self.fence.lock().unwrap().push_back(ev);
     }
 
@@ -1266,20 +1289,14 @@ impl Backend for Cuda {
     }
 
     fn prefetch_wait(&self) {
-        // The fence stays until the next `prefetch_end` replaces it:
-        // `prefetch_begin` synchronises it on the host before the bounce
-        // buffer is reused. Taking it here let the next prefetch overwrite
-        // bounce slots whose copies were still queued behind a release wait
-        // on the copy stream (a few of a block's weights then came from the
-        // block after it, and the clip went black a step or two later; it
-        // depends on how far the host runs ahead of the GPU, so one 5090
-        // pod produced byte-identical clips and three later hosts never
-        // produced a frame).
-        // With two prefetches in flight the front is the block about to run.
-        let ev = {
-            let mut f = self.fence.lock().unwrap();
-            if f.len() > 1 { f.pop_front() } else { f.front().cloned() }
-        };
+        // The front is the block about to run; each fence is waited on once.
+        // The host-side sync before the bounce buffer is reused is
+        // `prefetch_begin`'s, on `last_fence`: taking the only fence there
+        // (29317cb) let the next prefetch overwrite bounce slots whose copies
+        // were still queued behind a release wait, and keeping the front here
+        // when it was the only entry (3eb1d82) made every block after the
+        // first wait on the previous block's fence.
+        let ev = self.fence.lock().unwrap().pop_front();
         if let Some(ev) = ev {
             if let Some(st) = &self.stall {
                 let w0 = self.timed_event(&self.stream);
