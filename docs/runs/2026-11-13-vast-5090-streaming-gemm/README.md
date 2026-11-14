@@ -132,7 +132,7 @@ read slow for the same reason (they bracket those host passes). The
 quantized blocks (byte copies, page-locked DMA) were never the problem,
 and PCIe ×8 against ×16 does not matter at these sizes.
 
-### The fix: streamed native blocks as bf16 bytes (6fbed45, 2b0b5e1)
+### The fix: streamed native blocks as bf16 bytes (6fbed45, 64bb520)
 
 `HostWeight::Bf16` / `Backend::weight_bf16`: when the backend stores
 bf16 anyway (`Backend::bf16_weights`, CUDA), a streamed native-precision
