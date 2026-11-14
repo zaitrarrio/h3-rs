@@ -31,8 +31,11 @@ L = ["#!/bin/bash", "set -u", "LOG=/root/boot.log", "exec >>$LOG 2>&1",
      f"LOGPUT={shlex.quote(put(run + '/boot.log'))}",
      'up() { curl -s -X PUT --upload-file "$1" "$2" >/dev/null; }',
      # A command that terminates the pod would lose its own output: upload the in-flight out.log first.
+     # The key goes through a header file, never a command line: commands run under
+     # `set -x`, and an echoed `Authorization: Bearer …` ended up in two committed logs.
+     '{ umask 077; printf "Authorization: Bearer %s\\n" "$RUNPOD_API_KEY" > /root/.rp-auth; }',
      'terminate() { [ -n "${OUT_URL:-}" ] && up /root/out.log "$OUT_URL"; up $LOG "$LOGPUT"; '
-     'curl -sS -X DELETE -A h3-rs-pod/1 -H "Authorization: Bearer $RUNPOD_API_KEY" "https://rest.runpod.io/v1/pods/$RUNPOD_POD_ID"; }',
+     'curl -sS -X DELETE -A h3-rs-pod/1 -H @/root/.rp-auth "https://rest.runpod.io/v1/pods/$RUNPOD_POD_ID"; }',
      # stage TREE [SUB...]: copy /workspace/weights/TREE (or only its SUB directories, the rest
      # symlinked back to the volume) onto the container disk with 8 parallel cp streams, then point
      # /w/TREE at the copy. Idempotent (cp -n). Prints bytes and seconds: the volume's read rate.
