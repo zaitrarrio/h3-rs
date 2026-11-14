@@ -225,7 +225,24 @@ FFN-up 17.6 ms split, FFN-down 8.9, out 4.3, gate 4.4), the five bf16
 edge blocks' GEMMs 0.67 s, head_split / quant / SwiGLU / norms / coarse /
 pool / residual ~1.0 s.
 
-BASE2_TBD
+**Raw H3, dense, 25 uniform euler steps** (`box2/base*.log`; ComfyUI's
+`baseline` row 181.7 s total / 169.0 s sampler, 6.8 s per step):
+
+| | per step | denoise | denoise + decode | clip |
+|---|---|---|---|---|
+| released path (2-step run) | 8.41 s | | | reference |
+| fixed fences + bf16 host path | 8.05–8.11 s | 202.5 s | 208.9 s | byte-identical (2-step run) |
+| + QKV row split | **7.71–7.75 s** | **193.0 s** | **199.4 s** | **byte-identical** |
+| + all 50 blocks MXFP8 | 7.33–7.37 s | 183.5 s | 189.9 s | 29.3 dB against the bf16-edge clip, same scene |
+| ComfyUI `baseline` (page) | 6.8 s | 169.0 s sampler | 181.7 s total | |
+
+The dense base is at 1.13× ComfyUI's step with the recipe's bf16 edges
+(1.08× with every block MXFP8, the closest thing to ComfyUI's own
+all-int8 file), from 1.15–1.27× before this round and 2.0× in bf16
+attention. Its profile is attention 4.1 s (82–91 ms × 50), MXFP8 GEMMs
+2.6–3.1 s, the bf16 edge blocks 0.6 s, small kernels 0.65 s per step:
+what is left against ComfyUI is the GEMM side and the edge blocks,
+not the attention and not the host any more.
 
 ## Item 5: ComfyUI's block-sparse rows, and V2 at its budget
 
