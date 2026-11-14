@@ -12,6 +12,7 @@ is a `--variant`:
 | `--variant` | checkpoint | forwards | attention |
 |---|---|---|---|
 | `h3` | `MiniMaxAI/MiniMax-H3` (T2VA, FL2VA, Ref2VA) | 49 | dense |
+| `h3-plug4` | the base plus `Efficient-Large-Model/LongLive-Plug-MiniMax-H3-few-step` (LoRA; T2VA, FL2VA and Ref2VA by transfer) | 4 | dense |
 | `fasth3-v1` | `FastVideo/FastVideo-FastH3-4-step-Preview-v1-VSA-DataFree` | 4 | VSA 0.9 |
 | `fasth3-v2` | `FastVideo/FastVideo-FastH3-8-Step-V2` | 8 | VSA 0.8 |
 | `fasth3-trim` | `FastVideo/FastVideo-FastH3-Trim-8-Step` (42 blocks; bf16 HF tree or the ComfyUI single-file NVFP4) | 8 | VSA 0.8 |
@@ -189,7 +190,17 @@ ffmpeg -i fox.y4m -i fox.wav -c:v libx264 -pix_fmt yuv420p -c:a aac fox.mp4
 Keyframes: `--first-image a.png --last-image b.png` (FL2VA; `--variant pika-flex`
 for Pika). References: `--task ref2va --ref image:a.png --ref video:clip.y4m,audio=clip.wav
 --ref audio:song.wav` in presentation order; `--continue tail.y4m` for a
-continuation clip. Omni: `--variant fasth3-omni`. The prompt is encoded by
+continuation clip. Omni: `--variant fasth3-omni`. LongLive-Plug's
+four-step adapter ships as a torch pickle; convert it once and point
+`--variant-dir` at its download:
+
+```bash
+huggingface-cli download Efficient-Large-Model/LongLive-Plug-MiniMax-H3-few-step --local-dir plug4
+python scripts/reference/convert_longlive_plug.py plug4      # writes plug4/generator_lora.safetensors
+h3 generate --variant h3-plug4 --model-dir h3 --variant-dir plug4 --prompt "…" --out clip.y4m
+```
+
+The prompt is encoded by
 the native Qwen3-VL port on the chosen backend, streaming its layers from the
 mmapped checkpoint; `h3 encode` stores text-only prompts in a gallery so
 `--embeds` and `serve --gallery` need no text encoder at all.
