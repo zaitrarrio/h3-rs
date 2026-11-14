@@ -55,7 +55,14 @@ State and invariants only; the reasoning is in `docs/design.md`.
   8.41 → **7.72 s** against 6.8 s (7.34 s with every block MXFP8), the
   25-step denoise 193 s against the 169 s sampler. The GPU now idles
   ~0.2 s per V2 forward; what remains against ComfyUI's dense step is
-  the MXFP8 GEMMs (565 TFLOP/s) and the five bf16 edge blocks.
+  the MXFP8 GEMMs (565 TFLOP/s) and the five bf16 edge blocks. With the
+  dense steps of a VSA run through the dense kernel
+  (`docs/runs/2026-11-14-vast-5090-dense-steps`, a 575 W 5090, driver
+  615.71.09): the raw model at ComfyUI's block-sparse row (keep 10 %, 5
+  dense first steps) **130.9 / 123.9 s against 131.4 / 122.7 s**, at
+  parity; 3 dense first steps 124.0 / 116.8 against 118.0 / 109.6 s; V2
+  at ComfyUI's budget 44.7 s denoise (dense steps 8.1 s, sparse 4.6 s),
+  still behind V2 at keep 20 % (42.2 s), which stays the recipe.
 - MXFP8 (`--weights mxfp8`, `quant::Mxfp8`): W8A8, E4M3 codes with one E8M0
   scale per 32 input columns in cuBLASLt's `VEC32_UE8M0` swizzle
   (`mx_scale_offset`, rows padded to 128, groups to 4), the E4M3 / E8M0
@@ -74,7 +81,7 @@ State and invariants only; the reasoning is in `docs/design.md`.
   round like the whole GEMM (candidate pinned, clips byte-identical), so
   each shape's first call times whole against split, both tuned, and
   keeps the faster (`mx_choice`; `H3_CUDA_MX_SPLIT_MIN=n` forces the
-  rule). On the 5090 it picks the split for the QKV and FFN-up shapes (22.2 → 12.5 ms, 31.1 → 17.7 ms) and only with a 10 % margin: a 0.2 ms shape that measured the same either way split in one run and not in another, and its slices do not round like its whole GEMM. Stored form: `h3 quantize --weights mxfp8 [--skip-adaln]` writes
+  rule). On the 5090 it picks the split for the QKV and FFN-up shapes (22.2 → 12.5 ms, 31.1 → 17.7 ms) and only with a 10 % margin: a 0.2 ms shape that measured the same either way split in one run and not in another, and its slices do not round like its whole GEMM. A plain per-tensor-scaled FP8 GEMM of the same shape (timed under `H3_STALL=1` on the first call) runs 18.1 / 25.4 ms whole: the block scaling costs ~25 %, the split saves ~46 % with it kept, so a per-row FP8 weight format is not worth building (`docs/runs/2026-11-14-vast-5090-dense-steps`). Stored form: `h3 quantize --weights mxfp8 [--skip-adaln]` writes
   `<key>.weight.mx8` (E4M3 codes) + `.mxs` (swizzled scales), edges plain
   (`for_layer_key`); the V2 tree becomes 25.6 GB in 117 s and loads in 104 s
   against 202 s for bf16. `--decoder-weights mxfp8` puts the video

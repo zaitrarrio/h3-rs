@@ -44,6 +44,8 @@ resident recipe needs more than 32 GB):
 | FastH3 v1, 4 steps, 124 frames | 33.3 s / 23.9 s | 30.1 s / 24.0 s |
 | FastH3-V2, 362 frames (15 s) | 213.6 s / 185.6 s | 208.9 s / 190.8 s |
 | raw H3, 25 euler steps, dense | 181.7 s / 169.0 s | **199.4 s / 193.0 s** (`--qk8 --pv8`; 189.9 / 183.5 s with every block MXFP8; 328 s bf16 attention) |
+| raw H3, 25 steps, block-sparse keep 10 %, 5 dense first steps | 131.4 s / 122.7 s | **130.9 s / 123.9 s** (`--attention vsa --vsa-sparsity 0.9 --dense-first-steps 5 --pv8`) |
+| raw H3, 25 steps, block-sparse keep 10 %, 3 dense first steps | 118.0 s / 109.6 s | 124.0 s / 116.8 s |
 
 Both rows run INT8 Q·Kᵀ + FP8 P·V attention (`--qk8 --pv8`,
 SageAttention2's recipe) against ComfyUI's Kitchen int8, with the
