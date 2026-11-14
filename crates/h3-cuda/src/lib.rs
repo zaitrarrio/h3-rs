@@ -196,12 +196,18 @@ pub struct Cuda {
     /// `H3_CUDA_LT_NTH=i`: use cuBLASLt's i-th heuristic candidate for the
     /// MXFP8 GEMMs instead of timing them (experiments).
     lt_nth: Option<usize>,
-    /// MXFP8 GEMMs with `n >= mx_split_min` run as `mx_split` GEMMs over
-    /// row slices of the weight (`H3_CUDA_MX_SPLIT=p`, `H3_CUDA_MX_SPLIT_MIN=n`):
-    /// cuBLASLt's FP8 kernels for the 28672-row FFN-up ran at 355 TFLOP/s on
-    /// an RTX PRO 6000, the 21504-row QKV at 720.
+    /// MXFP8 GEMMs may run as `mx_split` GEMMs over row slices of the weight
+    /// (`H3_CUDA_MX_SPLIT=p`): cuBLASLt's FP8 kernels for the 28672-row FFN-up
+    /// ran at 355 TFLOP/s on an RTX PRO 6000 (the QKV shape at 720, no gain
+    /// from splitting), while on an RTX 5090 splitting the QKV shape too took
+    /// the V2 forward 5.70 → 5.32 s. The slices round like the whole GEMM
+    /// (candidate pinned, clips byte-identical), so the choice is pure speed.
     mx_split: usize,
-    mx_split_min: usize,
+    /// `H3_CUDA_MX_SPLIT_MIN=n`: split every shape with `n >= min`. Unset:
+    /// decide per shape on its first call (`mx_choice`).
+    mx_split_min: Option<usize>,
+    /// Auto mode's decision per (n, k, rows): parts (1 = whole).
+    mx_choice: std::sync::Mutex<std::collections::HashMap<(usize, usize, usize), usize>>,
     scalar_conv: bool,
     scalar_attn: bool,
     /// `H3_CUDA_ATTN_V1=1`: the 16-rows-per-warp kernels for dense attention
@@ -598,7 +604,8 @@ impl Cuda {
             no_fp8: env1("H3_CUDA_NO_FP8"),
             lt_nth: std::env::var("H3_CUDA_LT_NTH").ok().and_then(|v| v.parse().ok()),
             mx_split: std::env::var("H3_CUDA_MX_SPLIT").ok().and_then(|v| v.parse().ok()).unwrap_or(2).max(1),
-            mx_split_min: std::env::var("H3_CUDA_MX_SPLIT_MIN").ok().and_then(|v| v.parse().ok()).unwrap_or(24576),
+            mx_split_min: std::env::var("H3_CUDA_MX_SPLIT_MIN").ok().and_then(|v| v.parse().ok()),
+            mx_choice: std::sync::Mutex::new(std::collections::HashMap::new()),
             scalar_conv: env1("H3_CUDA_SCALAR_CONV"),
             scalar_attn: env1("H3_CUDA_SCALAR_ATTN"),
             attn_v1: env1("H3_CUDA_ATTN_V1"),
@@ -1410,71 +1417,126 @@ impl Backend for Cuda {
                     (true, _) => 1,
                 };
                 let mut plans = lt.mx_plans.lock().unwrap();
-                // Row slices of the weight when the shape is one cuBLASLt runs badly whole.
-                let parts = if n >= self.mx_split_min && n % (128 * self.mx_split) == 0 { self.mx_split } else { 1 };
+                // Row slices of the weight when the shape is one cuBLASLt runs
+                // badly whole. `H3_CUDA_MX_SPLIT_MIN=n` forces the rule; by
+                // default each large shape times whole against split once, on
+                // its first call, and keeps the faster (`mx_choice`).
+                let splittable = n % (128 * self.mx_split) == 0 && n >= 16384 && rows >= 1024;
+                let key = (n, k, rows);
+                let parts = match self.mx_split_min {
+                    Some(min) => {
+                        if n >= min && n % (128 * self.mx_split) == 0 {
+                            self.mx_split
+                        } else {
+                            1
+                        }
+                    }
+                    None => self.mx_choice.lock().unwrap().get(&key).copied().unwrap_or(1),
+                };
                 let np = n / parts;
                 // A GELU epilogue cuBLASLt declines falls back to bias-only + a pass.
                 let epi = if epi == 2 && plans.entry((np, k, rows, n, 2)).or_insert_with(|| lt.plan_mx(np, k, rows, n, 2)).is_none() { 1 } else { epi };
-                let plan = plans.entry((np, k, rows, n, epi)).or_insert_with(|| lt.plan_mx(np, k, rows, n, epi)).as_mut();
-                if let Some(p) = plan {
+                if plans.entry((np, k, rows, n, epi)).or_insert_with(|| lt.plan_mx(np, k, rows, n, epi)).is_some() {
                     self.mx_quantize(xp, rows * k, k, Some((self.ptr(codes), self.ptr(ascales))), 0);
                     let (ap0, bp) = (self.ptr(&w.buf), self.ptr(codes));
-                    let algo = p.algo;
                     let (asp0, bsp) = (self.ptr(wscales), self.ptr(ascales));
                     let biasp0 = bias.map(|b| self.ptr(b));
                     let ws = lt.workspace_ptr();
                     let (alpha, beta) = (1.0f32, 0.0f32);
-                    // Part i: weight rows [i·np, (i+1)·np) (codes contiguous, scales
-                    // whole 128-row tiles), output columns i·np.. of the n-wide y.
-                    let slice = |i: usize| (ap0 + (i * np * k) as u64, asp0 + (i * mx_scale_len(np, k)) as u64, yp + (i * np * 2) as u64, biasp0.map(|b| b + (i * np * 2) as u64));
-                    self.timed(
-                        || format!("gemm mxfp8{} n={n} k={k}{}{}", if epi == 2 { "+gelu" } else { "" }, if parts > 1 { format!(" (×{parts})") } else { String::new() }, if rows < 1024 { " (small)" } else { "" }),
-                        // SAFETY: the plan's layouts match these extents; the
-                        // scale tensors are VEC32_UE8M0 of the two operands;
-                        // bias holds n bf16 values; workspace is LT_WORKSPACE.
-                        || unsafe {
-                            use lt_sys::cublasLtMatmulDescAttributes_t as A;
-                            for i in 0..parts {
-                                let (ap, asp, dp, bias_p) = slice(i);
-                                lt_result::set_matmul_desc_attribute(p.desc, A::CUBLASLT_MATMUL_DESC_A_SCALE_POINTER, (&asp) as *const u64 as *const _, 8).expect("lt a scale");
-                                lt_result::set_matmul_desc_attribute(p.desc, A::CUBLASLT_MATMUL_DESC_B_SCALE_POINTER, (&bsp) as *const u64 as *const _, 8).expect("lt b scale");
-                                if let Some(bp) = bias_p {
-                                    lt_result::set_matmul_desc_attribute(p.desc, A::CUBLASLT_MATMUL_DESC_BIAS_POINTER, (&bp) as *const u64 as *const _, 8).expect("lt bias pointer");
-                                }
-                                lt_result::matmul(
-                                    lt.handle,
-                                    p.desc,
-                                    (&alpha) as *const f32 as *const _,
-                                    (&beta) as *const f32 as *const _,
-                                    ap as *const _,
-                                    p.a,
-                                    bp as *const _,
-                                    p.b,
-                                    dp as *const _,
-                                    p.c,
-                                    dp as *mut _,
-                                    p.c,
-                                    &algo,
-                                    ws as *mut _,
-                                    LT_WORKSPACE,
-                                    self.stream.cu_stream() as *mut _,
-                                )
-                                .expect("cublasLt fp8 matmul");
+                    // Part i of `parts`: weight rows [i·np, (i+1)·np) (codes contiguous,
+                    // scales whole 128-row tiles), output columns i·np.. of the n-wide y.
+                    let slice = |i: usize, np: usize| (ap0 + (i * np * k) as u64, asp0 + (i * mx_scale_len(np, k)) as u64, yp + (i * np * 2) as u64, biasp0.map(|b| b + (i * np * 2) as u64));
+                    // SAFETY (the closure): the plan's layouts match these extents;
+                    // the scale tensors are VEC32_UE8M0 of the two operands; bias
+                    // holds n bf16 values; workspace is LT_WORKSPACE.
+                    let run = |p: &LtPlan, parts: usize| unsafe {
+                        use lt_sys::cublasLtMatmulDescAttributes_t as A;
+                        let np = n / parts;
+                        for i in 0..parts {
+                            let (ap, asp, dp, bias_p) = slice(i, np);
+                            lt_result::set_matmul_desc_attribute(p.desc, A::CUBLASLT_MATMUL_DESC_A_SCALE_POINTER, (&asp) as *const u64 as *const _, 8).expect("lt a scale");
+                            lt_result::set_matmul_desc_attribute(p.desc, A::CUBLASLT_MATMUL_DESC_B_SCALE_POINTER, (&bsp) as *const u64 as *const _, 8).expect("lt b scale");
+                            if let Some(bp) = bias_p {
+                                lt_result::set_matmul_desc_attribute(p.desc, A::CUBLASLT_MATMUL_DESC_BIAS_POINTER, (&bp) as *const u64 as *const _, 8).expect("lt bias pointer");
                             }
-                        },
-                    );
-                    self.count_flops(rows, n, k);
-                    if !p.tuned {
-                        let (ap, asp, dp, bias_p) = slice(0);
-                        // SAFETY: the pointers of part 0, just used.
+                            lt_result::matmul(
+                                lt.handle,
+                                p.desc,
+                                (&alpha) as *const f32 as *const _,
+                                (&beta) as *const f32 as *const _,
+                                ap as *const _,
+                                p.a,
+                                bp as *const _,
+                                p.b,
+                                dp as *const _,
+                                p.c,
+                                dp as *mut _,
+                                p.c,
+                                &p.algo,
+                                ws as *mut _,
+                                LT_WORKSPACE,
+                                self.stream.cu_stream() as *mut _,
+                            )
+                            .expect("cublasLt fp8 matmul");
+                        }
+                    };
+                    // Tune a plan's candidates on part 0 of its own slicing.
+                    let tune = |this: &Self, p: &mut LtPlan, parts: usize| {
+                        let (ap, asp, dp, bias_p) = slice(0, n / parts);
+                        // SAFETY: the pointers of part 0, as `run` uses them.
                         unsafe {
                             use lt_sys::cublasLtMatmulDescAttributes_t as A;
                             lt_result::set_matmul_desc_attribute(p.desc, A::CUBLASLT_MATMUL_DESC_A_SCALE_POINTER, (&asp) as *const u64 as *const _, 8).expect("lt a scale");
+                            lt_result::set_matmul_desc_attribute(p.desc, A::CUBLASLT_MATMUL_DESC_B_SCALE_POINTER, (&bsp) as *const u64 as *const _, 8).expect("lt b scale");
                             if let Some(bp) = bias_p {
                                 lt_result::set_matmul_desc_attribute(p.desc, A::CUBLASLT_MATMUL_DESC_BIAS_POINTER, (&bp) as *const u64 as *const _, 8).expect("lt bias pointer");
                             }
                         }
-                        self.tune_mx(lt, p, ap, bp, dp);
+                        this.tune_mx(lt, p, ap, bp, dp);
+                    };
+                    {
+                        let p = plans.get_mut(&(np, k, rows, n, epi)).unwrap().as_mut().unwrap();
+                        self.timed(
+                            || format!("gemm mxfp8{} n={n} k={k}{}{}", if epi == 2 { "+gelu" } else { "" }, if parts > 1 { format!(" (×{parts})") } else { String::new() }, if rows < 1024 { " (small)" } else { "" }),
+                            || run(p, parts),
+                        );
+                        self.count_flops(rows, n, k);
+                        if !p.tuned {
+                            tune(self, p, parts);
+                        }
+                    }
+                    if self.mx_split_min.is_none() && splittable && !self.mx_choice.lock().unwrap().contains_key(&key) {
+                        // First call on this shape: the split plan, tuned, against the whole one.
+                        let sp = self.mx_split;
+                        let sk = (n / sp, k, rows, n, epi);
+                        if let Some(p) = plans.entry(sk).or_insert_with(|| lt.plan_mx(n / sp, k, rows, n, epi)).as_mut() {
+                            if !p.tuned {
+                                tune(self, p, sp);
+                            }
+                        }
+                        let mut choice = 1;
+                        if let (Some(Some(whole)), Some(Some(split))) = (plans.get(&(n, k, rows, n, epi)), plans.get(&sk)) {
+                            let time = |p: &LtPlan, parts: usize| {
+                                self.stream.synchronize().expect("sync");
+                                let t = std::time::Instant::now();
+                                run(p, parts);
+                                self.stream.synchronize().expect("sync");
+                                t.elapsed().as_secs_f64()
+                            };
+                            let (tw, ts) = (time(whole, 1), time(split, sp));
+                            if ts < tw {
+                                choice = sp;
+                            }
+                            if self.prof.is_some() || self.stall.is_some() {
+                                eprintln!("mxfp8 n={n} k={k} rows={rows}: whole {:.2} ms, ×{sp} {:.2} ms → {}", tw * 1e3, ts * 1e3, if choice > 1 { format!("×{sp}") } else { "whole".into() });
+                            }
+                        }
+                        self.mx_choice.lock().unwrap().insert(key, choice);
+                        if choice != parts {
+                            // Recompute y with the chosen plan (the timing runs left the last one's output).
+                            let p = plans.get(&(n / choice, k, rows, n, epi)).unwrap().as_ref().unwrap();
+                            run(p, choice);
+                        }
                     }
                     // The epilogue did the bias (and tanh-GELU when epi == 2); apply what is left.
                     let left = if act == Act::GeluTanh && epi == 2 { 0 } else { act_code };
