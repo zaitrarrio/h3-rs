@@ -144,9 +144,10 @@ pub struct Cuda {
     /// `prefetch_begin` synchronises it on the host before the bounce buffer
     /// is reused (every earlier prefetch's copies are behind it).
     last_fence: std::sync::Mutex<Option<Arc<cudarc::driver::CudaEvent>>>,
-    /// `H3_STREAM_STRESS=1`: a ~20 ms spin kernel on the copy stream ahead of
-    /// every prefetch's copies, so a missing or wrong fence wait shows up as
-    /// a wrong result in the streamed checks rather than passing by timing.
+    /// `H3_STREAM_STRESS=1`: every prefetch copy lands in zeroed memory after
+    /// a ~5 ms spin on the copy stream (`stress_delay`), so a missing or wrong
+    /// fence wait shows up as a wrong result in the streamed checks rather
+    /// than passing by timing or by address reuse.
     stream_stress: bool,
     /// `H3_STALL=1`: event pairs around every `prefetch_wait` on the compute
     /// stream and around every prefetch's copies on the copy stream, with the
@@ -639,8 +640,9 @@ impl Cuda {
         let st = self.ustream();
         let n = data.len().max(1);
         // SAFETY: fully overwritten below (or a one-word pad nothing reads).
-        let s = unsafe { st.alloc::<u16>(n) }.expect("cuda alloc");
+        let s = if self.stream_stress { st.alloc_zeros::<u16>(n).expect("cuda alloc") } else { unsafe { st.alloc::<u16>(n) }.expect("cuda alloc") };
         if !data.is_empty() {
+            self.stress_delay(st);
             let (p, _g) = s.device_ptr(st);
             // SAFETY: `u16` reinterpreted as its bytes.
             let bytes = unsafe { std::slice::from_raw_parts(data.as_ptr() as *const u8, data.len() * 2) };
@@ -685,6 +687,23 @@ impl Cuda {
     /// An event with timing enabled (cudarc's default disables it), recorded on `st`.
     fn timed_event(&self, st: &Arc<CudaStream>) -> cudarc::driver::CudaEvent {
         st.record_event(Some(cudarc::driver::sys::CUevent_flags::CU_EVENT_DEFAULT)).expect("event")
+    }
+
+    /// `H3_STREAM_STRESS=1`, during a prefetch: the destination is already
+    /// zero (allocated zeroed), and a ~5 ms spin on the upload stream goes
+    /// ahead of the copy, so a compute stream that does not wait on this
+    /// prefetch's fence reads zeros, deterministically, instead of whatever
+    /// the stream-ordered allocator left at that address (a stale fence had
+    /// passed the streamed tiny-DiT checks that way).
+    fn stress_delay(&self, st: &Arc<CudaStream>) {
+        if !(self.stream_stress && self.staging.load(std::sync::atomic::Ordering::Relaxed)) {
+            return;
+        }
+        let mut lb = st.launch_builder(&self.f.spin);
+        let ns: i64 = 5_000_000;
+        lb.arg(&ns);
+        // SAFETY: a kernel with one scalar argument and no memory access.
+        unsafe { lb.launch(LaunchConfig { grid_dim: (1, 1, 1), block_dim: (1, 1, 1), shared_mem_bytes: 0 }) }.expect("spin");
     }
 
     /// Bytes of an upload issued during a prefetch, for the stall summary.
@@ -745,6 +764,7 @@ impl Cuda {
         // Zeroed so an odd trailing byte (or the empty pad) reads as zero.
         let s = st.alloc_zeros::<u16>(words).expect("cuda alloc");
         if !bytes.is_empty() {
+            self.stress_delay(st);
             let (p, _g) = s.device_ptr(st);
             let (i0, i1) = self.pinned_part(bytes);
             if i1 > i0 {
@@ -1230,13 +1250,6 @@ impl Backend for Cuda {
             // Recorded behind the release wait already queued on the copy
             // stream, so it marks when this prefetch's copies actually start.
             st.open = Some(self.timed_event(&self.copy));
-        }
-        if self.stream_stress {
-            let mut lb = self.copy.launch_builder(&self.f.spin);
-            let ns: i64 = 20_000_000;
-            lb.arg(&ns);
-            // SAFETY: a kernel with one scalar argument and no memory access.
-            unsafe { lb.launch(LaunchConfig { grid_dim: (1, 1, 1), block_dim: (1, 1, 1), shared_mem_bytes: 0 }) }.expect("spin");
         }
         self.staging.store(true, std::sync::atomic::Ordering::Relaxed);
     }
