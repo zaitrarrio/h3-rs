@@ -24,7 +24,13 @@ closing list. Two changes measured on one more Vast 5090:
 
 ## Box
 
-BOX_TBD
+Vast offer 43110775, instance 60656633: RTX 5090 at a **575 W** limit,
+PCIe 5 ×16, **driver 615.71.09** (newer than the 595.91.07 of every
+earlier 5090 box; kernel numbers may not compare exactly), AMD EPYC 9654,
+weights pulled in 590 s with no lost transfer, V2 and base-25 tables
+built on the box. `h3 check --backend cuda`: **168 / 168**, plain and
+under `H3_STREAM_STRESS=1`; the fifteen dense-plan cases at 2–9e-3 of
+the reference (`check.log`).
 
 ## Results
 
