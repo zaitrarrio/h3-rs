@@ -377,6 +377,12 @@ pub trait Backend {
         let f: Vec<f32> = data.iter().map(|&b| f32::from_bits((b as u32) << 16)).collect();
         self.weight(&f, rows, cols)
     }
+    /// Whether [`Backend::weight`] stores bf16 anyway, so a streamed block
+    /// loses nothing by keeping its host copy as bf16 bits. False for the
+    /// f32 reference (its streamed and resident paths stay bit-identical).
+    fn bf16_weights(&self) -> bool {
+        false
+    }
     /// Int8 weight-only matrix for [`Backend::linear`]; must equal `linear`
     /// with `weight(&q.dequantize())` up to the backend's activation rounding.
     fn weight_q8(&self, q: &Q8) -> Self::Weight;

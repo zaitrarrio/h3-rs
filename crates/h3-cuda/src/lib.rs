@@ -1158,6 +1158,10 @@ impl Backend for Cuda {
         CuWeight { buf: self.upload(data), rows, cols, quant: None }
     }
 
+    fn bf16_weights(&self) -> bool {
+        true
+    }
+
     fn weight_bf16(&self, data: &[u16], rows: usize, cols: usize) -> CuWeight {
         assert_eq!(data.len(), rows * cols);
         // SAFETY: the bf16 bits reinterpreted as their bytes; `upload_bytes` keeps the

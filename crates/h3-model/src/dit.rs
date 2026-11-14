@@ -333,7 +333,9 @@ impl<B: Backend> H3Dit<B> {
                 // A streamed bf16 block used to be kept as f32 and converted on
                 // the host every step, then copied synchronously from pageable
                 // memory: on a 5090 that was ~0.3 s per edge block per step.
-                h.to_bf16();
+                if be.bf16_weights() {
+                    h.to_bf16();
+                }
                 h.pin(be, &mut pins);
                 Residency::Host(h)
             } else {
