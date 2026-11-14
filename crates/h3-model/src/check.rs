@@ -833,7 +833,7 @@ fn dit_forward<B: Backend>(be: &B, attention: Attention, quant: WeightQuant, gat
 fn dit_check<B: Backend>(p: &mut Pair<'_, B>, attention: Attention, quant: WeightQuant, gate: bool) {
     let got = dit_forward(p.be, attention, quant, gate, false);
     let want = dit_forward(&Cpu, attention, quant, gate, false);
-    p.record(format!("dit tiny {attention:?} {quant}"), got, want.clone());
+    p.record(format!("dit tiny {attention:?} {quant}"), got.clone(), want.clone());
     // Streamed blocks (`--stream-blocks`): the same forward with every block's
     // weights uploaded per step through the backend's prefetch path.
     let streamed = dit_forward(p.be, attention, quant, gate, true);
