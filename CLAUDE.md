@@ -313,7 +313,13 @@ State and invariants only; the reasoning is in `docs/design.md`.
   per-region top-k with ties to the lower index; the gate branch is
   `softmax(all tiles) · V̄ · gate`; reference videos are regions at keep rate
   0.1 (Omni), continuation clips stay dense. The CPU oracle is
-  `h3_cpu::vsa_reference`.
+  `h3_cpu::vsa_reference`. A plan that keeps every tile (`TilePlan::
+  is_dense`: dense layers, the dense first steps of a run) means dense
+  attention over the natural order, with the dense 8-bit recipes when
+  the spec asks, plus `pooled[tile(tok)] · gate`; every backend runs its
+  dense kernel there (CUDA `fw_vsa_gate_add`, WebGPU elementwise op 20),
+  the all-tiles fine stage having cost ~2× for the same softmax
+  (`docs/runs/2026-11-14-vast-5090-dense-steps`).
 - Parity fixtures (`scripts/reference/make_fixtures.py`) have not been
   generated: the container had no PyTorch. The parity tests skip without
   them and must be run before any parity claim.
