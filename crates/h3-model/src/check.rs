@@ -417,6 +417,13 @@ impl<B: Backend> Pair<'_, B> {
         self.record(name, got, want);
     }
 
+    /// Two device outputs that must be bit-for-bit the same (a tolerance of
+    /// 1e-6 covers nothing but the metric's own epsilon).
+    fn record_exact(&mut self, name: impl Into<String>, got: Vec<f32>, want: Vec<f32>) {
+        let e = rel(&got, &want);
+        self.out.push(CheckResult { name: name.into(), rel_err: e, ok: e <= 1e-6 });
+    }
+
     /// An op whose reference comes with a per-element slack (the FP8 P·V
     /// oracles): `want` is what the CPU backend computes for the same call.
     fn op_slack(&mut self, name: impl Into<String>, f: impl Fn(&dyn ErasedBackend) -> Vec<f32>, want: Vec<f32>, slack: Vec<f32>) {
@@ -830,7 +837,13 @@ fn dit_check<B: Backend>(p: &mut Pair<'_, B>, attention: Attention, quant: Weigh
     // Streamed blocks (`--stream-blocks`): the same forward with every block's
     // weights uploaded per step through the backend's prefetch path.
     let streamed = dit_forward(p.be, attention, quant, gate, true);
-    p.record(format!("dit tiny {attention:?} {quant} streamed"), streamed, want);
+    p.record(format!("dit tiny {attention:?} {quant} streamed"), streamed.clone(), want);
+    // The streamed forward runs the same kernels on the same device weights as
+    // the resident one, so the two must agree exactly: a block computed before
+    // its weights landed (a fence bug) read as 2e-2 against the CPU on an Ada,
+    // inside the CUDA tolerance, but never as zero here. `H3_STREAM_STRESS=1`
+    // makes such a bug deterministic.
+    p.record_exact(format!("dit tiny {attention:?} {quant} streamed == resident"), streamed, got);
 }
 
 fn vae_check<B: Backend>(p: &mut Pair<'_, B>) {
