@@ -162,14 +162,27 @@ late enough for the copies to be done; with fast uploads (the bf16 path,
 or all blocks MXFP8) the race was live: the all-blocks clips of this
 round with their "anime" look and the depth-1 bf16 clips all carry the
 same first-frame luma signature, and two depth-1 runs reproduced the
-same wrong clip bit for bit. Fixed in FENCE_COMMIT (each fence popped
-once; the host sync takes the newest fence by its own handle), with
-`H3_STREAM_STRESS=1` adding a 20 ms spin on the copy stream ahead of each
-prefetch so the streamed tiny-DiT checks fail on such a bug instead of
-passing by timing; the timing of the depth-1 rows above stands (the
-depth-2 run, correct, took the same 6.33 s), **the all-blocks quality
-claims of this round do not**, and the edge-block question is re-run on
-the second box (REBOX_TBD).
+same wrong clip bit for bit. Fixed in c0a807e (each fence popped
+once; the host sync takes the newest fence by its own handle). The
+timing of the depth-1 rows above stands (the depth-2 run, correct, took
+the same 6.33 s); **the all-blocks quality claims of this round do
+not**, and the edge-block question is re-run on the second box
+(REBOX_TBD).
+
+Making the checker see such a bug took two steps (`check-ada/`, RTX
+2000 Ada pods `5bjtum4fm1o6bw` and before it `fqluhaxbg03dhg`,
+`dn0o831opl8rum`): a spin on the copy stream ahead of each prefetch
+changed nothing, because the stream-ordered allocator handed every
+block the address a correct earlier forward had left its weights at;
+`H3_STREAM_STRESS=1` now zeroes each prefetch's destination, spins
+~5 ms, then copies (the early read is zeros), and the checker compares
+every streamed tiny-DiT forward with its resident twin **exactly**
+(`… streamed == resident`, 153 cases): against the CPU the buggy build
+had read 2.1–2.5e-2, inside the 3e-2 CUDA tolerance. With that, a
+one-off build with the FIFO bug re-applied fails all ten streamed cases
+under stress (`check-bug-stress.log`, 2.1–2.5e-2 against resident) and
+still passes without it; the fixed binary passes 153 / 153 plain, under
+stress, and under stress at depth 2.
 
 ## Item 5: ComfyUI's block-sparse rows, and V2 at its budget
 
