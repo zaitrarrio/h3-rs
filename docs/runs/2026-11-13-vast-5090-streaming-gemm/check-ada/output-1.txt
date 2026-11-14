@@ -96,6 +96,6 @@ all 153 checks pass (tolerance 3e-2)
 + echo 'check done; terminating pod 5bjtum4fm1o6bw'
 check done; terminating pod 5bjtum4fm1o6bw
 + terminate
-+ curl -sS -X DELETE -A h3-rs-pod/1 -H 'Authorization: Bearer rpa_U64DDKC2N8WJQC4UIVBEBMOTHP2771V1A6X2NOXH16xyaf' https://rest.runpod.io/v1/pods/5bjtum4fm1o6bw
++ curl -sS -X DELETE -A h3-rs-pod/1 -H 'Authorization: Bearer REDACTED' https://rest.runpod.io/v1/pods/5bjtum4fm1o6bw
 exit 0
 
