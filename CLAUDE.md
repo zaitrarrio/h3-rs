@@ -336,6 +336,14 @@ State and invariants only; the reasoning is in `docs/design.md`.
 - `h3 serve` binds 127.0.0.1, answers CORS for one `--allow-origin` only, and
   rejects non-JSON or foreign-origin generate requests; `web/demo.html` is
   compiled into the binary (rebuild after editing).
+- Diagnostic switches (`H3_PROFILE`, `H3_STALL`, `H3_TRACE`,
+  `H3_STREAM_STRESS`, `H3_CUDA_LT_NTH`, …) must leave a clip's bytes alone
+  apart from a pinned candidate: the plain-FP8 timing probe (first call per
+  shape under `H3_PROFILE` / `H3_STALL`) wrote its unscaled output into the
+  model and every diagnostic clip of a Server Edition round was garbage
+  while the checker passed (`docs/runs/2026-11-14-runpod-6000s-probe-bug`).
+  A GPU round runs `h3 check --backend cuda` plain and under each switch,
+  and a clip with and without the switch must be byte-identical.
 - Tests: `cargo test --workspace` (the WebGPU suite needs a Vulkan driver:
   `mesa-vulkan-drivers`, `VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json`,
   `H3_ALLOW_SOFTWARE=1`); the CUDA compile test needs libnvrtc on

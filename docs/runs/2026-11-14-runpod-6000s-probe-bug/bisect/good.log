@@ -1,0 +1,19 @@
++ timeout 1500 /root/bins/b1109 generate --backend cuda --seed 1 --width 1344 --height 768 --frames 124 --prompt 'A red fox trots through fresh snow at dawn in a quiet pine forest; snow crunches softly under its paws and a light wind moves through the branches.' --out /root/out/good.y4m --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --tables /root/v2.tables
+cuda NVIDIA RTX PRO 6000 Blackwell Server Edition (sm_120)
+load 45.6s
+prompt: 33 rows in 68.7s
+step 1/8 4.83s
+step 2/8 4.65s
+step 3/8 4.66s
+step 4/8 4.67s
+step 5/8 4.68s
+step 6/8 4.69s
+step 7/8 4.69s
+step 8/8 4.70s
+run 0: total 44.05s  prepare 0.24s  adaln 0.00s  denoise 37.57s (["4.83", "4.65", "4.66", "4.67", "4.68", "4.69", "4.69", "4.70"])  decode 5.96s  audio 0.19s
+wrote /root/out/good.y4m (124 frames 1344x768) and /root/out/good.wav
+mux: ffmpeg -i /root/out/good.y4m -i /root/out/good.wav -c:v libx264 -pix_fmt yuv420p -c:a aac /root/out/good.mp4
+
+real	2m50.029s
+user	1m55.190s
+sys	1m17.325s

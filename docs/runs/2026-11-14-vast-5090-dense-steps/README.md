@@ -54,7 +54,11 @@ dense steps lands **on ComfyUI's row to within 1 %** (130.9 against
 previous box, and the three-dense-steps row 5 % behind. V2 at ComfyUI's
 budget is 44.7 s, 1 % inside its 45.2 s sampler, but still behind V2 at
 its own budget (42.2 s): two dense steps at 8.1 s cost more than six
-sparse steps save, so keep 20 % stays the recipe. Clips keep the scene
+sparse steps save, so keep 20 % stays the recipe. The grey patch in the
+top-left corner of frame 0 of the V2 grids is one decoder GEMM call that
+returned the plain-FP8 timing probe's output (the 16384 × 2048 shape kept
+whole; fixed in f740ec6 / f4934ac, `2026-11-14-runpod-6000s-probe-bug`);
+the DiT's shapes split here, so the denoise was untouched. Clips keep the scene
 (`*.grid.png`); the PSNRs are the usual bands between attention budgets.
 
 ### Plain FP8 against MXFP8 (item 2)
