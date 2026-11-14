@@ -40,16 +40,21 @@ resident recipe needs more than 32 GB):
 
 | 1344×768, seed 1 | ComfyUI total / sampler | h3-rs denoise + decode / denoise |
 |---|---|---|
-| FastH3-V2, 8 steps, 124 frames | 54.1 s / 45.2 s | 58.1 s / 52.0 s; **55.3 s / 49.2 s** with `--pv8` |
+| FastH3-V2, 8 steps, 124 frames | 54.1 s / 45.2 s | **48.9 s / 42.6 s** (`--pv8`; 45.5 / 39.2 s with every block MXFP8) |
 | FastH3 v1, 4 steps, 124 frames | 33.3 s / 23.9 s | 30.1 s / 24.0 s |
 | FastH3-V2, 362 frames (15 s) | 213.6 s / 185.6 s | 208.9 s / 190.8 s |
-| raw H3, 25 euler steps, dense | 181.7 s / 169.0 s | **203.5 s / 197.5 s** (`--qk8 --pv8`; 244 s `--qk8`, 328 s bf16) |
+| raw H3, 25 euler steps, dense | 181.7 s / 169.0 s | **199.4 s / 193.0 s** (`--qk8 --pv8`; 189.9 / 183.5 s with every block MXFP8; 328 s bf16 attention) |
 
-The dense row is INT8 Q·Kᵀ + FP8 P·V attention (`--qk8 --pv8`,
-SageAttention2's recipe) against ComfyUI's Kitchen int8: the attention
-call is 82 ms, the ~80 ms ComfyUI's step implies, and the remaining
-1.15–1.27× is on the GEMM side (`docs/runs/2026-11-13-runpod-5090-fp8-pv`;
-the two numbers are the two 5090 pod kinds, 8 % apart on identical code).
+Both rows run INT8 Q·Kᵀ + FP8 P·V attention (`--qk8 --pv8`,
+SageAttention2's recipe) against ComfyUI's Kitchen int8, with the
+blocks streamed from page-locked host memory and the MXFP8 GEMMs
+row-split where the card prefers it; the V2 recipe is ahead of
+ComfyUI's row on both of the page's numbers, the dense base 1.13×
+behind on the step (the attention call is 82 ms, what ComfyUI's step
+implies; the rest is the GEMM side and the recipe's five bf16 edge
+blocks). Measured on a 600 W RTX 5090 of the faster kind, clips byte
+for byte the released binary's (`docs/runs/2026-11-13-vast-5090-streaming-gemm`);
+the slower pod kind is ~8 % behind on everything.
 
 The MLX recipes of the cookbook use the same checkpoints; on Apple GPUs the
 WebGPU backend runs them through Metal.

@@ -45,7 +45,17 @@ State and invariants only; the reasoning is in `docs/design.md`.
   its bf16 base step is 13.9 s, pod-3 numbers in parentheses): V2 forward
   6.46 s (6.11), denoise 52.0 s (49.2) + decode 6.6 s against 54.1 /
   45.2 s; dense base step 8.66 s (7.84) against 6.8 s, the attention
-  call 82 ms, 52 % of the step; the remaining dense gap is the GEMM side.
+  call 82 ms, 52 % of the step. **With the streaming fixes and the QKV
+  split** (`docs/runs/2026-11-13-vast-5090-streaming-gemm`, a 600 W
+  Vast 5090 of the faster kind, driver 595.91.07, clips byte-identical
+  to the released binary's): V2 forward 6.26 → **5.32 s**, denoise
+  **42.6 s** + decode 6.3 s = **48.9 s**, ahead of ComfyUI's 45.2 s
+  sampler / 54.1 s total; every block MXFP8 as well 4.9 s per forward,
+  39.2 / 45.5 s (the usual 22 dB band, off by default); dense base step
+  8.41 → **7.72 s** against 6.8 s (7.34 s with every block MXFP8), the
+  25-step denoise 193 s against the 169 s sampler. The GPU now idles
+  ~0.2 s per V2 forward; what remains against ComfyUI's dense step is
+  the MXFP8 GEMMs (565 TFLOP/s) and the five bf16 edge blocks.
 - MXFP8 (`--weights mxfp8`, `quant::Mxfp8`): W8A8, E4M3 codes with one E8M0
   scale per 32 input columns in cuBLASLt's `VEC32_UE8M0` swizzle
   (`mx_scale_offset`, rows padded to 128, groups to 4), the E4M3 / E8M0
@@ -57,10 +67,14 @@ State and invariants only; the reasoning is in `docs/design.md`.
   epilogue. The first call on each shape times cuBLASLt's candidates
   (`H3_CUDA_LT_NTH=i` forces one); the `n=28672` FFN-up shape runs at 355
   TFLOP/s with every candidate (the others at ~750), so GEMMs with
-  `n ≥ 24576` run as two row-slice GEMMs (`H3_CUDA_MX_SPLIT=p`,
-  `H3_CUDA_MX_SPLIT_MIN=n`): 32.9 → 15.1 ms, the forward 110 → 96.5 ms per
-  block (4.83 s) on the 600 W Server Edition; splitting the QKV shape gains
-  nothing. Stored form: `h3 quantize --weights mxfp8 [--skip-adaln]` writes
+  large shapes may run as two row-slice GEMMs (`H3_CUDA_MX_SPLIT=p`): on
+  the Server Edition the FFN-up 32.9 → 15.1 ms, the forward 110 →
+  96.5 ms per block (4.83 s), the QKV shape no gain; on an RTX 5090 the
+  QKV shape 23.0 → 13.2 ms too (V2 forward 5.70 → 5.32 s). The slices
+  round like the whole GEMM (candidate pinned, clips byte-identical), so
+  each shape's first call times whole against split, both tuned, and
+  keeps the faster (`mx_choice`; `H3_CUDA_MX_SPLIT_MIN=n` forces the
+  rule). On the 5090 it picks the split for the QKV and FFN-up shapes (22.2 → 12.5 ms, 31.1 → 17.7 ms) and only with a 10 % margin: a 0.2 ms shape that measured the same either way split in one run and not in another, and its slices do not round like its whole GEMM. Stored form: `h3 quantize --weights mxfp8 [--skip-adaln]` writes
   `<key>.weight.mx8` (E4M3 codes) + `.mxs` (swizzled scales), edges plain
   (`for_layer_key`); the V2 tree becomes 25.6 GB in 117 s and loads in 104 s
   against 202 s for bf16. `--decoder-weights mxfp8` puts the video

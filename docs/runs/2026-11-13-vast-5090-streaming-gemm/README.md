@@ -255,6 +255,30 @@ attention. Its profile is attention 4.1 s (82–91 ms × 50), MXFP8 GEMMs
 what is left against ComfyUI is the GEMM side and the edge blocks,
 not the attention and not the host any more.
 
+### The split as a per-shape choice
+
+Since the split is pure speed on the shapes that matter, the backend now
+decides it per shape on the first call: whole and split, each with its
+tuned candidate, timed back to back (`mx_choice`; `H3_CUDA_MX_SPLIT_MIN=n`
+still forces the old rule). On this box (`box2/v2-auto*.log`,
+`base2-auto.log`, the decision lines under `H3_STALL=1`):
+
+| shape (n × k, 38 172 rows) | whole | ×2 | choice |
+|---|---|---|---|
+| QKV 21504 × 5376 | 22.2 ms | **12.5 ms** | ×2 |
+| FFN-up 28672 × 5376 | 31.1 ms | **17.7 ms** | ×2 |
+| 16384 × 2048, 1797 rows | 0.21 ms | 0.20 ms | ×2 once, whole once |
+
+The forward lands at 5.31–5.38 s, the forced split's number. The first
+version took any speed-up, and the 0.2 ms shape, which measures the
+same either way, then split in one run and not in another; its split
+does **not** round like its whole GEMM (the clip differed from the
+reference), where the two big shapes' splits do. The decision now needs
+a 10 % win, which on this card is exactly the forced-split
+configuration measured above (byte-identical to the released path);
+that margin version was built after the box was gone and has not run
+at full size itself.
+
 ## Item 5: ComfyUI's block-sparse rows, and V2 at its budget
 
 Run before the bf16 fix below, so every step here still carries the
@@ -279,3 +303,29 @@ this box's 530 TFLOP/s) plus the stall were most of it; the fine stage
 at 10 % is a small part of the step.
 
 RESULTS_TBD
+
+## What the round changed
+
+- `HostWeight::Bf16` / `Backend::weight_bf16` / `Backend::bf16_weights`
+  (6fbed45, 64bb520): streamed native-precision blocks are bf16 bytes
+  on the host, page-locked, uploaded as DMA. The 1.6–1.8 s per V2
+  forward that was in no kernel is gone (0.2 s left).
+- The fence FIFO bug of 3eb1d82 fixed (c0a807e); `H3_STREAM_STRESS=1`
+  and the exact `streamed == resident` cases (153 checks) make such a
+  bug fail the checker (shown on an Ada with a one-off buggy build).
+- `H3_STALL=1`: per-stage prefetch accounting and an h2d probe.
+- The MXFP8 row split decided per shape on first use (9bb1a3f + the
+  margin), `H3_CUDA_MX_SPLIT_MIN=n` to force.
+- Numbers on a 600 W 5090 against ComfyUI's page: V2 42.6 s denoise /
+  48.9 s with decode against 45.2 / 54.1 s (ahead); the dense base
+  7.72 s per step against 6.8 s (1.13×, from 1.15–1.27× and 2.0× in
+  bf16). Every block MXFP8 (off by default, 22 dB band): 39.2 / 45.5 s
+  and 7.34 s.
+- Open: route the dense first steps of a VSA run through the dense
+  INT8+FP8 kernel (V2 at ComfyUI's budget would then be ~39 s); the
+  GEMM side against ComfyUI's int8 (565 TFLOP/s here).
+
+Cost: two Vast 5090 boxes (Texas 54227877 ≈ 3.5 h at $0.80/h, UAE
+60356253 ≈ 2 h at $0.67/h), five RunPod Ada kernel-check pods at
+$0.24–0.69/h for ~10 min each: about $6.5.
+

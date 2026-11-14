@@ -1524,7 +1524,12 @@ impl Backend for Cuda {
                                 t.elapsed().as_secs_f64()
                             };
                             let (tw, ts) = (time(whole, 1), time(split, sp));
-                            if ts < tw {
+                            // Only a clear win: the two big shapes split 1.75× faster on a
+                            // 5090, while a 0.2 ms shape measured the same either way and a
+                            // noise-driven split there changed the clip's bits (the slices'
+                            // rounding matches the whole GEMM's only when cuBLASLt picks
+                            // the same kind of kernel for both).
+                            if ts < tw * 0.9 {
                                 choice = sp;
                             }
                             if self.prof.is_some() || self.stall.is_some() {
