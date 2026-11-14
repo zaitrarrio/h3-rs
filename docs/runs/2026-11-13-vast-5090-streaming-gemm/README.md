@@ -107,4 +107,27 @@ f32-host edge blocks (V2 8.24 s against 7.92 s; base 10.42 against
 copies before issuing the next, so the pageable edge-block copies held
 the host longer. Re-measured with the bf16 path below.
 
+## Item 5: ComfyUI's block-sparse rows, and V2 at its budget
+
+Run before the bf16 fix below, so every step here still carries the
+edge blocks' upload stall; the ratios between rows are what to read.
+
+| 25 euler steps, raw H3, keep 10 % of key tiles | ComfyUI total / sampler | h3-rs denoise + decode / denoise | per step: dense / sparse | PSNR vs the dense 25-step clip |
+|---|---|---|---|---|
+| 5 dense first steps (`--attention vsa --vsa-sparsity 0.9 --dense-first-steps 5 --pv8`) | 131.4 / 122.7 s | 204.6 / 197.6 s | 12.0 s / 6.85 s | 21.4 dB |
+| 3 dense first steps | 118.0 / 109.6 s | 195.4 / 188.6 s | 12.1 s / 6.9 s | 21.0 dB |
+| V2, 8 steps, first 2 dense (`--vsa-sparsity 0.9 --dense-first-steps 2`) | 54.1 / 45.2 s | 76.9 / 69.9 s | 12.5–13.3 s / 7.35 s | 18.4 dB vs our V2 clip |
+
+Both base clips keep the scene (`budget/*.grid.png`). Two things stand
+out. The "dense" first steps of a VSA run go through the all-tiles VSA
+state (the gate branch needs it), i.e. the bf16 fine kernel over every
+tile, at 12–13 s against the dense INT8+FP8 kernel's 10.1 s step on the
+same box; routing those steps through the dense attention kernel (plus
+the gate branch) is the cheap fix and would put V2 at ComfyUI's budget
+ahead of V2 at ours (2 × ~8 + 6 × 7.35 = 60 s against 63.8 s here). And
+at keep 10 % our sparse step is 6.85 s where ComfyUI's row implies
+~4.4 s ((122.7 − 5 × 6.8) / 20): the GEMM side (≈ 2.8 s per step at
+this box's 530 TFLOP/s) plus the stall were most of it; the fine stage
+at 10 % is a small part of the step.
+
 RESULTS_TBD
