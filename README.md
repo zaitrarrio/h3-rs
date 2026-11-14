@@ -29,7 +29,8 @@ table has produced a coherent clip from the released weights. The RunPod
 volume now holds every variant's weights (V2, Omni and the Trim NVFP4 file
 added 2026-11-12, plus a stored MXFP8 V2 and the AdaLN tables), and the
 fastest recipe reproduces from it: V2 denoise 37.9 s, decode 5.8 s,
-44.3 s after load on a Server Edition; Omni Ref2VA 8 × 14.2 s and Trim
+44.3 s after load on a Server Edition (36.6 / 5.7 / 42.9 s with FP8 P·V,
+`docs/runs/2026-11-14-runpod-6000s-probe-bug`); Omni Ref2VA 8 × 14.2 s and Trim
 NVFP4 8 × 5.5 s there (`docs/runs/2026-11-12-runpod-pro6000-v2-omni-trim`).
 
 On a 32 GB RTX 5090 (RunPod, 600 W) against ComfyUI's H3 template as the
@@ -85,13 +86,13 @@ power-capped at ~1.4 GHz, not its 3.09 GHz boost.)
 On the **RTX PRO 6000 Server Edition (600 W)**, fastvideo-rs's gold GPU
 (`docs/runs/2026-11-07-vast-pro6000-server-mxfp8`), the same V2 clip:
 
-| | h3-rs bf16 | h3-rs stored `mxfp8` + `--decoder-weights mxfp8` | + `--vsa-qk8` | fastvideo-rs (MXFP8) |
-|---|---|---|---|---|
-| denoise | 50.0 s | **38.9 s** | **37.2 s** | 45.8 s |
-| video decode | 8.2 s | **5.6 s** (51 dB against the bf16 decode) | 5.8 s | 4.7 s MXFP8 / 6.3 s bf16 |
-| total after load | 58.7 s | **45.0 s** | **43.6 s** | |
-| load | 76 s | **37 s** (25.6 GB checkpoint) | 84 s (quantized at load) | |
-| peak device memory | 56.2 GB | **37.9 GB** | | 61.0 GiB |
+| | h3-rs bf16 | h3-rs stored `mxfp8` + `--decoder-weights mxfp8` | + `--vsa-qk8` | + `--pv8` (2026-11-14, RunPod's Server Edition) | fastvideo-rs (MXFP8) |
+|---|---|---|---|---|---|
+| denoise | 50.0 s | **38.9 s** | **37.2 s** | **36.6 s** (37.1 s streamed) | 45.8 s |
+| video decode | 8.2 s | **5.6 s** (51 dB against the bf16 decode) | 5.8 s | 5.7 s | 4.7 s MXFP8 / 6.3 s bf16 |
+| total after load | 58.7 s | **45.0 s** | **43.6 s** | **42.9 s** | |
+| load | 76 s | **37 s** (25.6 GB checkpoint) | 84 s (quantized at load) | 31 s (stored, staged) | |
+| peak device memory | 56.2 GB | **37.9 GB** | | 39.6 GB (18.7 GB streamed) | 61.0 GiB |
 
 `--vsa-qk8` runs the VSA fine stage's Q·Kᵀ in INT8 (SageAttention's
 recipe; `docs/runs/2026-11-08-vast-pro6000-server-variants`): the fine

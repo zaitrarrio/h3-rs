@@ -91,7 +91,11 @@ State and invariants only; the reasoning is in `docs/design.md`.
   Edition (`docs/runs/2026-11-08-vast-pro6000-server-best`, the
   comparable card: bf16 bench 6.24–6.28 s per forward): **denoise 38.9 s,
   decode 5.6 s, 45.0 s after load, 37.9 GB** against bf16's 50.0 / 8.2 /
-  58.7 s and fastvideo-rs's 45.8 s denoise. `H3_MXFP8_ALL_BLOCKS=1`
+  58.7 s and fastvideo-rs's 45.8 s denoise; with `--vsa-qk8 --pv8` and the
+  tables, on RunPod's Server Edition from the staged volume
+  (`docs/runs/2026-11-14-runpod-6000s-probe-bug`, `fixcheck/`): **denoise
+  36.6 s, decode 5.7 s, 42.9 s after load, 39.6 GB resident** (streamed
+  37.1 s at 18.7 GB, byte-identical). `H3_MXFP8_ALL_BLOCKS=1`
   quantizes the edge blocks too (−1.2 s, same PSNR band; off: the recipe's
   edges are calibrated). The cuBLASLt candidate timing makes two runs
   differ at the rounding level (`H3_CUDA_LT_NTH=i` pins it). Measure on a
@@ -122,7 +126,9 @@ State and invariants only; the reasoning is in `docs/design.md`.
   1.08 ms), the MXFP8 forward 4.79 → 4.54 s, the V2 clip denoise 39.2 →
   **37.2 s** (total after load 45.4 → 43.6 s); 17.5 dB against bf16
   attention, the MXFP8-vs-bf16 band, same scene, no artifacts
-  (`docs/runs/2026-11-08-vast-pro6000-server-variants`). Opt-in like
+  (`docs/runs/2026-11-08-vast-pro6000-server-variants`); with FP8 P·V as
+  well the fine stage is 24.1 ms per call and the stored-file clip
+  37.8 → 36.6 s denoise (`…-11-14-runpod-6000s-probe-bug`). Opt-in like
   `--weights mxfp8`. The fine stage is instruction-issue and occupancy bound,
   not memory bound: sharing gathers across tiles and halving shared-memory
   reads gained nothing, the instruction diet (hardware bf16 cvt, scale in

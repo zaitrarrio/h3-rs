@@ -1,0 +1,23 @@
++ timeout 1500 /root/bins/fix generate --backend cuda --seed 1 --width 1344 --height 768 --frames 124 --prompt 'A red fox trots through fresh snow at dawn in a quiet pine forest; snow crunches softly under its paws and a light wind moves through the branches.' --out /root/out/best-stall.y4m --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --tables /root/v2.tables --pv8
+h2d probe (256 MB): pageable 40.1 GB/s pinned 57.9 GB/s
+cuda NVIDIA RTX PRO 6000 Blackwell Server Edition (sm_120)
+load 27.8s
+prompt: 33 rows in 73.1s
+mxfp8 n=21504 k=5376 rows=37743: whole 12.44 ms, ×2 12.40 ms → whole; plain fp8 (per-tensor scale) 11.76 ms
+mxfp8 n=28672 k=5376 rows=37743: whole 32.63 ms, ×2 15.48 ms → ×2; plain fp8 (per-tensor scale) 15.59 ms
+step 1/8 5.21s
+step 2/8 4.48s
+step 3/8 4.50s
+step 4/8 4.50s
+step 5/8 4.51s
+step 6/8 4.52s
+step 7/8 4.53s
+step 8/8 4.53s
+mxfp8 n=16384 k=2048 rows=1797: whole 0.20 ms, ×2 0.22 ms → whole; plain fp8 (per-tensor scale) 0.18 ms
+run 0: total 43.37s  prepare 0.29s  adaln 0.00s  denoise 36.79s (["5.21", "4.48", "4.50", "4.50", "4.51", "4.52", "4.53", "4.53"])  decode 6.02s  audio 0.19s
+wrote /root/out/best-stall.y4m (124 frames 1344x768) and /root/out/best-stall.wav
+mux: ffmpeg -i /root/out/best-stall.y4m -i /root/out/best-stall.wav -c:v libx264 -pix_fmt yuv420p -c:a aac /root/out/best-stall.mp4
+
+real	2m32.086s
+user	1m42.683s
+sys	1m18.097s

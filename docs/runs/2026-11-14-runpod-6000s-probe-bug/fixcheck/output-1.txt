@@ -1,0 +1,475 @@
++ O=/root/out
++ mkdir -p /root/out /root/bins
++ cd /root
++ nvidia-smi --query-gpu=name,driver_version,power.limit,memory.total,clocks.max.sm --format=csv,noheader
+NVIDIA RTX PRO 6000 Blackwell Server Edition, 595.91.07, 600.00 W, 97887 MiB, 2430 MHz
++ lscpu
++ grep 'Model name'
+Model name:                              AMD EPYC 9555 64-Core Processor
++ chmod +x /root/bins/b1109
++ chmod +x /root/bins/old
++ ln -sf /w/h3-bin /root/bins/fix
++ ls -la /root/bins/
+total 39696
+drwx------ 2 root root       57 Nov 14 19:07 .
+drwx------ 1 root root      185 Nov 14 19:07 ..
+-rwx------ 1 root root 20142816 Nov 14 19:07 b1109
+lrwxrwxrwx 1 root root        9 Nov 14 19:07 fix -> /w/h3-bin
+-rwx------ 1 root root 20503656 Nov 14 19:07 old
++ FOX='A red fox trots through fresh snow at dawn in a quiet pine forest; snow crunches softly under its paws and a light wind moves through the branches.'
++ cp /workspace/h3-rs/tables/v2.tables /root/v2.tables
++ QK8='--variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --tables /root/v2.tables'
++ V2='--variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --tables /root/v2.tables --pv8'
++ echo '== the bug: the previous binary'\''s checker under H3_STALL=1 (expect the split-able mxfp8 cases to fail)'
+== the bug: the previous binary's checker under H3_STALL=1 (expect the split-able mxfp8 cases to fail)
++ H3_STALL=1
++ timeout 1800 /root/bins/old check --backend cuda
++ grep -E 'checks|FAIL|split-able' /root/out/check-stall-old.log
++ head -8
+linear mxfp8 130x64x512 GeluTanh (split-able)        rel 3.59e-3  ok
+linear mxfp8 no-bias 130x64x512 (split-able)         rel 4.39e-3  ok
+all 168 checks pass (tolerance 3e-2)
++ echo '== the fixed binary: checks plain, H3_STALL=1, H3_PROFILE=1, H3_STREAM_STRESS=1'
+== the fixed binary: checks plain, H3_STALL=1, H3_PROFILE=1, H3_STREAM_STRESS=1
++ timeout 1800 /root/bins/fix check --backend cuda
++ grep -E 'checks|FAIL|panick' /root/out/check.log
+all 168 checks pass (tolerance 3e-2)
++ H3_STALL=1
++ timeout 1800 /root/bins/fix check --backend cuda
++ grep -E 'checks|FAIL|panick' /root/out/check-stall.log
+all 168 checks pass (tolerance 3e-2)
++ H3_PROFILE=1
++ timeout 1800 /root/bins/fix check --backend cuda
++ grep -E 'checks|FAIL|panick' /root/out/check-profile.log
+all 168 checks pass (tolerance 3e-2)
++ H3_STREAM_STRESS=1
++ timeout 1800 /root/bins/fix check --backend cuda
++ grep -E 'checks|FAIL|panick' /root/out/check-stress.log
+all 168 checks pass (tolerance 3e-2)
++ echo '== reference: the 11-09 binary, INT8 QK only (the 2026-11-12 record'\''s recipe)'
+== reference: the 11-09 binary, INT8 QK only (the 2026-11-12 record's recipe)
++ run good b1109 1500 --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --tables /root/v2.tables
++ n=good
++ b=b1109
++ t=1500
++ shift 3
++ echo '== good [b1109]: --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --tables /root/v2.tables'
+== good [b1109]: --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --tables /root/v2.tables
++ sp=16139
++ nvidia-smi --query-gpu=memory.used,clocks.sm,power.draw --format=csv,noheader,nounits -lms 500
++ rc=0
++ kill 16139
+++ cut -d, -f1 /root/out/good.mem
+++ sort -n
+++ tail -1
+++ awk -F, '$3>300{print $2}' /root/out/good.mem
+++ sort -n
+++ awk '{a[NR]=$1} END{print a[int(NR/2)+1]}'
++ echo 'peak VRAM MiB: 38943; median SM MHz under load: 2250; exit 0'
+peak VRAM MiB: 38943; median SM MHz under load: 2250; exit 0
++ grep -E '^cuda|^load|prompt:|^run |^prefetch|h2d probe|rror|panick|warning|real|^mxfp8 n=' /root/out/good.log
++ cut -c1-300
+cuda NVIDIA RTX PRO 6000 Blackwell Server Edition (sm_120)
+load 45.5s
+prompt: 33 rows in 80.3s
+run 0: total 43.86s  prepare 0.28s  adaln 0.00s  denoise 37.48s (["4.82", "4.64", "4.65", "4.66", "4.67", "4.67", "4.68", "4.68"])  decode 5.83s  audio 0.19s
+real	3m0.783s
++ '[' -f /root/out/good.y4m ']'
+++ stats /root/out/good.y4m
+++ ffmpeg -v info -i /root/out/good.y4m -frames:v 2 -vf signalstats,metadata=print:key=lavfi.signalstats.YAVG -f null -
+++ grep -o 'YAVG=[0-9.]*'
+++ head -2
+++ tr '\n' ' '
++ echo 'luma: YAVG=116.652 YAVG=116.87 '
+luma: YAVG=116.652 YAVG=116.87 
++ '[' -f /root/out/good.y4m ']'
++ grid /root/out/good.y4m /root/out/good.grid.png
++ ffmpeg -loglevel error -y -i /root/out/good.y4m -vf 'select='\''eq(n\,0)+eq(n\,40)+eq(n\,80)+eq(n\,120)'\'',scale=448:-1,tile=2x2' -vframes 1 /root/out/good.grid.png
++ ffmpeg -loglevel error -y -i /root/out/good.y4m -i /root/out/good.wav -c:v libx264 -crf 18 -pix_fmt yuv420p -c:a aac -b:a 192k -shortest /root/out/good.mp4
++ echo '== fixed binary, same recipe, no diagnostics: expect byte-identical to the reference'
+== fixed binary, same recipe, no diagnostics: expect byte-identical to the reference
++ run qk8 fix 1500 --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --tables /root/v2.tables
++ n=qk8
++ b=fix
++ t=1500
++ shift 3
++ echo '== qk8 [fix]: --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --tables /root/v2.tables'
+== qk8 [fix]: --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --tables /root/v2.tables
++ sp=16509
++ nvidia-smi --query-gpu=memory.used,clocks.sm,power.draw --format=csv,noheader,nounits -lms 500
++ rc=0
++ kill 16509
+++ cut -d, -f1 /root/out/qk8.mem
+++ sort -n
+++ tail -1
+++ awk -F, '$3>300{print $2}' /root/out/qk8.mem
+++ sort -n
+++ awk '{a[NR]=$1} END{print a[int(NR/2)+1]}'
++ echo 'peak VRAM MiB: 38943; median SM MHz under load: 2257; exit 0'
+peak VRAM MiB: 38943; median SM MHz under load: 2257; exit 0
++ grep -E '^cuda|^load|prompt:|^run |^prefetch|h2d probe|rror|panick|warning|real|^mxfp8 n=' /root/out/qk8.log
++ cut -c1-300
+cuda NVIDIA RTX PRO 6000 Blackwell Server Edition (sm_120)
+load 29.5s
+prompt: 33 rows in 68.5s
+run 0: total 44.26s  prepare 0.29s  adaln 0.00s  denoise 37.78s (["5.12", "4.64", "4.65", "4.66", "4.67", "4.68", "4.68", "4.69"])  decode 5.91s  audio 0.19s
+real	2m29.941s
++ '[' -f /root/out/qk8.y4m ']'
+++ stats /root/out/qk8.y4m
+++ ffmpeg -v info -i /root/out/qk8.y4m -frames:v 2 -vf signalstats,metadata=print:key=lavfi.signalstats.YAVG -f null -
+++ grep -o 'YAVG=[0-9.]*'
+++ head -2
+++ tr '\n' ' '
++ echo 'luma: YAVG=115.343 YAVG=115.3 '
+luma: YAVG=115.343 YAVG=115.3 
++ '[' -f /root/out/qk8.y4m ']'
++ grid /root/out/qk8.y4m /root/out/qk8.grid.png
++ ffmpeg -loglevel error -y -i /root/out/qk8.y4m -vf 'select='\''eq(n\,0)+eq(n\,40)+eq(n\,80)+eq(n\,120)'\'',scale=448:-1,tile=2x2' -vframes 1 /root/out/qk8.grid.png
++ ffmpeg -loglevel error -y -i /root/out/qk8.y4m -i /root/out/qk8.wav -c:v libx264 -crf 18 -pix_fmt yuv420p -c:a aac -b:a 192k -shortest /root/out/qk8.mp4
++ same qk8 good
+++ cmp /root/out/qk8.y4m /root/out/good.y4m
+++ ffmpeg -loglevel info -i /root/out/qk8.y4m -i /root/out/good.y4m -lavfi psnr -f null -
+++ grep -oE 'PSNR.*'
++ echo '== compare qk8 vs good: PSNR y:14.685556 u:27.469144 v:30.335669 average:19.122910 min:17.279383 max:19.869846'
+== compare qk8 vs good: PSNR y:14.685556 u:27.469144 v:30.335669 average:19.122910 min:17.279383 max:19.869846
++ echo '== fixed binary, same recipe, H3_STALL=1: expect byte-identical'
+== fixed binary, same recipe, H3_STALL=1: expect byte-identical
++ H3_STALL=1
++ run qk8-stall fix 1500 --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --tables /root/v2.tables
++ n=qk8-stall
++ b=fix
++ t=1500
++ shift 3
++ echo '== qk8-stall [fix]: --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --tables /root/v2.tables'
+== qk8-stall [fix]: --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --tables /root/v2.tables
++ sp=16897
++ nvidia-smi --query-gpu=memory.used,clocks.sm,power.draw --format=csv,noheader,nounits -lms 500
++ rc=0
++ kill 16897
+++ cut -d, -f1 /root/out/qk8-stall.mem
+++ sort -n
+++ tail -1
+++ awk -F, '$3>300{print $2}' /root/out/qk8-stall.mem
+++ sort -n
+++ awk '{a[NR]=$1} END{print a[int(NR/2)+1]}'
++ echo 'peak VRAM MiB: 38943; median SM MHz under load: 2257; exit 0'
+peak VRAM MiB: 38943; median SM MHz under load: 2257; exit 0
++ grep -E '^cuda|^load|prompt:|^run |^prefetch|h2d probe|rror|panick|warning|real|^mxfp8 n=' /root/out/qk8-stall.log
++ cut -c1-300
+h2d probe (256 MB): pageable 27.7 GB/s pinned 57.9 GB/s
+cuda NVIDIA RTX PRO 6000 Blackwell Server Edition (sm_120)
+load 32.2s
+prompt: 33 rows in 75.2s
+mxfp8 n=21504 k=5376 rows=37743: whole 12.46 ms, ×2 12.39 ms → whole; plain fp8 (per-tensor scale) 11.73 ms
+mxfp8 n=28672 k=5376 rows=37743: whole 32.64 ms, ×2 15.51 ms → ×2; plain fp8 (per-tensor scale) 15.59 ms
+mxfp8 n=16384 k=2048 rows=1797: whole 0.21 ms, ×2 0.22 ms → whole; plain fp8 (per-tensor scale) 0.19 ms
+run 0: total 44.71s  prepare 0.29s  adaln 0.00s  denoise 38.09s (["5.37", "4.65", "4.66", "4.67", "4.68", "4.68", "4.69", "4.70"])  decode 6.05s  audio 0.19s
+real	2m40.188s
++ '[' -f /root/out/qk8-stall.y4m ']'
+++ stats /root/out/qk8-stall.y4m
+++ ffmpeg -v info -i /root/out/qk8-stall.y4m -frames:v 2 -vf signalstats,metadata=print:key=lavfi.signalstats.YAVG -f null -
+++ grep -o 'YAVG=[0-9.]*'
+++ head -2
+++ tr '\n' ' '
++ echo 'luma: YAVG=115.343 YAVG=115.3 '
+luma: YAVG=115.343 YAVG=115.3 
++ '[' -f /root/out/qk8-stall.y4m ']'
++ grid /root/out/qk8-stall.y4m /root/out/qk8-stall.grid.png
++ ffmpeg -loglevel error -y -i /root/out/qk8-stall.y4m -vf 'select='\''eq(n\,0)+eq(n\,40)+eq(n\,80)+eq(n\,120)'\'',scale=448:-1,tile=2x2' -vframes 1 /root/out/qk8-stall.grid.png
++ ffmpeg -loglevel error -y -i /root/out/qk8-stall.y4m -i /root/out/qk8-stall.wav -c:v libx264 -crf 18 -pix_fmt yuv420p -c:a aac -b:a 192k -shortest /root/out/qk8-stall.mp4
++ same qk8-stall qk8
+++ cmp /root/out/qk8-stall.y4m /root/out/qk8.y4m
+++ echo byte-identical
++ echo '== compare qk8-stall vs qk8: byte-identical'
+== compare qk8-stall vs qk8: byte-identical
++ echo '== the best recipe (+ FP8 P.V): plain, H3_STALL=1, streamed, ComfyUI'\''s budget, H3_PROFILE=1'
+== the best recipe (+ FP8 P.V): plain, H3_STALL=1, streamed, ComfyUI's budget, H3_PROFILE=1
++ run best fix 1500 --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --tables /root/v2.tables --pv8
++ n=best
++ b=fix
++ t=1500
++ shift 3
++ echo '== best [fix]: --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --tables /root/v2.tables --pv8'
+== best [fix]: --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --tables /root/v2.tables --pv8
++ sp=17266
++ nvidia-smi --query-gpu=memory.used,clocks.sm,power.draw --format=csv,noheader,nounits -lms 500
++ rc=0
++ kill 17266
+++ cut -d, -f1 /root/out/best.mem
+++ sort -n
+++ tail -1
+++ awk -F, '$3>300{print $2}' /root/out/best.mem
+++ sort -n
+++ awk '{a[NR]=$1} END{print a[int(NR/2)+1]}'
++ echo 'peak VRAM MiB: 39551; median SM MHz under load: 2272; exit 0'
+peak VRAM MiB: 39551; median SM MHz under load: 2272; exit 0
++ grep -E '^cuda|^load|prompt:|^run |^prefetch|h2d probe|rror|panick|warning|real|^mxfp8 n=' /root/out/best.log
++ cut -c1-300
+cuda NVIDIA RTX PRO 6000 Blackwell Server Edition (sm_120)
+load 30.2s
+prompt: 33 rows in 69.9s
+run 0: total 42.85s  prepare 0.28s  adaln 0.00s  denoise 36.55s (["4.96", "4.48", "4.50", "4.51", "4.52", "4.52", "4.53", "4.53"])  decode 5.73s  audio 0.19s
+real	2m30.730s
++ '[' -f /root/out/best.y4m ']'
+++ stats /root/out/best.y4m
+++ ffmpeg -v info -i /root/out/best.y4m -frames:v 2 -vf signalstats,metadata=print:key=lavfi.signalstats.YAVG -f null -
+++ grep -o 'YAVG=[0-9.]*'
+++ head -2
+++ tr '\n' ' '
++ echo 'luma: YAVG=115.629 YAVG=116.218 '
+luma: YAVG=115.629 YAVG=116.218 
++ '[' -f /root/out/best.y4m ']'
++ grid /root/out/best.y4m /root/out/best.grid.png
++ ffmpeg -loglevel error -y -i /root/out/best.y4m -vf 'select='\''eq(n\,0)+eq(n\,40)+eq(n\,80)+eq(n\,120)'\'',scale=448:-1,tile=2x2' -vframes 1 /root/out/best.grid.png
++ ffmpeg -loglevel error -y -i /root/out/best.y4m -i /root/out/best.wav -c:v libx264 -crf 18 -pix_fmt yuv420p -c:a aac -b:a 192k -shortest /root/out/best.mp4
++ H3_STALL=1
++ run best-stall fix 1500 --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --tables /root/v2.tables --pv8
++ n=best-stall
++ b=fix
++ t=1500
++ shift 3
++ echo '== best-stall [fix]: --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --tables /root/v2.tables --pv8'
+== best-stall [fix]: --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --tables /root/v2.tables --pv8
++ sp=17630
++ nvidia-smi --query-gpu=memory.used,clocks.sm,power.draw --format=csv,noheader,nounits -lms 500
++ rc=0
++ kill 17630
+++ cut -d, -f1 /root/out/best-stall.mem
+++ sort -n
+++ tail -1
+++ awk -F, '$3>300{print $2}' /root/out/best-stall.mem
+++ sort -n
+++ awk '{a[NR]=$1} END{print a[int(NR/2)+1]}'
++ echo 'peak VRAM MiB: 40351; median SM MHz under load: 2272; exit 0'
+peak VRAM MiB: 40351; median SM MHz under load: 2272; exit 0
++ grep -E '^cuda|^load|prompt:|^run |^prefetch|h2d probe|rror|panick|warning|real|^mxfp8 n=' /root/out/best-stall.log
++ cut -c1-300
+h2d probe (256 MB): pageable 40.1 GB/s pinned 57.9 GB/s
+cuda NVIDIA RTX PRO 6000 Blackwell Server Edition (sm_120)
+load 27.8s
+prompt: 33 rows in 73.1s
+mxfp8 n=21504 k=5376 rows=37743: whole 12.44 ms, ×2 12.40 ms → whole; plain fp8 (per-tensor scale) 11.76 ms
+mxfp8 n=28672 k=5376 rows=37743: whole 32.63 ms, ×2 15.48 ms → ×2; plain fp8 (per-tensor scale) 15.59 ms
+mxfp8 n=16384 k=2048 rows=1797: whole 0.20 ms, ×2 0.22 ms → whole; plain fp8 (per-tensor scale) 0.18 ms
+run 0: total 43.37s  prepare 0.29s  adaln 0.00s  denoise 36.79s (["5.21", "4.48", "4.50", "4.50", "4.51", "4.52", "4.53", "4.53"])  decode 6.02s  audio 0.19s
+real	2m32.086s
++ '[' -f /root/out/best-stall.y4m ']'
+++ stats /root/out/best-stall.y4m
+++ ffmpeg -v info -i /root/out/best-stall.y4m -frames:v 2 -vf signalstats,metadata=print:key=lavfi.signalstats.YAVG -f null -
+++ grep -o 'YAVG=[0-9.]*'
+++ head -2
+++ tr '\n' ' '
++ echo 'luma: YAVG=115.629 YAVG=116.218 '
+luma: YAVG=115.629 YAVG=116.218 
++ '[' -f /root/out/best-stall.y4m ']'
++ grid /root/out/best-stall.y4m /root/out/best-stall.grid.png
++ ffmpeg -loglevel error -y -i /root/out/best-stall.y4m -vf 'select='\''eq(n\,0)+eq(n\,40)+eq(n\,80)+eq(n\,120)'\'',scale=448:-1,tile=2x2' -vframes 1 /root/out/best-stall.grid.png
++ ffmpeg -loglevel error -y -i /root/out/best-stall.y4m -i /root/out/best-stall.wav -c:v libx264 -crf 18 -pix_fmt yuv420p -c:a aac -b:a 192k -shortest /root/out/best-stall.mp4
++ same best-stall best
+++ cmp /root/out/best-stall.y4m /root/out/best.y4m
+++ echo byte-identical
++ echo '== compare best-stall vs best: byte-identical'
+== compare best-stall vs best: byte-identical
++ same best qk8
+++ cmp /root/out/best.y4m /root/out/qk8.y4m
+++ ffmpeg -loglevel info -i /root/out/best.y4m -i /root/out/qk8.y4m -lavfi psnr -f null -
+++ grep -oE 'PSNR.*'
++ echo '== compare best vs qk8: PSNR y:13.963687 u:26.995172 v:29.718572 average:18.415429 min:15.916856 max:19.649574'
+== compare best vs qk8: PSNR y:13.963687 u:26.995172 v:29.718572 average:18.415429 min:15.916856 max:19.649574
++ H3_STALL=1
++ run best-stream fix 1500 --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --tables /root/v2.tables --pv8 --stream-blocks
++ n=best-stream
++ b=fix
++ t=1500
++ shift 3
++ echo '== best-stream [fix]: --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --tables /root/v2.tables --pv8 --stream-blocks'
+== best-stream [fix]: --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --tables /root/v2.tables --pv8 --stream-blocks
++ sp=18020
++ nvidia-smi --query-gpu=memory.used,clocks.sm,power.draw --format=csv,noheader,nounits -lms 500
++ rc=0
++ kill 18020
+++ cut -d, -f1 /root/out/best-stream.mem
+++ sort -n
+++ tail -1
+++ awk -F, '$3>300{print $2}' /root/out/best-stream.mem
+++ sort -n
+++ awk '{a[NR]=$1} END{print a[int(NR/2)+1]}'
++ echo 'peak VRAM MiB: 18699; median SM MHz under load: 2272; exit 0'
+peak VRAM MiB: 18699; median SM MHz under load: 2272; exit 0
++ grep -E '^cuda|^load|prompt:|^run |^prefetch|h2d probe|rror|panick|warning|real|^mxfp8 n=' /root/out/best-stream.log
++ cut -c1-300
+h2d probe (256 MB): pageable 38.4 GB/s pinned 57.9 GB/s
+cuda NVIDIA RTX PRO 6000 Blackwell Server Edition (sm_120)
+load 30.0s
+prompt: 33 rows in 72.7s
+mxfp8 n=21504 k=5376 rows=37743: whole 12.18 ms, ×2 12.44 ms → whole; plain fp8 (per-tensor scale) 11.46 ms
+mxfp8 n=28672 k=5376 rows=37743: whole 32.75 ms, ×2 15.42 ms → ×2; plain fp8 (per-tensor scale) 15.54 ms
+prefetch: 400 blocks; compute stream waited 117 ms total, 0.3 ms/block, worst 15.1 ms; copies 11148 ms for 191.29 GB (17.2 GB/s while copying, 0.48 GB/block)
+mxfp8 n=16384 k=2048 rows=1797: whole 0.20 ms, ×2 0.22 ms → whole; plain fp8 (per-tensor scale) 0.18 ms
+run 0: total 43.59s  prepare 0.29s  adaln 0.00s  denoise 37.11s (["5.28", "4.52", "4.53", "4.54", "4.55", "4.56", "4.56", "4.57"])  decode 5.90s  audio 0.19s
+real	2m34.870s
++ '[' -f /root/out/best-stream.y4m ']'
+++ stats /root/out/best-stream.y4m
+++ ffmpeg -v info -i /root/out/best-stream.y4m -frames:v 2 -vf signalstats,metadata=print:key=lavfi.signalstats.YAVG -f null -
+++ grep -o 'YAVG=[0-9.]*'
+++ head -2
+++ tr '\n' ' '
++ echo 'luma: YAVG=115.629 YAVG=116.218 '
+luma: YAVG=115.629 YAVG=116.218 
++ '[' -f /root/out/best-stream.y4m ']'
++ grid /root/out/best-stream.y4m /root/out/best-stream.grid.png
++ ffmpeg -loglevel error -y -i /root/out/best-stream.y4m -vf 'select='\''eq(n\,0)+eq(n\,40)+eq(n\,80)+eq(n\,120)'\'',scale=448:-1,tile=2x2' -vframes 1 /root/out/best-stream.grid.png
++ ffmpeg -loglevel error -y -i /root/out/best-stream.y4m -i /root/out/best-stream.wav -c:v libx264 -crf 18 -pix_fmt yuv420p -c:a aac -b:a 192k -shortest /root/out/best-stream.mp4
++ same best-stream best
+++ cmp /root/out/best-stream.y4m /root/out/best.y4m
+++ echo byte-identical
++ echo '== compare best-stream vs best: byte-identical'
+== compare best-stream vs best: byte-identical
++ H3_STALL=1
++ run budget fix 1500 --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --tables /root/v2.tables --pv8 --vsa-sparsity 0.9 --dense-first-steps 2
++ n=budget
++ b=fix
++ t=1500
++ shift 3
++ echo '== budget [fix]: --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --tables /root/v2.tables --pv8 --vsa-sparsity 0.9 --dense-first-steps 2'
+== budget [fix]: --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --tables /root/v2.tables --pv8 --vsa-sparsity 0.9 --dense-first-steps 2
++ sp=18389
++ nvidia-smi --query-gpu=memory.used,clocks.sm,power.draw --format=csv,noheader,nounits -lms 500
++ rc=0
++ kill 18389
+++ cut -d, -f1 /root/out/budget.mem
+++ sort -n
+++ tail -1
+++ awk -F, '$3>300{print $2}' /root/out/budget.mem
+++ sort -n
+++ awk '{a[NR]=$1} END{print a[int(NR/2)+1]}'
++ echo 'peak VRAM MiB: 40319; median SM MHz under load: 2272; exit 0'
+peak VRAM MiB: 40319; median SM MHz under load: 2272; exit 0
++ grep -E '^cuda|^load|prompt:|^run |^prefetch|h2d probe|rror|panick|warning|real|^mxfp8 n=' /root/out/budget.log
++ cut -c1-300
+h2d probe (256 MB): pageable 38.0 GB/s pinned 57.9 GB/s
+cuda NVIDIA RTX PRO 6000 Blackwell Server Edition (sm_120)
+load 31.9s
+prompt: 33 rows in 65.9s
+mxfp8 n=21504 k=5376 rows=37743: whole 12.44 ms, ×2 12.41 ms → whole; plain fp8 (per-tensor scale) 11.71 ms
+mxfp8 n=28672 k=5376 rows=37743: whole 32.65 ms, ×2 15.48 ms → ×2; plain fp8 (per-tensor scale) 15.55 ms
+mxfp8 n=16384 k=2048 rows=1797: whole 0.20 ms, ×2 0.22 ms → whole; plain fp8 (per-tensor scale) 0.18 ms
+run 0: total 44.89s  prepare 0.26s  adaln 0.00s  denoise 38.65s (["7.66", "6.96", "3.99", "4.00", "4.00", "4.01", "4.01", "4.02"])  decode 5.70s  audio 0.19s
+real	2m30.881s
++ '[' -f /root/out/budget.y4m ']'
+++ stats /root/out/budget.y4m
+++ ffmpeg -v info -i /root/out/budget.y4m -frames:v 2 -vf signalstats,metadata=print:key=lavfi.signalstats.YAVG -f null -
+++ grep -o 'YAVG=[0-9.]*'
+++ head -2
+++ tr '\n' ' '
++ echo 'luma: YAVG=101.601 YAVG=102.6 '
+luma: YAVG=101.601 YAVG=102.6 
++ '[' -f /root/out/budget.y4m ']'
++ grid /root/out/budget.y4m /root/out/budget.grid.png
++ ffmpeg -loglevel error -y -i /root/out/budget.y4m -vf 'select='\''eq(n\,0)+eq(n\,40)+eq(n\,80)+eq(n\,120)'\'',scale=448:-1,tile=2x2' -vframes 1 /root/out/budget.grid.png
++ ffmpeg -loglevel error -y -i /root/out/budget.y4m -i /root/out/budget.wav -c:v libx264 -crf 18 -pix_fmt yuv420p -c:a aac -b:a 192k -shortest /root/out/budget.mp4
++ same budget best
+++ cmp /root/out/budget.y4m /root/out/best.y4m
+++ ffmpeg -loglevel info -i /root/out/budget.y4m -i /root/out/best.y4m -lavfi psnr -f null -
+++ grep -oE 'PSNR.*'
++ echo '== compare budget vs best: PSNR y:9.129688 u:23.873931 v:26.770363 average:13.685877 min:12.535631 max:14.510347'
+== compare budget vs best: PSNR y:9.129688 u:23.873931 v:26.770363 average:13.685877 min:12.535631 max:14.510347
++ H3_PROFILE=1
++ run best-prof fix 1500 --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --tables /root/v2.tables --pv8
++ n=best-prof
++ b=fix
++ t=1500
++ shift 3
++ echo '== best-prof [fix]: --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --tables /root/v2.tables --pv8'
+== best-prof [fix]: --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --tables /root/v2.tables --pv8
++ sp=18777
++ nvidia-smi --query-gpu=memory.used,clocks.sm,power.draw --format=csv,noheader,nounits -lms 500
++ rc=0
++ kill 18777
+++ cut -d, -f1 /root/out/best-prof.mem
+++ sort -n
+++ tail -1
+++ awk -F, '$3>300{print $2}' /root/out/best-prof.mem
+++ sort -n
+++ awk '{a[NR]=$1} END{print a[int(NR/2)+1]}'
++ echo 'peak VRAM MiB: 39551; median SM MHz under load: 2280; exit 0'
+peak VRAM MiB: 39551; median SM MHz under load: 2280; exit 0
++ grep -E '^cuda|^load|prompt:|^run |^prefetch|h2d probe|rror|panick|warning|real|^mxfp8 n=' /root/out/best-prof.log
++ cut -c1-300
+cuda NVIDIA RTX PRO 6000 Blackwell Server Edition (sm_120)
+load 27.2s
+prompt: 33 rows in 64.3s
+mxfp8 n=21504 k=5376 rows=37743: whole 12.42 ms, ×2 12.42 ms → whole; plain fp8 (per-tensor scale) 11.69 ms
+mxfp8 n=28672 k=5376 rows=37743: whole 32.70 ms, ×2 15.50 ms → ×2; plain fp8 (per-tensor scale) 15.56 ms
+mxfp8 n=16384 k=2048 rows=1797: whole 0.21 ms, ×2 0.22 ms → whole; plain fp8 (per-tensor scale) 0.18 ms
+run 0: total 44.64s  prepare 0.28s  adaln 0.00s  denoise 36.88s (["5.23", "4.50", "4.50", "4.52", "4.52", "4.53", "4.54", "4.54"])  decode 7.18s  audio 0.22s
+real	2m23.785s
++ '[' -f /root/out/best-prof.y4m ']'
+++ stats /root/out/best-prof.y4m
+++ ffmpeg -v info -i /root/out/best-prof.y4m -frames:v 2 -vf signalstats,metadata=print:key=lavfi.signalstats.YAVG -f null -
+++ grep -o 'YAVG=[0-9.]*'
+++ head -2
+++ tr '\n' ' '
++ echo 'luma: YAVG=115.629 YAVG=116.218 '
+luma: YAVG=115.629 YAVG=116.218 
++ '[' -f /root/out/best-prof.y4m ']'
++ grid /root/out/best-prof.y4m /root/out/best-prof.grid.png
++ ffmpeg -loglevel error -y -i /root/out/best-prof.y4m -vf 'select='\''eq(n\,0)+eq(n\,40)+eq(n\,80)+eq(n\,120)'\'',scale=448:-1,tile=2x2' -vframes 1 /root/out/best-prof.grid.png
++ ffmpeg -loglevel error -y -i /root/out/best-prof.y4m -i /root/out/best-prof.wav -c:v libx264 -crf 18 -pix_fmt yuv420p -c:a aac -b:a 192k -shortest /root/out/best-prof.mp4
++ same best-prof best
+++ cmp /root/out/best-prof.y4m /root/out/best.y4m
+++ echo byte-identical
++ echo '== compare best-prof vs best: byte-identical'
+== compare best-prof vs best: byte-identical
++ grep -B2 -A34 'profile: denoise' /root/out/best-prof.log
++ head -60
+step 7/8 4.54s
+step 8/8 4.54s
+== profile: denoise
+profile (CUDA, synced per op): 36026.1 ms in ops; GEMMs 19341.6 ms at 661.8 TFLOP/s
+  vsa fine (3g int8 qk + fp8 pv, d128)        9597.9 ms  26.6%     400 calls    23.995 ms/call
+  gemm mxfp8 n=28672 k=5376 (×2)              5835.5 ms  16.2%     359 calls    16.255 ms/call
+  gemm mxfp8 n=21504 k=5376                   4437.9 ms  12.3%     360 calls    12.328 ms/call
+  gemm mxfp8 n=5376 k=14336                   2947.1 ms   8.2%     360 calls     8.186 ms/call
+  gemm mxfp8 n=5376 k=7168                    1475.7 ms   4.1%     360 calls     4.099 ms/call
+  gemm mxfp8 n=7168 k=5376                    1462.1 ms   4.1%     360 calls     4.061 ms/call
+  head_split (qk-norm + rope)                 1214.9 ms   3.4%    1600 calls     0.759 ms/call
+  gemm n=28672 k=5376                         1135.7 ms   3.2%      40 calls    28.393 ms/call
+  mx quant (activations)                      1040.4 ms   2.9%    1800 calls     0.578 ms/call
+  swiglu                                       909.4 ms   2.5%     400 calls     2.274 ms/call
+  gemm n=21504 k=5376                          859.2 ms   2.4%      40 calls    21.481 ms/call
+  vsa coarse + top-k (4 query tiles)           820.2 ms   2.3%     400 calls     2.050 ms/call
+  rms_norm (+residual, modulation)             805.0 ms   2.2%     808 calls     0.996 ms/call
+  gemm n=5376 k=14336                          573.0 ms   1.6%      40 calls    14.324 ms/call
+  gate_residual                                475.8 ms   1.3%     400 calls     1.190 ms/call
+  vsa pool                                     469.4 ms   1.3%     400 calls     1.174 ms/call
+  attention fp8 v quant                        433.8 ms   1.2%     400 calls     1.084 ms/call
+  vsa int8 q/k quant                           431.3 ms   1.2%     400 calls     1.078 ms/call
+  vsa k mean                                   329.7 ms   0.9%     800 calls     0.412 ms/call
+  gemm n=7168 k=5376                           288.7 ms   0.8%      40 calls     7.218 ms/call
+  gemm n=5376 k=7168                           288.0 ms   0.8%      40 calls     7.201 ms/call
+  attention fp8 v max                          144.5 ms   0.4%     400 calls     0.361 ms/call
+  gemm mxfp8 n=28672 k=5376                     32.7 ms   0.1%       1 calls    32.704 ms/call
+  vsa k mean (fold)                             11.9 ms   0.0%     800 calls     0.015 ms/call
+  gemm+bias n=96 k=5376                          2.8 ms   0.0%       8 calls     0.354 ms/call
+  gemm+bias n=5376 k=96                          2.6 ms   0.0%       8 calls     0.327 ms/call
+  gemm+bias n=32 k=5376 (small)                  0.4 ms   0.0%       8 calls     0.048 ms/call
+  flow_step                                      0.2 ms   0.0%      16 calls     0.014 ms/call
+  gemm+bias n=5376 k=32 (small)                  0.2 ms   0.0%       8 calls     0.025 ms/call
+  copy (dtod)                                    0.2 ms   0.0%       8 calls     0.021 ms/call
+
+mxfp8 n=16384 k=2048 rows=1797: whole 0.21 ms, ×2 0.22 ms → whole; plain fp8 (per-tensor scale) 0.18 ms
+== profile: video decode
++ tar czf /root/cmd1.tgz -C /root/out '--exclude=*.y4m' '--exclude=*.wav' '--exclude=*.mp4' .
+++ cd /root/out
+++ ls best-prof.mp4 best-stall.mp4 best-stream.mp4 best.mp4 budget.mp4 good.mp4 qk8-stall.mp4 qk8.mp4
++ tar czf /root/mp4.tgz -C /root/out best-prof.mp4 best-stall.mp4 best-stream.mp4 best.mp4 budget.mp4 good.mp4 qk8-stall.mp4 qk8.mp4
+++ date -u
++ echo 'cmd1 done Sat Nov 14 19:29:32 UTC 2026'
+cmd1 done Sat Nov 14 19:29:32 UTC 2026
++ echo 'terminating pod'
+terminating pod
++ terminate
++ curl -sS -X DELETE -A h3-rs-pod/1 -H @/root/.rp-auth https://rest.runpod.io/v1/pods/gnhcz4kshxz46j
+exit 0
+

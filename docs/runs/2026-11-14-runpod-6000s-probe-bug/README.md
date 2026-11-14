@@ -74,10 +74,58 @@ Without the diagnostic switches the current binary makes a proper fox
 (`cur.grid.png`), which is why the 5090 rounds, whose clips were checked by
 eye and by PSNR between budgets, never showed the probe: their shapes split.
 
-## Verification with the fix (`fixcheck/`)
+## Verification with the fix (`fixcheck/`, `check-5090/`)
 
-_To be filled from the third pod: the previous binary's checker under
-`H3_STALL=1` (the split-able MXFP8 cases should fail), the fixed binary's
-checker plain and under `H3_STALL=1`, `H3_PROFILE=1`, `H3_STREAM_STRESS=1`,
-the fixed binary's fox byte-identical to the 11-09 binary's, byte-identical
-with and without `H3_STALL=1`, and the recipe's numbers._
+The checker had not seen the probe because none of its MXFP8 shapes reached
+the per-shape split decision (`n ≥ 16384`, `rows ≥ 1024`): the two
+"split-able" 130 × 64 × 512 cases passed under `H3_STALL=1` on the old
+binary too. Two cases now use 1024 × 64 × 16384: the first call against the
+CPU, and the second call exactly equal to the first. On an RTX 5090 pod
+(`check-5090/`, no volume) the new checker built on the old CUDA code
+**fails both under `H3_STALL=1` and `H3_PROFILE=1`** (rel 2.3e5: the
+unscaled codes) and passes plain; the fixed tree passes 170 / 170 plain and
+under `H3_STALL=1`, `H3_PROFILE=1` and `H3_STREAM_STRESS=1`.
+
+On the third Server Edition pod (f4934ac, the fix without the new cases):
+168 / 168 in all four modes, and the clips:
+
+| fox, stored MXFP8, tables, resident unless said | denoise | decode | total after load | peak | clip |
+|---|---|---|---|---|---|
+| 11-09 binary, `--vsa-qk8` (the 2026-11-12 recipe) | 37.48 s (4.82, 4.64–4.68 s) | 5.83 s | 43.86 s | 38.9 GB | reference fox |
+| fixed, `--vsa-qk8` | 37.78 s (5.12 first: the whole-against-split timing, then 4.64–4.69 s) | 5.91 s | 44.26 s | 38.9 GB | fox, 19.1 dB from the reference |
+| fixed, `--vsa-qk8`, `H3_STALL=1` | 38.09 s | 6.05 s | 44.71 s | | **byte-identical** to the line above |
+| **fixed, `--vsa-qk8 --pv8` (the best recipe)** | **36.55 s** (4.96, 4.48–4.53 s) | **5.73 s** | **42.85 s** | 39.6 GB | fox (`best.grid.png`), 18.4 dB from the qk8 clip |
+| the same, `H3_STALL=1` | 36.79 s | 6.02 s | 43.37 s | | **byte-identical** |
+| the same, `H3_PROFILE=1` | 36.88 s | 7.18 s (synced per op) | | | **byte-identical** |
+| the same, `--stream-blocks` | 37.11 s (compute stream waited 117 ms in 400 blocks; copies 17.2 GB/s) | 5.90 s | 43.59 s | **18.7 GB** | **byte-identical** |
+| the same at ComfyUI's budget (keep 10 %, first 2 dense) | 38.65 s (7.66, 6.96, 3.99–4.02 s) | 5.70 s | 44.89 s | 40.3 GB | 13.7 dB from the best clip |
+
+So the diagnostic switches and streaming leave the clip's bytes alone, and
+the best recipe on the gold card is now **denoise 36.6 s, decode 5.7 s,
+42.9 s after load** (stored MXFP8, MXFP8 decoder, INT8 Q·Kᵀ + FP8 P·V,
+tables; load 31 s staged) against 37.9 / 5.8 / 44.3 s on 2026-11-12 with
+INT8 Q·Kᵀ alone and fastvideo-rs's 45.8 s denoise. FP8 P·V is worth 1.2 s
+(3.3 %) here; the fine stage runs 24.1 ms per call (27.3 on the 5090).
+
+The 19.1 dB between the fixed binary's clip and the 11-09 binary's on the
+same inputs is not the first-call flaw (f4934ac did not move it: 5677a4a's
+clip, 881e276's and the fixed binary's are the same clip): the per-shape
+decision tunes both plans on the first call where the old code ran the
+first call untuned, so one GEMM of the first forward rounds differently.
+Both are proper foxes; the new behaviour is the self-consistent one (the
+first call now uses the plan every later call uses). The 2026-11-13 claim
+that the slices "round like the whole GEMM, clips byte-identical" was
+measured on the 5090's released binary and still holds there.
+
+Per-kernel profile of the best recipe (`best-prof.log`, 8 forwards): the
+fine stage 9.65 s (24.1 ms × 400), MXFP8 GEMMs 16.2 s at 659 TFLOP/s
+(FFN-up ×2 16.3 ms, QKV whole 12.4, FFN-down 8.2, gate 4.1, out 4.1), the
+five bf16 edge blocks' GEMMs 3.16 s (28.5 / 21.6 / 14.4 / 7.2 / 7.2 ms
+per call: 0.39 s per forward against 0.22 s if they were MXFP8), and
+~0.88 s per forward of memory-bound kernels (head_split 1.22 s, mx quant
+1.04, swiglu 0.91, coarse 0.82, rms_norm 0.81, gate_residual 0.48, pool
+0.47, the two 8-bit quantisations 0.87, k mean 0.33, v max 0.14): 19 % of
+a 4.5 s forward on this card, 17 % on the 5090.
+
+Cost: three Server Edition pods (14 + 50 + 23 min at $2.69/h) and a 5090
+check pod (6 min at $1.39/h), about $4.
