@@ -118,6 +118,27 @@ __device__ __forceinline__ float gate_at(int kind, const bf16_t* gvec, const flo
 }
 
 // in place: h += gate(a)
+// Dense-plan VSA: out[tok][h][c] += pooled_out[h][tile(tok)][c] · gate[h][tok][c], tile(tok) =
+// rowslot[tok] / te (the gated pooled branch the fine kernels add in their epilogue).
+extern "C" __global__ void fw_vsa_gate_add(u64 out_, u64 pooled_out_, u64 gate_, u64 rowslot_, long n, int heads, int seq, int d, int nb, int te) {
+    bf16_t* out = (bf16_t*)out_;
+    const float* pooled_out = (const float*)pooled_out_;
+    const bf16_t* gate = (const bf16_t*)gate_;
+    const unsigned* rowslot = (const unsigned*)rowslot_;
+    long i = (long)blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= n) return;
+    const int c = (int)(i % d);
+    const long row = i / d;
+    const int h = (int)(row % heads);
+    const long tok = row / heads;
+    const unsigned slot = rowslot[tok];
+    if (slot == 0xffffffffu) return;
+    const int tile = (int)(slot / (unsigned)te);
+    const float pb = pooled_out[((long)h * nb + tile) * d + c];
+    const float g = ld(gate, ((long)h * seq + tok) * d + c);
+    out[i] = bf(ld(out, i) + pb * g);
+}
+
 extern "C" __global__ void fw_gate_residual(u64 h_, u64 a_, long n, int dim, int kind, u64 gvec_, u64 gtab_, u64 gidx_, int slots, int slot) {
     bf16_t* h = (bf16_t*)h_;
     const bf16_t* a = (const bf16_t*)a_;

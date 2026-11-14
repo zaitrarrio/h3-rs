@@ -616,6 +616,20 @@ fn ops<B: Backend>(p: &mut Pair<'_, B>, rng: &mut Rng) {
             let name = format!("vsa tile{tile} d{d} qk8+pv8 {}", if gated { "gate" } else { "no-gate" });
             p.op_slack(name, |r| r.vsa(&q16, &k16, &vshift, gate, &spec88), want, slack);
         }
+        // The dense plan (every tile kept: dense layers, dense first steps):
+        // dense attention over the natural order plus the gated pooled branch,
+        // with the dense 8-bit recipes; backends run their dense kernel here.
+        let (specd, specd8, specd88) = (spec.dense(), spec8.dense(), spec88.dense());
+        p.op(format!("vsa tile{tile} d{d} dense-plan gate"), |r| r.vsa(&q, &k, &v, Some(&g), &specd));
+        p.op(format!("vsa tile{tile} d{d} dense-plan no-gate"), |r| r.vsa(&q, &k, &v, None, &specd));
+        p.op(format!("vsa tile{tile} d{d} dense-plan qk8 gate"), |r| r.vsa(&q, &kshift, &v, Some(&g), &specd8));
+        for gated in [true, false] {
+            let gate = gated.then_some(&g16[..]);
+            let (mut want, mut slack) = (vec![0f32; n], vec![0f32; n]);
+            h3_cpu::vsa_reference_slack(&q16, &k16, &vshift, gate, &specd88, &mut want, &mut slack);
+            let name = format!("vsa tile{tile} d{d} dense-plan qk8+pv8 {}", if gated { "gate" } else { "no-gate" });
+            p.op_slack(name, |r| r.vsa(&q16, &k16, &vshift, gate, &specd88), want, slack);
+        }
     }
     // patchify / unpatchify with offsets.
     {

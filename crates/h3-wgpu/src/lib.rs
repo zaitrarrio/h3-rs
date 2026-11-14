@@ -83,6 +83,10 @@ pub struct GVsa {
     /// FP8 P·V emulation (`attn_qk8.wgsl` modes 0 / 3 / 4 on V): per-head V mean, E4M3 codes, per-head scale.
     pv8: Option<(GBuf, GBuf, GBuf)>,
     sub: usize,
+    /// Every tile kept: the dense attention path plus the gated pooled branch.
+    dense: bool,
+    /// `slot_of_row` (tile = slot / tile), for the dense path's gate add.
+    rowslot: GBuf,
 }
 
 struct Prof {
@@ -1184,6 +1188,8 @@ impl Backend for Wgpu {
             sub: plan.tile_elems / 64,
             qk8: spec.qk8.then(|| (self.alloc(h * d), self.alloc(h * plan.seq * d), self.alloc(h * plan.seq * d))),
             pv8: spec.pv8.then(|| (self.alloc(h * d), self.alloc(h * plan.seq * d), self.alloc(h))),
+            dense: plan.is_dense(),
+            rowslot: self.upload_u32_buf(&plan.slot_of_row()),
         }
     }
 
@@ -1199,6 +1205,20 @@ impl Backend for Wgpu {
         let coarse = self.pipeline("vsa_coarse", || VSA_COARSE.to_string());
         let p = [s.heads as u32, s.d as u32, s.nb as u32, s.nprefix as u32, s.nregions as u32, s.scale.to_bits(), 0, 0];
         self.dispatch(&coarse, &p, &[&s.pooled, &s.coarse, &s.sel, &s.regions], (s.nb as u32, s.heads as u32, 1));
+        if s.dense {
+            // A dense plan: the dense attention (its INT8 / FP8 recipe when the
+            // spec asks) plus the gated pooled branch; see `vsa_reference`.
+            if s.qk8.is_some() || s.pv8.is_some() {
+                self.attention_qk8(q, k, v, s.heads, s.heads, s.seq, s.seq, s.d, false, s.pv8.is_some(), out);
+            } else {
+                self.attention(q, k, v, s.heads, s.heads, s.seq, s.seq, s.d, false, out);
+            }
+            if let Some(g) = gate {
+                let n = s.seq * s.heads * s.d;
+                self.elementwise(&Ep { n, op: 20, dim: s.d, slots: s.heads, slot: s.nb, off: s.tile, len: s.seq, ..Default::default() }, out, Some(g), Some(&s.coarse), None, Some(&s.rowslot));
+            }
+            return;
+        }
         // INT8 Q·Kᵀ emulation: the fine stage reads the rounded copies; the
         // tile means and selection above used the exact values.
         if let Some((kmean, q8, k8)) = &s.qk8 {

@@ -192,6 +192,45 @@ impl GateView<'_> {
 /// VSA-H3 reference: pooled means in f64, per-region top-k by score then
 /// lower tile index, fine attention with an online softmax, the gated pooled
 /// branch added last.
+/// The dense attention reference: softmax(q·kᵀ/√d)·v per head over `[heads][sq][d]`
+/// / `[kv_heads][sk][d]` inputs, output `[sq][heads][d]`; GQA by `heads / kv_heads`.
+#[allow(clippy::too_many_arguments)]
+pub fn attention_reference_into(q: &[f32], k: &[f32], v: &[f32], heads: usize, kv_heads: usize, sq: usize, sk: usize, d: usize, causal: bool, out: &mut [f32]) {
+    let scale = 1.0 / (d as f32).sqrt();
+    let group = heads / kv_heads;
+    out[..sq * heads * d].par_chunks_mut(heads * d).enumerate().for_each(|(i, orow)| {
+        let mut p = vec![0.0f32; sk];
+        let limit = if causal { (i + 1 + sk - sq).min(sk) } else { sk };
+        for h in 0..heads {
+            let kh = h / group;
+            let qi = &q[(h * sq + i) * d..][..d];
+            let mut mx = f32::NEG_INFINITY;
+            for j in 0..limit {
+                let kj = &k[(kh * sk + j) * d..][..d];
+                let s = qi.iter().zip(kj).map(|(a, b)| a * b).sum::<f32>() * scale;
+                p[j] = s;
+                mx = mx.max(s);
+            }
+            let mut den = 0.0f64;
+            for pj in p[..limit].iter_mut() {
+                *pj = (*pj - mx).exp();
+                den += *pj as f64;
+            }
+            let o = &mut orow[h * d..][..d];
+            let mut acc = vec![0.0f64; d];
+            for (j, &pj) in p[..limit].iter().enumerate() {
+                let vj = &v[(kh * sk + j) * d..][..d];
+                for c in 0..d {
+                    acc[c] += pj as f64 * vj[c] as f64;
+                }
+            }
+            for c in 0..d {
+                o[c] = (acc[c] / den) as f32;
+            }
+        }
+    });
+}
+
 pub fn vsa_reference(q: &[f32], k: &[f32], v: &[f32], gate: Option<&[f32]>, spec: &VsaSpec, out: &mut [f32]) {
     vsa_reference_impl(q, k, v, gate, spec, out, None);
 }
@@ -220,6 +259,30 @@ fn vsa_reference_impl(q: &[f32], k: &[f32], v: &[f32], gate: Option<&[f32]>, spe
     // integer (h3_core::vsa::attention_pv8_reference's recipe, over the
     // selected tiles).
     let v8 = spec.pv8.then(|| h3_core::vsa::attn_v8_round(v, heads, seq, d));
+    // A dense plan (every tile kept: dense layers, the dense first steps of a
+    // run) is dense attention over the sequence in its natural order plus the
+    // gated pooled branch; the 8-bit recipes are the dense ones
+    // (`attn_qk8_round`, `attention_pv8_reference`), not the tile-grouped
+    // scales of the fine stage, so a backend may run its dense kernel here.
+    let dense_out: Option<(Vec<f32>, Option<Vec<f32>>)> = plan.is_dense().then(|| {
+        if spec.pv8 {
+            if want_slack {
+                let (o, sl) = h3_core::vsa::attention_pv8_reference_slack(q, k, v, heads, heads, seq, seq, d, false);
+                (o, Some(sl))
+            } else {
+                (h3_core::vsa::attention_pv8_reference(q, k, v, heads, heads, seq, seq, d, false), None)
+            }
+        } else {
+            let mut o = vec![0f32; seq * heads * d];
+            if spec.qk8 {
+                let (q8, k8) = h3_core::vsa::attn_qk8_round(q, k, heads, heads, seq, seq, d);
+                attention_reference_into(&q8, &k8, v, heads, heads, seq, seq, d, false, &mut o);
+            } else {
+                attention_reference_into(q, k, v, heads, heads, seq, seq, d, false, &mut o);
+            }
+            (o, None)
+        }
+    });
     let per_head: Vec<Vec<(usize, Vec<f32>, Option<Vec<f32>>)>> = (0..heads)
         .into_par_iter()
         .map(|h| {
@@ -268,6 +331,23 @@ fn vsa_reference_impl(q: &[f32], k: &[f32], v: &[f32], gate: Option<&[f32]>, spe
             }
             // 4. Fine attention, 5. combine.
             let mut rows: Vec<(usize, Vec<f32>, Option<Vec<f32>>)> = Vec::with_capacity(seq);
+            if let Some((dense, dslack)) = &dense_out {
+                for qt in 0..nb {
+                    for qs in 0..plan.block_sizes[qt] as usize {
+                        let qtok = plan.slot_src[qt * te + qs] as usize;
+                        let base = (qtok * heads + h) * d;
+                        let mut o = dense[base..base + d].to_vec();
+                        if let Some(g) = gate {
+                            let gr = row(g, qtok);
+                            for c in 0..d {
+                                o[c] += pooled[qt * d + c] * gr[c];
+                            }
+                        }
+                        rows.push((qtok, o, dslack.as_ref().map(|sl| sl[base..base + d].to_vec())));
+                    }
+                }
+                return rows;
+            }
             for qt in 0..nb {
                 for qs in 0..plan.block_sizes[qt] as usize {
                     let qtok = plan.slot_src[qt * te + qs] as usize;
@@ -681,40 +761,8 @@ impl Backend for Cpu {
         out: &CpuBuf,
     ) {
         let (q, k, v) = (q.r(), k.r(), v.r());
-        let scale = 1.0 / (d as f32).sqrt();
-        let group = heads / kv_heads;
         let mut out = out.w();
-        out[..sq * heads * d].par_chunks_mut(heads * d).enumerate().for_each(|(i, orow)| {
-            let mut p = vec![0.0f32; sk];
-            let limit = if causal { (i + 1 + sk - sq).min(sk) } else { sk };
-            for h in 0..heads {
-                let kh = h / group;
-                let qi = &q[(h * sq + i) * d..][..d];
-                let mut mx = f32::NEG_INFINITY;
-                for j in 0..limit {
-                    let kj = &k[(kh * sk + j) * d..][..d];
-                    let s = qi.iter().zip(kj).map(|(a, b)| a * b).sum::<f32>() * scale;
-                    p[j] = s;
-                    mx = mx.max(s);
-                }
-                let mut den = 0.0f64;
-                for pj in p[..limit].iter_mut() {
-                    *pj = (*pj - mx).exp();
-                    den += *pj as f64;
-                }
-                let o = &mut orow[h * d..][..d];
-                let mut acc = vec![0.0f64; d];
-                for (j, &pj) in p[..limit].iter().enumerate() {
-                    let vj = &v[(kh * sk + j) * d..][..d];
-                    for c in 0..d {
-                        acc[c] += pj as f64 * vj[c] as f64;
-                    }
-                }
-                for c in 0..d {
-                    o[c] = (acc[c] / den) as f32;
-                }
-            }
-        });
+        attention_reference_into(&q, &k, &v, heads, kv_heads, sq, sk, d, causal, &mut out[..sq * heads * d]);
     }
 
     fn attention_qk8(&self, q: &CpuBuf, k: &CpuBuf, v: &CpuBuf, heads: usize, kv_heads: usize, sq: usize, sk: usize, d: usize, causal: bool, pv8: bool, out: &CpuBuf) {

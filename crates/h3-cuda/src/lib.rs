@@ -75,6 +75,9 @@ pub struct CuVsa {
     np: usize,
     nreg: usize,
     dense_all: bool,
+    /// `slot_of_row`: each token's padded slot (tile = slot / te), for the
+    /// dense-plan path's gate add.
+    rowslot: CuBuf,
     maxsel: usize,
     te: usize,
     heads: usize,
@@ -241,6 +244,7 @@ struct Kernels {
     bias_act: CudaFunction,
     swiglu: CudaFunction,
     gate_residual: CudaFunction,
+    vsa_gate_add: CudaFunction,
     rms: CudaFunction,
     layer_norm: CudaFunction,
     head_split: CudaFunction,
@@ -477,6 +481,36 @@ impl Lt {
         }
     }
 
+    /// A plain FP8 plan (per-tensor scales, no block scaling) of the same
+    /// shape, for timing only: how much of an MXFP8 GEMM's time is the
+    /// `VEC32_UE8M0` scaling (item 2 of the 5090 round).
+    fn plan_fp8_plain(&self, n: usize, k: usize, rows: usize, ldc: usize) -> Option<LtPlan> {
+        use lt_sys::cudaDataType_t::{CUDA_R_8F_E4M3, CUDA_R_16BF, CUDA_R_32F};
+        let a = lt_result::create_matrix_layout(CUDA_R_8F_E4M3, k as u64, n as u64, k as i64).ok()?;
+        let b = lt_result::create_matrix_layout(CUDA_R_8F_E4M3, k as u64, rows as u64, k as i64).ok()?;
+        let c = lt_result::create_matrix_layout(CUDA_R_16BF, n as u64, rows as u64, ldc as i64).ok()?;
+        let desc = lt_result::create_matmul_desc(lt_sys::cublasComputeType_t::CUBLAS_COMPUTE_32F, CUDA_R_32F).ok()?;
+        let t: i32 = 1;
+        let pref = lt_result::create_matmul_pref().ok()?;
+        let ws = LT_WORKSPACE as u64;
+        use lt_sys::cublasLtMatmulDescAttributes_t as A;
+        // SAFETY: freshly created descriptors; attribute buffers outlive the calls.
+        unsafe {
+            lt_result::set_matmul_desc_attribute(desc, A::CUBLASLT_MATMUL_DESC_TRANSA, (&t) as *const i32 as *const _, 4).ok()?;
+            lt_result::set_matmul_pref_attribute(pref, lt_sys::cublasLtMatmulPreferenceAttributes_t::CUBLASLT_MATMUL_PREF_MAX_WORKSPACE_BYTES, (&ws) as *const u64 as *const _, 8).ok()?;
+            let mut hs: Vec<lt_sys::cublasLtMatmulHeuristicResult_t> = vec![std::mem::zeroed(); 8];
+            let mut found: i32 = 0;
+            let st = lt_sys::cublasLtMatmulAlgoGetHeuristic(self.handle, desc, a, b, c, c, pref, 8, hs.as_mut_ptr(), &mut found);
+            let _ = lt_result::destroy_matmul_pref(pref);
+            if st != lt_sys::cublasStatus_t::CUBLAS_STATUS_SUCCESS || found <= 0 {
+                return None;
+            }
+            hs.truncate(found as usize);
+            let candidates: Vec<_> = hs.iter().map(|h| h.algo).collect();
+            Some(LtPlan { desc, a, b, c, algo: candidates[0], tuned: candidates.len() == 1, candidates })
+        }
+    }
+
     fn workspace_ptr(&self) -> u64 {
         let (p, _sync) = self.workspace.device_ptr(self.workspace.stream());
         p
@@ -506,6 +540,7 @@ impl Cuda {
             bias_act: get("fw_bias_act")?,
             swiglu: get("fw_swiglu")?,
             gate_residual: get("fw_gate_residual")?,
+            vsa_gate_add: get("fw_vsa_gate_add")?,
             rms: get("fw_rms")?,
             layer_norm: get("fw_layer_norm")?,
             head_split: get("fw_head_split")?,
@@ -839,10 +874,11 @@ impl Cuda {
 
     fn kernel_name(&self, f: &CudaFunction) -> &'static str {
         let k = &self.f;
-        let all: [(&CudaFunction, &'static str); 76] = [
+        let all: [(&CudaFunction, &'static str); 77] = [
             (&k.bias_act, "bias_act"),
             (&k.swiglu, "swiglu"),
             (&k.gate_residual, "gate_residual"),
+            (&k.vsa_gate_add, "vsa gate add (dense plan)"),
             (&k.rms, "rms_norm (+residual, modulation)"),
             (&k.layer_norm, "layer_norm"),
             (&k.head_split, "head_split (qk-norm + rope)"),
@@ -1524,6 +1560,28 @@ impl Backend for Cuda {
                                 t.elapsed().as_secs_f64()
                             };
                             let (tw, ts) = (time(whole, 1), time(split, sp));
+                            // Diagnostics only: the same shape as plain FP8 (per-tensor scales).
+                            let plain = if self.prof.is_some() || self.stall.is_some() {
+                                lt.plan_fp8_plain(n, k, rows, n).map(|mut pp| {
+                                    let (ap, _asp, dp, _b) = slice(0, n);
+                                    self.tune_mx(lt, &mut pp, ap, bp, dp);
+                                    // SAFETY: the plan's layouts match the operands' extents; the
+                                    // E4M3 codes are read as plain FP8, the output is scratch.
+                                    let mut best = f32::INFINITY;
+                                    for _ in 0..2 {
+                                        self.stream.synchronize().expect("sync");
+                                        let t = std::time::Instant::now();
+                                        unsafe {
+                                            lt_result::matmul(lt.handle, pp.desc, (&alpha) as *const f32 as *const _, (&beta) as *const f32 as *const _, ap as *const _, pp.a, bp as *const _, pp.b, dp as *const _, pp.c, dp as *mut _, pp.c, &pp.algo, ws as *mut _, LT_WORKSPACE, self.stream.cu_stream() as *mut _).expect("plain fp8");
+                                        }
+                                        self.stream.synchronize().expect("sync");
+                                        best = best.min(t.elapsed().as_secs_f32());
+                                    }
+                                    best as f64
+                                })
+                            } else {
+                                None
+                            };
                             // Only a clear win: the two big shapes split 1.75× faster on a
                             // 5090, while a 0.2 ms shape measured the same either way and a
                             // noise-driven split there changed the clip's bits (the slices'
@@ -1533,7 +1591,13 @@ impl Backend for Cuda {
                                 choice = sp;
                             }
                             if self.prof.is_some() || self.stall.is_some() {
-                                eprintln!("mxfp8 n={n} k={k} rows={rows}: whole {:.2} ms, ×{sp} {:.2} ms → {}", tw * 1e3, ts * 1e3, if choice > 1 { format!("×{sp}") } else { "whole".into() });
+                                eprintln!(
+                                    "mxfp8 n={n} k={k} rows={rows}: whole {:.2} ms, ×{sp} {:.2} ms → {}{}",
+                                    tw * 1e3,
+                                    ts * 1e3,
+                                    if choice > 1 { format!("×{sp}") } else { "whole".into() },
+                                    plain.map_or(String::new(), |t| format!("; plain fp8 (per-tensor scale) {:.2} ms", t * 1e3))
+                                );
                             }
                         }
                         self.mx_choice.lock().unwrap().insert(key, choice);
@@ -1973,6 +2037,7 @@ impl Backend for Cuda {
             np: plan.num_prefix_tiles,
             nreg: plan.regions.len(),
             dense_all: plan.is_dense(),
+            rowslot: self.words(&plan.slot_of_row()),
             maxsel,
             te: plan.tile_elems,
             heads: h,
@@ -2061,6 +2126,26 @@ impl Backend for Cuda {
                 Arg::F(s.scale),
             ],
         );
+        // A dense plan: the dense attention kernel over the natural order (its
+        // INT8 / FP8 recipe when the spec asks) plus the gated pooled branch.
+        // The all-tiles fine stage computed the same softmax at ~2× the cost
+        // (a 5090: 9.8 s against 5.3 s per V2 step).
+        if s.dense_all && !self.scalar_attn && (s.d == 64 || s.d == 128) && (s.scale - 1.0 / (s.d as f32).sqrt()).abs() <= 1e-6 * s.scale {
+            if s.qk8.is_some() || s.pv8.is_some() {
+                self.attention_qk8(q, k, v, s.heads, s.heads, s.seq, s.seq, s.d, false, s.pv8.is_some(), out);
+            } else {
+                self.attention(q, k, v, s.heads, s.heads, s.seq, s.seq, s.d, false, out);
+            }
+            if let Some(g) = gate {
+                self.launch(
+                    &self.f.vsa_gate_add,
+                    Self::elems(n),
+                    (256, 1, 1),
+                    &[Arg::P(self.ptr(out)), Arg::P(self.ptr(&s.pooled_out)), Arg::P(self.ptr(g)), Arg::P(self.ptr(&s.rowslot)), Arg::L(n as i64), Arg::I(s.heads as i32), Arg::I(s.seq as i32), Arg::I(s.d as i32), Arg::I(s.nb as i32), Arg::I(s.te as i32)],
+                );
+            }
+            return;
+        }
         let tail = |a: &mut Vec<Arg>| {
             a.extend([
                 Arg::P(self.ptr(&s.slot)),

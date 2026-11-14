@@ -19,6 +19,8 @@
 //   op 17 snake alpha:          x += sin²(α·x) / (α + 1e-9)        (α = aux[c])
 //   op 18 snake alpha-beta:     x += sin²(e^α·x) / (e^β + 1e-9)    (α = aux[c], β = z[c])
 //   op 19 trilinear resize:     x[c, t2, h2, w2] from y[c, t, h, w], align_corners=false
+//   op 20 vsa gate add:         x[tok, h, c] += aux[(h·slot + ui[tok] / off)·dim + c] · y[(h·len + tok)·dim + c]
+//                               (dense-plan VSA: dim = d, slots = heads, slot = nb, off = te, len = seq)
 struct P { n: u32, op: u32, dim: u32, slots: u32, slot: u32, off: u32, xoff: u32, c: u32,
            t: u32, h: u32, w: u32, pt: u32, ph: u32, pw: u32, t2: u32, h2: u32,
            w2: u32, left: u32, len: u32, r: u32, frames: u32, stride: u32, col: u32, has_z: u32,
@@ -122,6 +124,17 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>, @builtin(workgroup_id) wid
             let be = exp(z[cc]);
             let s = sin(al * x[i]);
             x[i] = x[i] + s * s / (be + 1e-9);
+        }
+        case 20u: {
+            let c = i % p.dim;
+            let row = i / p.dim;
+            let h = row % p.slots;
+            let tok = row / p.slots;
+            let sl = ui[tok];
+            if (sl != 0xffffffffu) {
+                let tile = sl / p.off;
+                x[i] = x[i] + aux[(h * p.slot + tile) * p.dim + c] * y[(h * p.len + tok) * p.dim + c];
+            }
         }
         default: {
             // trilinear: i over [c, t2, h2, w2]
