@@ -205,6 +205,8 @@ f32-host path (the binary of the FP8 record) against c0a807e:
 | + QKV row split (`H3_CUDA_MX_SPLIT_MIN=21504`) | **5.29–5.33 s** | **42.6 s** | **48.9 s** | 118 ms | **byte-identical** |
 | + depth 2 instead of the split | 5.67–5.73 s | 45.7 s | 52.0 s | 0 ms | byte-identical |
 | all 50 blocks MXFP8 (`H3_MXFP8_ALL_BLOCKS=1`), no split | 5.30–5.34 s | 42.7 s | 49.0 s | 63 ms | 22.3 dB, same scene (`v2-fix-allblocks.grid.png`) |
+| all 50 blocks MXFP8 + QKV split (`v2-fix-both`) | **4.86–4.91 s** | **39.2 s** | **45.5 s** | 63 ms | the all-blocks clip, bit for bit |
+| ComfyUI's budget on the fixed path (keep 10 %, 2 dense first steps, split) | 9.8 s dense / 4.75 s sparse | 48.1 s | 54.4 s | | |
 | ComfyUI `fasth3-v2-euler` (page) | 5.65 s | 45.2 s sampler | 54.1 s total | | |
 
 So on a 600 W 5090 the V2 recipe is now **ahead of ComfyUI's row on both
@@ -219,7 +221,16 @@ as the split, and left off because the split gets there without touching
 the recipe's calibrated edges. The profile of the fixed path (`v2-fix-
 prof.log`): 44.0 s of kernels over 8 forwards, 5.51 s per forward
 against 5.70 s wall, so 0.19 s per forward (3 %) is outside the kernels
-now, from 1.8 s. What remains per forward: the VSA fine stage 1.36 s
+now, from 1.8 s; with the split (`v2-fix-split-prof.log`) 40.7 s of
+kernels, 5.09 s against 5.32 s wall, the QKV GEMM 23.0 → 13.2 ms per
+call and the MXFP8 GEMMs at 565 TFLOP/s. With every block MXFP8 as
+well, the forward is 4.9 s: denoise 39.2 s and 45.5 s with decode,
+13 % and 16 % ahead of ComfyUI's row, at the usual 22 dB from the
+calibrated-edge clip; the recipe's own edges with the split stay the
+default. ComfyUI's attention budget is still not a win for us (48.1 s):
+its two dense steps go through the all-tiles VSA path at 9.8 s where
+the dense INT8+FP8 kernel would do them in ~5.3 s, which is the one
+routing change left on that row (then ~39 s). What remains per forward: the VSA fine stage 1.36 s
 (27.1 ms × 50), the MXFP8 GEMMs 2.6 s (QKV 23.0 ms per call unsplit,
 FFN-up 17.6 ms split, FFN-down 8.9, out 4.3, gate 4.4), the five bf16
 edge blocks' GEMMs 0.67 s, head_split / quant / SwiGLU / norms / coarse /
