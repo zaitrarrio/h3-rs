@@ -1,0 +1,173 @@
+cuda NVIDIA GeForce RTX 5090 (sm_120)
+mxfp8 n=16384 k=64 rows=1024: whole 0.03 ms, ×2 0.03 ms → whole; plain fp8 (per-tensor scale) 0.02 ms
+linear 1x8x4 None                                    rel 1.67e-3  ok
+linear 37x70x33 GeluTanh                             rel 4.30e-3  ok
+linear int8/70 37x70x33                              rel 4.71e-3  ok
+linear int4/70 37x70x33                              rel 3.95e-3  ok
+linear 130x96x200 GeluErf                            rel 4.18e-3  ok
+linear int8/96 130x96x200                            rel 4.10e-3  ok
+linear int4/96 130x96x200                            rel 4.21e-3  ok
+linear nvfp4 130x96x200                              rel 3.48e-3  ok
+linear nvfp4 first-high 130x96x200                   rel 3.48e-3  ok
+linear mxfp8 130x96x200 GeluErf                      rel 3.85e-3  ok
+linear mxfp8 no-bias 130x96x200                      rel 2.79e-3  ok
+linear 65x256x64 Silu                                rel 4.37e-3  ok
+linear int8/128 65x256x64                            rel 5.42e-3  ok
+linear int4/64 65x256x64                             rel 4.26e-3  ok
+linear nvfp4 65x256x64                               rel 4.06e-3  ok
+linear nvfp4 first-high 65x256x64                    rel 4.06e-3  ok
+linear mxfp8 65x256x64 Silu                          rel 4.17e-3  ok
+linear mxfp8 no-bias 65x256x64                       rel 2.21e-3  ok
+linear 300x96x260 None                               rel 3.64e-3  ok
+linear int8/96 300x96x260                            rel 3.50e-3  ok
+linear int4/96 300x96x260                            rel 3.31e-3  ok
+linear nvfp4 300x96x260                              rel 3.23e-3  ok
+linear nvfp4 first-high 300x96x260                   rel 3.23e-3  ok
+linear mxfp8 300x96x260 None                         rel 2.90e-3  ok
+linear mxfp8 no-bias 300x96x260                      rel 2.76e-3  ok
+linear 129x1536x130 None                             rel 4.74e-3  ok
+linear int8/128 129x1536x130                         rel 4.13e-3  ok
+linear int4/64 129x1536x130                          rel 4.83e-3  ok
+linear nvfp4 129x1536x130                            rel 3.83e-3  ok
+linear nvfp4 first-high 129x1536x130                 rel 3.83e-3  ok
+linear mxfp8 129x1536x130 None                       rel 4.27e-3  ok
+linear mxfp8 no-bias 129x1536x130                    rel 3.09e-3  ok
+linear 1100x1536x200 GeluTanh                        rel 3.73e-3  ok
+linear int8/128 1100x1536x200                        rel 3.46e-3  ok
+linear int4/64 1100x1536x200                         rel 3.01e-3  ok
+linear nvfp4 1100x1536x200                           rel 3.35e-3  ok
+linear nvfp4 first-high 1100x1536x200                rel 3.35e-3  ok
+linear mxfp8 1100x1536x200 GeluTanh                  rel 2.93e-3  ok
+linear mxfp8 no-bias 1100x1536x200                   rel 2.95e-3  ok
+linear mxfp8 130x64x512 GeluTanh (split-able)        rel 3.59e-3  ok
+linear mxfp8 no-bias 130x64x512 (split-able)         rel 4.39e-3  ok
+linear mxfp8 1024x64x16384 first call (split-decided) rel 3.20e-3  ok
+linear mxfp8 1024x64x16384 second call == first      rel 0.00e0  ok
+swiglu 19x48                                         rel 2.55e-3  ok
+rms_norm plain                                       rel 5.81e-3  ok
+rms_norm mod                                         rel 5.62e-3  ok
+residual_rms_norm table-gate                         rel 5.25e-3  ok
+residual_rms_norm vector-gate                        rel 4.55e-3  ok
+residual_rms_norm plain                              rel 3.74e-3  ok
+gate_residual table                                  rel 4.26e-3  ok
+gate_residual vector                                 rel 4.11e-3  ok
+layer_norm                                           rel 5.89e-3  ok
+layer_norm no-affine                                 rel 4.59e-3  ok
+head_split norm+rope                                 rel 4.38e-3  ok
+head_split no-affine norm full rope                  rel 2.87e-3  ok
+head_split plain                                     rel 2.34e-3  ok
+attention h3 kv3 37x37 d16 causal=false              rel 7.11e-3  ok
+attention qk8 h3 kv3 37x37 d16 causal=false          rel 1.36e-2  ok
+attention qk8+pv8 h3 kv3 37x37 d16 causal=false      rel 3.45e-3  ok
+attention h4 kv2 70x70 d32 causal=true               rel 3.21e-3  ok
+attention qk8 h4 kv2 70x70 d32 causal=true           rel 8.05e-3  ok
+attention qk8+pv8 h4 kv2 70x102 d32 causal=true      rel 2.79e-3  ok
+attention h2 kv2 130x65 d64 causal=false             rel 4.11e-3  ok
+attention qk8 h2 kv2 130x65 d64 causal=false         rel 8.06e-3  ok
+attention qk8+pv8 h2 kv2 130x65 d64 causal=false     rel 3.00e-3  ok
+attention h2 kv1 33x33 d128 causal=true              rel 6.07e-3  ok
+attention qk8 h2 kv1 33x33 d128 causal=true          rel 7.88e-3  ok
+attention qk8+pv8 h2 kv1 33x65 d128 causal=true      rel 2.90e-3  ok
+vsa tile64 d32 gate                                  rel 5.14e-3  ok
+vsa tile64 d32 no-gate                               rel 3.95e-3  ok
+vsa tile64 d32 qk8 gate                              rel 8.95e-3  ok
+vsa tile64 d32 qk8 no-gate                           rel 1.08e-2  ok
+vsa tile64 d32 qk8+pv8 gate                          rel 2.33e-3  ok
+vsa tile64 d32 qk8+pv8 no-gate                       rel 3.32e-3  ok
+vsa tile64 d32 dense-plan gate                       rel 4.49e-3  ok
+vsa tile64 d32 dense-plan no-gate                    rel 5.36e-3  ok
+vsa tile64 d32 dense-plan qk8 gate                   rel 1.00e-2  ok
+vsa tile64 d32 dense-plan qk8+pv8 gate               rel 2.38e-3  ok
+vsa tile64 d32 dense-plan qk8+pv8 no-gate            rel 3.45e-3  ok
+vsa tile128 d64 gate                                 rel 6.02e-3  ok
+vsa tile128 d64 no-gate                              rel 4.03e-3  ok
+vsa tile128 d64 qk8 gate                             rel 1.02e-2  ok
+vsa tile128 d64 qk8 no-gate                          rel 1.90e-2  ok
+vsa tile128 d64 qk8+pv8 gate                         rel 3.58e-3  ok
+vsa tile128 d64 qk8+pv8 no-gate                      rel 3.42e-3  ok
+vsa tile128 d64 dense-plan gate                      rel 4.72e-3  ok
+vsa tile128 d64 dense-plan no-gate                   rel 4.37e-3  ok
+vsa tile128 d64 dense-plan qk8 gate                  rel 7.07e-3  ok
+vsa tile128 d64 dense-plan qk8+pv8 gate              rel 3.75e-3  ok
+vsa tile128 d64 dense-plan qk8+pv8 no-gate           rel 3.38e-3  ok
+vsa tile64 d128 gate                                 rel 4.11e-3  ok
+vsa tile64 d128 no-gate                              rel 4.00e-3  ok
+vsa tile64 d128 qk8 gate                             rel 1.07e-2  ok
+vsa tile64 d128 qk8 no-gate                          rel 1.27e-2  ok
+vsa tile64 d128 qk8+pv8 gate                         rel 3.39e-3  ok
+vsa tile64 d128 qk8+pv8 no-gate                      rel 3.10e-3  ok
+vsa tile64 d128 dense-plan gate                      rel 4.66e-3  ok
+vsa tile64 d128 dense-plan no-gate                   rel 4.70e-3  ok
+vsa tile64 d128 dense-plan qk8 gate                  rel 8.27e-3  ok
+vsa tile64 d128 dense-plan qk8+pv8 gate              rel 2.58e-3  ok
+vsa tile64 d128 dense-plan qk8+pv8 no-gate           rel 3.44e-3  ok
+patchify 1x2x2                                       rel 2.03e-3  ok
+patchify 1x1x1                                       rel 2.03e-3  ok
+unpatchify                                           rel 2.38e-3  ok
+unpatchify 4x16x16                                   rel 3.51e-3  ok
+flow euler                                           rel 3.10e-3  ok
+flow renoise                                         rel 2.86e-3  ok
+flow terminal                                        rel 2.88e-3  ok
+axpby                                                rel 4.32e-3  ok
+channel_affine                                       rel 3.14e-3  ok
+conv2d 2x5+5->7 6x9 up=false k3 ep1                  rel 3.69e-3  ok
+conv2d 3x6+0->8 5x7 up=true k3 ep0                   rel 3.49e-3  ok
+conv2d 2x4+0->12 6x6 up=false k1 ep0                 rel 3.49e-3  ok
+conv2d 1x3+0->3 17x33 up=false k3 ep2                rel 4.44e-3  ok
+conv3d causal reflect                                rel 2.82e-3  ok
+conv3d same add                                      rel 3.22e-3  ok
+conv3d strided downsampler                           rel 5.73e-3  ok
+conv3d depthwise temporal                            rel 4.15e-3  ok
+conv3d 1x1x1                                         rel 3.94e-3  ok
+conv3d causal zero relu                              rel 2.56e-3  ok
+conv1d dilated                                       rel 3.60e-3  ok
+conv1d strided                                       rel 3.53e-3  ok
+conv1d depthwise stride2                             rel 4.45e-3  ok
+conv1d 1x1 add                                       rel 2.86e-3  ok
+replicate_pad1d                                      rel 2.29e-3  ok
+conv_transpose1d                                     rel 3.35e-3  ok
+conv_transpose1d depthwise                           rel 3.42e-3  ok
+snake alpha                                          rel 5.40e-3  ok
+snake beta                                           rel 3.83e-3  ok
+group_norm per-frame silu                            rel 3.87e-3  ok
+group_norm volume                                    rel 4.02e-3  ok
+trilinear up                                         rel 4.11e-3  ok
+trilinear same-t                                     rel 3.89e-3  ok
+pixel_shuffle                                        rel 2.19e-3  ok
+tanh_clamp                                           rel 3.80e-3  ok
+clamp                                                rel 1.94e-3  ok
+dit tiny Dense { qk8: false, pv8: false } native     rel 5.89e-3  ok
+dit tiny Dense { qk8: false, pv8: false } native streamed rel 5.89e-3  ok
+dit tiny Dense { qk8: false, pv8: false } native streamed == resident rel 0.00e0  ok
+dit tiny Vsa { sparsity: 0.5, tile: 64, ref_sparsity: 0.5, qk8: false, pv8: false } native rel 5.15e-3  ok
+dit tiny Vsa { sparsity: 0.5, tile: 64, ref_sparsity: 0.5, qk8: false, pv8: false } native streamed rel 5.15e-3  ok
+dit tiny Vsa { sparsity: 0.5, tile: 64, ref_sparsity: 0.5, qk8: false, pv8: false } native streamed == resident rel 0.00e0  ok
+dit tiny Dense { qk8: false, pv8: false } int8       rel 5.41e-3  ok
+dit tiny Dense { qk8: false, pv8: false } int8 streamed rel 5.41e-3  ok
+dit tiny Dense { qk8: false, pv8: false } int8 streamed == resident rel 0.00e0  ok
+dit tiny Vsa { sparsity: 0.5, tile: 64, ref_sparsity: 0.5, qk8: false, pv8: false } int8 rel 4.66e-3  ok
+dit tiny Vsa { sparsity: 0.5, tile: 64, ref_sparsity: 0.5, qk8: false, pv8: false } int8 streamed rel 4.66e-3  ok
+dit tiny Vsa { sparsity: 0.5, tile: 64, ref_sparsity: 0.5, qk8: false, pv8: false } int8 streamed == resident rel 0.00e0  ok
+dit tiny Dense { qk8: false, pv8: false } int4-hqq-g32 rel 5.21e-3  ok
+dit tiny Dense { qk8: false, pv8: false } int4-hqq-g32 streamed rel 5.21e-3  ok
+dit tiny Dense { qk8: false, pv8: false } int4-hqq-g32 streamed == resident rel 0.00e0  ok
+dit tiny Vsa { sparsity: 0.5, tile: 64, ref_sparsity: 0.5, qk8: false, pv8: false } int4-hqq-g32 rel 5.60e-3  ok
+dit tiny Vsa { sparsity: 0.5, tile: 64, ref_sparsity: 0.5, qk8: false, pv8: false } int4-hqq-g32 streamed rel 5.60e-3  ok
+dit tiny Vsa { sparsity: 0.5, tile: 64, ref_sparsity: 0.5, qk8: false, pv8: false } int4-hqq-g32 streamed == resident rel 0.00e0  ok
+dit tiny Dense { qk8: true, pv8: false } native      rel 5.43e-3  ok
+dit tiny Dense { qk8: true, pv8: false } native streamed rel 5.43e-3  ok
+dit tiny Dense { qk8: true, pv8: false } native streamed == resident rel 0.00e0  ok
+dit tiny Dense { qk8: true, pv8: true } native       rel 5.37e-3  ok
+dit tiny Dense { qk8: true, pv8: true } native streamed rel 5.37e-3  ok
+dit tiny Dense { qk8: true, pv8: true } native streamed == resident rel 0.00e0  ok
+dit tiny Vsa { sparsity: 0.5, tile: 64, ref_sparsity: 0.5, qk8: true, pv8: false } native rel 5.85e-3  ok
+dit tiny Vsa { sparsity: 0.5, tile: 64, ref_sparsity: 0.5, qk8: true, pv8: false } native streamed rel 5.85e-3  ok
+dit tiny Vsa { sparsity: 0.5, tile: 64, ref_sparsity: 0.5, qk8: true, pv8: false } native streamed == resident rel 0.00e0  ok
+dit tiny Vsa { sparsity: 0.5, tile: 64, ref_sparsity: 0.5, qk8: true, pv8: true } native rel 5.37e-3  ok
+dit tiny Vsa { sparsity: 0.5, tile: 64, ref_sparsity: 0.5, qk8: true, pv8: true } native streamed rel 5.37e-3  ok
+dit tiny Vsa { sparsity: 0.5, tile: 64, ref_sparsity: 0.5, qk8: true, pv8: true } native streamed == resident rel 0.00e0  ok
+video vae tiny encode+decode                         rel 8.59e-3  ok
+audio vae tiny encode+decode                         rel 7.07e-3  ok
+taeh3 tiny                                           rel 5.14e-3  ok
+upscaler tiny                                        rel 9.11e-3  ok
+all 170 checks pass (tolerance 3e-2)
