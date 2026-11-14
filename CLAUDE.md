@@ -136,7 +136,8 @@ State and invariants only; the reasoning is in `docs/design.md`.
   shared-memory transpose. Kernels `fw_attention_pv8_{64,128}` and
   `fw_vsa_fine3g_mma{64,128}` (`H3_CUDA_VSA_FINE=g`), sm_89+
   (`cvt.rn.satfinite.e4m3x2`); WebGPU emulates (`attn_pv8.wgsl`, the
-  V codes from `attn_qk8.wgsl`, the VSA fine stage in `flash.wgsl`). 143 checks (CUDA: 143 / 143 on an RTX 4000 Ada,
+  V codes from `attn_qk8.wgsl`, the VSA fine stage in `flash.wgsl`). 153 checks (CUDA: 143 / 143 on an RTX 4000 Ada, 153 / 153 after the
+  streamed-equals-resident cases,
   sm_89, after the checker fix below; the dense pv8 cases at 3e-3). Head
   sizes without an FP8 kernel (not 64 / 128) run the host oracle on CUDA,
   dense and VSA alike (`CuVsa::host_pv8`); pre-sm_89 cards warn and run
@@ -177,10 +178,28 @@ State and invariants only; the reasoning is in `docs/design.md`.
   the bounce buffer is reused, and taking it early let the next block's
   small copies overwrite slots still queued on the copy stream (clips
   black on three hosts, byte-identical on one, 29317cb; the 4090's PCIe 4
-  link gains nothing from pinning: 14.8 s either way). The forward is
-  then compute-bound and
+  link gains nothing from pinning: 14.8 s either way). The fences are a
+  FIFO (`H3_PREFETCH_DEPTH=2` keeps two prefetches in flight) and each is
+  popped exactly once in `prefetch_wait`; keeping the only entry made
+  every block after the first wait on the previous block's fence
+  (3eb1d82 → c0a807e: clips differed between depth 1 and depth 2). The
+  checker compares every streamed tiny-DiT forward with its resident
+  twin **exactly** (`streamed == resident`), and `H3_STREAM_STRESS=1`
+  zeroes, delays 5 ms and then copies each prefetch so a wrong wait reads
+  zeros: a build with the FIFO bug fails those cases under stress and
+  passes without it (`docs/runs/2026-11-13-vast-5090-streaming-gemm`).
+  Streamed native-precision blocks (the five bf16 edge blocks of the
+  MXFP8 recipe) are kept on the host as bf16 bytes and page-locked
+  (`HostWeight::Bf16`, `Backend::weight_bf16`, only where
+  `Backend::bf16_weights`): as f32 they cost a host-side conversion and
+  a synchronous pageable copy per block per step, ~1.6 s of a V2 forward
+  and ~1.3 s of a dense base step on a 5090, while the GPU never waited
+  on the fence (`H3_STALL=1` prints the compute-stream wait, the copy
+  windows and a 56 GB/s pinned h2d probe). The forward is then
+  compute-bound and
   5090 pods differ by ~8 % through their clocks under the 575 W limit
-  (median 2445 MHz on the slower kind; the link runs PCIe 5 × 8).
+  (median 2445 MHz on the slower kind; the link runs PCIe 5 × 8; a Vast
+  box at 550 W ran a median 2055 MHz and 15–20 % slower kernels).
   `--steps N` sets the base model's uniform Euler ladder (ComfyUI's
   25-step template); distilled variants refuse it.
 - NVFP4 on CUDA stays 4-bit on the device (codes + E4M3 scales, expanded
