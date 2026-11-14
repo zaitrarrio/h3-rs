@@ -507,6 +507,26 @@ fn ops<B: Backend>(p: &mut Pair<'_, B>, rng: &mut Rng) {
         p.op(format!("linear mxfp8 {m}x{k}x{n} GeluTanh (split-able)"), |r| r.linear(&x, 3, m, &Mat::Mxfp8(&mx), Some(&b), Act::GeluTanh, m + 2, 2));
         p.op(format!("linear mxfp8 no-bias {m}x{k}x{n} (split-able)"), |r| r.linear(&x, 1, m, &Mat::Mxfp8(&mx), None, Act::Silu, m + 1, 1));
     }
+    // A shape the CUDA backend's per-shape split decision applies to (n ≥ 16384,
+    // n % 256 == 0, rows ≥ 1024): its first call times the whole and split
+    // plans (and, under `H3_STALL` / `H3_PROFILE`, a plain-FP8 probe) and must
+    // return the chosen plan's output. A probe that wrote into y once passed
+    // every case above because none of them reached this branch
+    // (`docs/runs/2026-11-14-runpod-6000s-probe-bug`); the first and second
+    // calls must also agree exactly on every backend.
+    {
+        let (m, k, n) = (1024, 64, 16384);
+        let x = rng.normal(m * k);
+        let w = rng.uniform(n * k, 0.2);
+        let b = rng.normal(n);
+        let mx = Mxfp8::quantize(&w, n, k);
+        let mut g = |r: &dyn ErasedBackend| r.linear(&x, 0, m, &Mat::Mxfp8(&mx), Some(&b), Act::None, m, 0);
+        let first = BackendRunner(p.be).run(&mut g);
+        let second = BackendRunner(p.be).run(&mut g);
+        let want = BackendRunner(&Cpu).run(&mut g);
+        p.record(format!("linear mxfp8 {m}x{k}x{n} first call (split-decided)"), first.clone(), want);
+        p.record_exact(format!("linear mxfp8 {m}x{k}x{n} second call == first"), second, first);
+    }
     // swiglu
     {
         let x = rng.normal(19 * 2 * 48);
