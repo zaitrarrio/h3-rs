@@ -44,6 +44,67 @@ truncated transfer (`FAILED` in the boot log; the loader refused the
 file as "incomplete metadata"), which the repair command refetched.
 `h3 check --backend cuda`: 143 / 143, the FP8 cases at 2–3e-3.
 
-## Results
+## What the box runs like
+
+Slower than the RunPod 5090 pods on identical code, with the same driver
+and a wider link: the V2 forward 7.9 s against 6.1–6.5 s, the dense
+base step 10.2 s against 7.8–8.7 s, the INT8+FP8 attention call 91 ms
+against 82 ms, the MXFP8 FFN-up GEMM 22.3 ms against 18.2 ms. The
+550 W limit and whatever clocks this host's cooling allows are the
+difference (CLOCKS_TBD); the numbers below compare against each other on
+this box, and only the ratios carry to other 5090s.
+
+## Item 1: the non-kernel time was the bf16 edge blocks' uploads
+
+Every run here printed its prefetch accounting; the first binary's
+events had timing disabled (cudarc's default, fixed in 922127c), so the
+first numbers come from the per-kernel profile and from switching the
+edge blocks' format, and the event numbers from the follow-up command.
+
+`WeightQuant::for_block` keeps blocks 0–1 and the last three in bf16.
+When the DiT streams, those five blocks were kept on the host as **f32**
+(`HostWeight::F32`, 1.5 GB each) and every step `Backend::weight`
+converted them to bf16 on the CPU and copied the 770 MB from pageable
+memory with a synchronous `memcpy_htod` (the page-locked DMA path only
+covered byte-coded weights, the thing bb79796 fixed for the quantized
+blocks); the host sat in that copy instead of launching the next block's
+kernels. Quantizing those five blocks too (`H3_MXFP8_ALL_BLOCKS=1`)
+removes the path entirely and shows its cost:
+
+| dense base, 2 euler steps, step 2 | step | V2, 8 steps, forward 2–8 | forward |
+|---|---|---|---|
+| as released (edges bf16, f32 on the host) | 10.18 s | | 7.91–7.96 s |
+| `H3_MXFP8_ALL_BLOCKS=1` | **8.64 s** | | **5.91–5.98 s** |
+| `H3_CUDA_MX_SPLIT_MIN=21504` (QKV row split) | 9.90 s | | 7.59–7.65 s |
+| both | **8.12 s** | | **5.56–5.64 s** |
+
+With all blocks MXFP8 the profiled step's kernels sum to 8.0 s against
+8.12 s wall (`gemm/base2-both-profile.log`): nothing is left outside the
+kernels. That is 15 % of the dense step and 25 % of the V2 forward,
+far more than the five blocks' GEMM difference (~0.35 s), so it was the
+upload path, not the arithmetic. **But quantizing the edge blocks is not
+the fix**: on the base model the clip stays in the band (base25, 25
+steps: 10.1 → 8.33 s per step, 20.3 dB against the bf16-edge clip, same
+scene), while on the DMD-distilled V2 the edges are calibrated and the
+clip changes character: `gemm/v2-allblocks.grid.png` is an anime
+rendering of the samurai (14.8 dB, Y 10.6), `v2-both.grid.png` a
+different photoreal composition (17.1 dB). The Server Edition record had
+called all-blocks "same PSNR band" on one clip; this prompt says
+otherwise. The fix that keeps the recipe is to stream the bf16 blocks as
+bf16 bytes through the page-locked path (`HostWeight::Bf16`,
+`Backend::weight_bf16`, BF16PIN_COMMIT): the follow-up command measures
+it below.
+
+The QKV row split (`H3_CUDA_MX_SPLIT_MIN=21504`) is worth 3–4 % on its
+own on this card (the `n=21504` shape ran at 388 TFLOP/s unsplit on the
+RunPod pod; split it runs at 16.4 ms per call here against the FFN-up's
+22.3 ms); it changes the sample at the rounding level only (20.7 dB
+against the unsplit clip, the cuBLASLt-candidate band).
+
+Prefetch depth 2 (`H3_PREFETCH_DEPTH=2`) was slower on this box with the
+f32-host edge blocks (V2 8.24 s against 7.92 s; base 10.42 against
+10.18): the host sync in `prefetch_begin` now waits for the newer of two
+copies before issuing the next, so the pageable edge-block copies held
+the host longer. Re-measured with the bf16 path below.
 
 RESULTS_TBD

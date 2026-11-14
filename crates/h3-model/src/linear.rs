@@ -23,6 +23,9 @@ pub struct Linear<B: Backend> {
 /// streamed block, or the input of [`upload`].
 pub enum HostWeight {
     F32(Vec<f32>),
+    /// bf16 bits, `[rows][cols]`: the streamed form of a native-precision block
+    /// ([`HostWeight::to_bf16`]), uploaded as bytes.
+    Bf16(Vec<u16>),
     Q8(Q8),
     Q4(Q4),
     Nvfp4(Nvfp4),
@@ -33,6 +36,7 @@ impl HostWeight {
     pub fn bytes(&self) -> usize {
         match self {
             HostWeight::F32(v) => v.len() * 4,
+            HostWeight::Bf16(v) => v.len() * 2,
             HostWeight::Q8(q) => q.bytes(),
             HostWeight::Q4(q) => q.bytes(),
             HostWeight::Nvfp4(q) => q.bytes(),
@@ -57,6 +61,7 @@ impl HostWeight {
         let bufs: Vec<&[u8]> = match self {
             // SAFETY (both casts): `f32` / `i8` reinterpreted as the bytes of the same allocation.
             HostWeight::F32(v) => vec![unsafe { std::slice::from_raw_parts(v.as_ptr() as *const u8, v.len() * 4) }],
+            HostWeight::Bf16(v) => vec![unsafe { std::slice::from_raw_parts(v.as_ptr() as *const u8, v.len() * 2) }],
             HostWeight::Q8(q) => vec![unsafe { std::slice::from_raw_parts(q.q.as_ptr() as *const u8, q.q.len()) }],
             HostWeight::Q4(_) => vec![],
             HostWeight::Nvfp4(q) => vec![&q.packed, &q.scales],
@@ -66,14 +71,31 @@ impl HostWeight {
     }
 }
 
+impl HostWeight {
+    /// A native-precision (f32) weight becomes bf16 bits, what the device
+    /// holds anyway; the other forms are already byte-coded. For blocks that
+    /// stream every step: half the host memory, and the upload is a plain copy.
+    pub fn to_bf16(&mut self) {
+        if let HostWeight::F32(v) = self {
+            let h: Vec<u16> = v.iter().map(|&x| half::bf16::from_f32(x).to_bits()).collect();
+            *self = HostWeight::Bf16(h);
+        }
+    }
+}
+
 impl HostLinear {
     pub fn pin<B: Backend>(&self, be: &B, out: &mut Vec<PinGuard>) {
         self.w.pin(be, out);
     }
 
+    pub fn to_bf16(&mut self) {
+        self.w.to_bf16();
+    }
+
     pub fn upload<B: Backend>(&self, be: &B) -> Linear<B> {
         let w = match &self.w {
             HostWeight::F32(v) => be.weight(v, self.rows, self.cols),
+            HostWeight::Bf16(v) => be.weight_bf16(v, self.rows, self.cols),
             HostWeight::Q8(q) => be.weight_q8(q),
             HostWeight::Q4(q) => be.weight_q4(q),
             HostWeight::Nvfp4(q) => be.weight_nvfp4(q),

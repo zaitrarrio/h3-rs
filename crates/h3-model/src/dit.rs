@@ -64,6 +64,13 @@ pub struct HostAttnFf {
 }
 
 impl HostAttnFf {
+    /// Native-precision linears to bf16 bits (see `HostWeight::to_bf16`).
+    fn to_bf16(&mut self) {
+        for l in [&mut self.qkv, &mut self.out, &mut self.ff_in, &mut self.ff_out].into_iter().chain(self.gate.as_mut()) {
+            l.to_bf16();
+        }
+    }
+
     fn pin<B: Backend>(&self, be: &B, out: &mut Vec<crate::linear::PinGuard>) {
         for l in [&self.qkv, &self.out, &self.ff_in, &self.ff_out].into_iter().chain(self.gate.as_ref()) {
             l.pin(be, out);
@@ -321,8 +328,12 @@ impl<B: Backend> H3Dit<B> {
         let all_blocks = std::env::var("H3_MXFP8_ALL_BLOCKS").is_ok_and(|v| v == "1");
         for l in 0..cfg.layers {
             let q = if all_blocks { opts.quant } else { opts.quant.for_block(l, cfg.layers) };
-            let h = unit_host(&format!("transformer_blocks.{l}"), has_gate, q)?;
+            let mut h = unit_host(&format!("transformer_blocks.{l}"), has_gate, q)?;
             blocks.push(if opts.stream_blocks {
+                // A streamed bf16 block used to be kept as f32 and converted on
+                // the host every step, then copied synchronously from pageable
+                // memory: on a 5090 that was ~0.3 s per edge block per step.
+                h.to_bf16();
                 h.pin(be, &mut pins);
                 Residency::Host(h)
             } else {

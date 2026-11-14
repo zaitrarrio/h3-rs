@@ -1158,6 +1158,16 @@ impl Backend for Cuda {
         CuWeight { buf: self.upload(data), rows, cols, quant: None }
     }
 
+    fn weight_bf16(&self, data: &[u16], rows: usize, cols: usize) -> CuWeight {
+        assert_eq!(data.len(), rows * cols);
+        // SAFETY: the bf16 bits reinterpreted as their bytes; `upload_bytes` keeps the
+        // page-locked interior as a DMA (streamed edge blocks: 770 MB each, no host pass).
+        let bytes: &[u8] = unsafe { std::slice::from_raw_parts(data.as_ptr() as *const u8, data.len() * 2) };
+        let mut buf = self.upload_bytes(bytes);
+        buf.len = data.len();
+        CuWeight { buf, rows, cols, quant: None }
+    }
+
     fn weight_q8(&self, q: &Q8) -> CuWeight {
         // SAFETY: `i8` and `u8` share size and alignment; the device reads the bit pattern.
         let bytes: &[u8] = unsafe { std::slice::from_raw_parts(q.q.as_ptr() as *const u8, q.q.len()) };

@@ -369,6 +369,14 @@ pub trait Backend {
     /// `buf[off..off + len] = value`.
     fn fill(&self, buf: &Self::Buf, off: usize, len: usize, value: f32);
     fn weight(&self, data: &[f32], rows: usize, cols: usize) -> Self::Weight;
+    /// [`Backend::weight`] from bf16 bits: streamed bf16 blocks keep their
+    /// host copy in this form so every step's upload is a byte copy (a
+    /// page-locked DMA on CUDA) instead of an f32 → bf16 pass plus a
+    /// synchronous pageable copy. The default converts and calls `weight`.
+    fn weight_bf16(&self, data: &[u16], rows: usize, cols: usize) -> Self::Weight {
+        let f: Vec<f32> = data.iter().map(|&b| f32::from_bits((b as u32) << 16)).collect();
+        self.weight(&f, rows, cols)
+    }
     /// Int8 weight-only matrix for [`Backend::linear`]; must equal `linear`
     /// with `weight(&q.dequantize())` up to the backend's activation rounding.
     fn weight_q8(&self, q: &Q8) -> Self::Weight;
