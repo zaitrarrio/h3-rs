@@ -166,8 +166,7 @@ same wrong clip bit for bit. Fixed in c0a807e (each fence popped
 once; the host sync takes the newest fence by its own handle). The
 timing of the depth-1 rows above stands (the depth-2 run, correct, took
 the same 6.33 s); **the all-blocks quality claims of this round do
-not**, and the edge-block question is re-run on the second box
-(REBOX_TBD).
+not**, and the edge-block question is re-run on the second box below.
 
 Making the checker see such a bug took two steps (`check-ada/`, RTX
 2000 Ada pods `5bjtum4fm1o6bw` and before it `fqluhaxbg03dhg`,
@@ -183,6 +182,50 @@ one-off build with the FIFO bug re-applied fails all ten streamed cases
 under stress (`check-bug-stress.log`, 2.1–2.5e-2 against resident) and
 still passes without it; the fixed binary passes 153 / 153 plain, under
 stress, and under stress at depth 2.
+
+## The second box: everything again with the fences fixed
+
+Vast offer 60356253, instance 60580981 (United Arab Emirates), RTX 5090
+at its **600 W** default limit, PCIe 5 ×16, driver 595.91.07, AMD Ryzen
+9 9950X, 123 GB RAM, pulled 161 GB in 1287 s with 17 truncated transfers
+the setup command refetched; 143 / 143 plain and under
+`H3_STREAM_STRESS=1` (`box2/check*.log`; the binary predates the exact
+streamed cases). A fast 5090: its released-path V2 forward is 6.26 s and
+its kernels match the RunPod pods' faster kind (fine stage 27.1 ms, MXFP8
+GEMMs 491 TFLOP/s). Every run pins the cuBLASLt candidate
+(`H3_CUDA_LT_NTH=0`) so clips compare byte for byte.
+
+**FastH3-V2, 8 steps, 1344×768×124** (`box2/v2-*.log`), the released
+f32-host path (the binary of the FP8 record) against c0a807e:
+
+| | per forward | denoise | denoise + decode | GPU waited on fences | clip |
+|---|---|---|---|---|---|
+| released path (`v2-ref`) | 6.22–6.29 s | 50.1 s | 56.4 s | 0 ms | reference |
+| fixed fences + bf16 host path (`v2-fix`) | **5.65–5.71 s** | **45.6 s** | **51.9 s** | 117 ms / 400 blocks | **byte-identical** |
+| + QKV row split (`H3_CUDA_MX_SPLIT_MIN=21504`) | **5.29–5.33 s** | **42.6 s** | **48.9 s** | 118 ms | **byte-identical** |
+| + depth 2 instead of the split | 5.67–5.73 s | 45.7 s | 52.0 s | 0 ms | byte-identical |
+| all 50 blocks MXFP8 (`H3_MXFP8_ALL_BLOCKS=1`), no split | 5.30–5.34 s | 42.7 s | 49.0 s | 63 ms | 22.3 dB, same scene (`v2-fix-allblocks.grid.png`) |
+| ComfyUI `fasth3-v2-euler` (page) | 5.65 s | 45.2 s sampler | 54.1 s total | | |
+
+So on a 600 W 5090 the V2 recipe is now **ahead of ComfyUI's row on both
+of the page's numbers**: denoise 42.6 s against the 45.2 s sampler (6 %),
+denoise + decode 48.9 s against the 54.1 s total (10 %), with the clip
+bit for bit the one the released binary made. The split changes no bits
+either (the two row-slice GEMMs round like the whole one, candidate
+pinned), so it is free; depth 2 buys nothing once the host is out of the
+way; and quantizing the edge blocks, which the fence race had painted as
+an anime clip, is in fact the usual 22 dB band on this prompt, same speed
+as the split, and left off because the split gets there without touching
+the recipe's calibrated edges. The profile of the fixed path (`v2-fix-
+prof.log`): 44.0 s of kernels over 8 forwards, 5.51 s per forward
+against 5.70 s wall, so 0.19 s per forward (3 %) is outside the kernels
+now, from 1.8 s. What remains per forward: the VSA fine stage 1.36 s
+(27.1 ms × 50), the MXFP8 GEMMs 2.6 s (QKV 23.0 ms per call unsplit,
+FFN-up 17.6 ms split, FFN-down 8.9, out 4.3, gate 4.4), the five bf16
+edge blocks' GEMMs 0.67 s, head_split / quant / SwiGLU / norms / coarse /
+pool / residual ~1.0 s.
+
+BASE2_TBD
 
 ## Item 5: ComfyUI's block-sparse rows, and V2 at its budget
 

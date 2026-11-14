@@ -1,0 +1,271 @@
+destroy timer armed (6 h) for 60580981
++ cat
++ O=/w/out
++ mkdir -p /w/out
++ cd /w
++ T=/w/tables
++ BASE='--variant h3 --model-dir /w/h3-base --weights mxfp8 --decoder-weights mxfp8 --attention dense --stream-blocks --pv8'
++ V2='--variant fasth3-v2 --model-dir /w/h3-8step --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --pv8 --tables /w/tables/v2.tables --stream-blocks'
++ nvidia-smi --query-gpu=name,driver_version,power.limit,memory.total,pcie.link.gen.max,pcie.link.width.max,clocks.max.sm --format=csv,noheader
+NVIDIA GeForce RTX 5090, 595.91.07, 600.00 W, 32607 MiB, 5, 16, 3105 MHz
++ grep 'Model name'
++ lscpu
+Model name:                              AMD Ryzen 9 9950X 16-Core Processor
++ head -2
++ free -g
+               total        used        free      shared  buff/cache   available
+Mem:             123           4          77           0          41         119
++ df -h /w
++ cat
+Filesystem      Size  Used Avail Use% Mounted on
+overlay         400G  1.2G  399G   1% /
+++ seq 1 90
++ for i in $(seq 1 90)
++ '[' -f /w/weights.done ']'
++ sleep 60
++ for i in $(seq 1 90)
++ '[' -f /w/weights.done ']'
++ sleep 60
++ for i in $(seq 1 90)
++ '[' -f /w/weights.done ']'
++ sleep 60
++ for i in $(seq 1 90)
++ '[' -f /w/weights.done ']'
++ sleep 60
++ for i in $(seq 1 90)
++ '[' -f /w/weights.done ']'
++ sleep 60
++ for i in $(seq 1 90)
++ '[' -f /w/weights.done ']'
++ sleep 60
++ for i in $(seq 1 90)
++ '[' -f /w/weights.done ']'
++ sleep 60
++ for i in $(seq 1 90)
++ '[' -f /w/weights.done ']'
++ sleep 60
++ for i in $(seq 1 90)
++ '[' -f /w/weights.done ']'
++ sleep 60
++ for i in $(seq 1 90)
++ '[' -f /w/weights.done ']'
++ sleep 60
++ for i in $(seq 1 90)
++ '[' -f /w/weights.done ']'
++ sleep 60
++ for i in $(seq 1 90)
++ '[' -f /w/weights.done ']'
++ sleep 60
++ for i in $(seq 1 90)
++ '[' -f /w/weights.done ']'
++ sleep 60
++ for i in $(seq 1 90)
++ '[' -f /w/weights.done ']'
++ sleep 60
++ for i in $(seq 1 90)
++ '[' -f /w/weights.done ']'
++ sleep 60
++ for i in $(seq 1 90)
++ '[' -f /w/weights.done ']'
++ sleep 60
++ for i in $(seq 1 90)
++ '[' -f /w/weights.done ']'
++ sleep 60
++ for i in $(seq 1 90)
++ '[' -f /w/weights.done ']'
++ sleep 60
++ for i in $(seq 1 90)
++ '[' -f /w/weights.done ']'
++ sleep 60
++ for i in $(seq 1 90)
++ '[' -f /w/weights.done ']'
++ sleep 60
++ for i in $(seq 1 90)
++ '[' -f /w/weights.done ']'
++ sleep 60
++ for i in $(seq 1 90)
++ '[' -f /w/weights.done ']'
++ sleep 60
++ for i in $(seq 1 90)
++ '[' -f /w/weights.done ']'
++ break
++ grep -E 'weights .* in' /root/boot.log
++ tail -1
+weights 161G in 1287s
++ grep FAILED /root/boot.log
+FAILED /w/h3-8step/text_encoder/model-00009-of-00014.safetensors
+FAILED /w/h3-8step/text_encoder/model-00008-of-00014.safetensors
+FAILED /w/h3-8step/text_encoder/model-00012-of-00014.safetensors
+FAILED /w/h3-8step/text_encoder/model-00004-of-00014.safetensors
+FAILED /w/h3-8step/text_encoder/model-00010-of-00014.safetensors
+FAILED /w/h3-8step/text_encoder/model-00011-of-00014.safetensors
+FAILED /w/h3-8step/text_encoder/model-00002-of-00014.safetensors
+FAILED /w/h3-8step/text_encoder/model-00007-of-00014.safetensors
+FAILED /w/h3-8step/transformer/diffusion_pytorch_model-00003-of-00014.safetensors
+FAILED /w/h3-8step/transformer/diffusion_pytorch_model-00010-of-00014.safetensors
+FAILED /w/h3-base/transformer/diffusion_pytorch_model-00006-of-00014.safetensors
+FAILED /w/h3-base/transformer/diffusion_pytorch_model-00011-of-00014.safetensors
+FAILED /w/h3-8step/transformer/diffusion_pytorch_model-00011-of-00014.safetensors
+FAILED /w/h3-base/transformer/diffusion_pytorch_model-00010-of-00014.safetensors
+FAILED /w/h3-base/transformer/diffusion_pytorch_model-00009-of-00014.safetensors
+FAILED /w/h3-8step/transformer/diffusion_pytorch_model-00012-of-00014.safetensors
+FAILED /w/h3-base/transformer/diffusion_pytorch_model-00008-of-00014.safetensors
+++ grep FAILED /root/boot.log
+++ awk '{print $2}'
++ for f in $(grep FAILED /root/boot.log | awk '{print $2}')
+++ grep ' /w/h3-8step/text_encoder/model-00009-of-00014.safetensors$' /root/files.txt
+++ cut '-d ' -f1
++ rm -f /w/h3-8step/text_encoder/model-00009-of-00014.safetensors
++ echo 'refetched /w/h3-8step/text_encoder/model-00009-of-00014.safetensors'
+refetched /w/h3-8step/text_encoder/model-00009-of-00014.safetensors
++ for f in $(grep FAILED /root/boot.log | awk '{print $2}')
+++ grep ' /w/h3-8step/text_encoder/model-00008-of-00014.safetensors$' /root/files.txt
+++ cut '-d ' -f1
++ rm -f /w/h3-8step/text_encoder/model-00008-of-00014.safetensors
++ echo 'refetched /w/h3-8step/text_encoder/model-00008-of-00014.safetensors'
+refetched /w/h3-8step/text_encoder/model-00008-of-00014.safetensors
++ for f in $(grep FAILED /root/boot.log | awk '{print $2}')
+++ grep ' /w/h3-8step/text_encoder/model-00012-of-00014.safetensors$' /root/files.txt
+++ cut '-d ' -f1
++ rm -f /w/h3-8step/text_encoder/model-00012-of-00014.safetensors
++ echo 'refetched /w/h3-8step/text_encoder/model-00012-of-00014.safetensors'
+refetched /w/h3-8step/text_encoder/model-00012-of-00014.safetensors
++ for f in $(grep FAILED /root/boot.log | awk '{print $2}')
+++ grep ' /w/h3-8step/text_encoder/model-00004-of-00014.safetensors$' /root/files.txt
+++ cut '-d ' -f1
++ rm -f /w/h3-8step/text_encoder/model-00004-of-00014.safetensors
++ echo 'refetched /w/h3-8step/text_encoder/model-00004-of-00014.safetensors'
+refetched /w/h3-8step/text_encoder/model-00004-of-00014.safetensors
++ for f in $(grep FAILED /root/boot.log | awk '{print $2}')
+++ grep ' /w/h3-8step/text_encoder/model-00010-of-00014.safetensors$' /root/files.txt
+++ cut '-d ' -f1
++ rm -f /w/h3-8step/text_encoder/model-00010-of-00014.safetensors
++ echo 'refetched /w/h3-8step/text_encoder/model-00010-of-00014.safetensors'
+refetched /w/h3-8step/text_encoder/model-00010-of-00014.safetensors
++ for f in $(grep FAILED /root/boot.log | awk '{print $2}')
+++ grep ' /w/h3-8step/text_encoder/model-00011-of-00014.safetensors$' /root/files.txt
+++ cut '-d ' -f1
++ rm -f /w/h3-8step/text_encoder/model-00011-of-00014.safetensors
++ echo 'refetched /w/h3-8step/text_encoder/model-00011-of-00014.safetensors'
+refetched /w/h3-8step/text_encoder/model-00011-of-00014.safetensors
++ for f in $(grep FAILED /root/boot.log | awk '{print $2}')
+++ grep ' /w/h3-8step/text_encoder/model-00002-of-00014.safetensors$' /root/files.txt
+++ cut '-d ' -f1
++ rm -f /w/h3-8step/text_encoder/model-00002-of-00014.safetensors
++ echo 'refetched /w/h3-8step/text_encoder/model-00002-of-00014.safetensors'
+refetched /w/h3-8step/text_encoder/model-00002-of-00014.safetensors
++ for f in $(grep FAILED /root/boot.log | awk '{print $2}')
+++ grep ' /w/h3-8step/text_encoder/model-00007-of-00014.safetensors$' /root/files.txt
+++ cut '-d ' -f1
++ rm -f /w/h3-8step/text_encoder/model-00007-of-00014.safetensors
++ echo 'refetched /w/h3-8step/text_encoder/model-00007-of-00014.safetensors'
+refetched /w/h3-8step/text_encoder/model-00007-of-00014.safetensors
++ for f in $(grep FAILED /root/boot.log | awk '{print $2}')
+++ grep ' /w/h3-8step/transformer/diffusion_pytorch_model-00003-of-00014.safetensors$' /root/files.txt
+++ cut '-d ' -f1
++ rm -f /w/h3-8step/transformer/diffusion_pytorch_model-00003-of-00014.safetensors
++ echo 'refetched /w/h3-8step/transformer/diffusion_pytorch_model-00003-of-00014.safetensors'
+refetched /w/h3-8step/transformer/diffusion_pytorch_model-00003-of-00014.safetensors
++ for f in $(grep FAILED /root/boot.log | awk '{print $2}')
+++ grep ' /w/h3-8step/transformer/diffusion_pytorch_model-00010-of-00014.safetensors$' /root/files.txt
+++ cut '-d ' -f1
++ rm -f /w/h3-8step/transformer/diffusion_pytorch_model-00010-of-00014.safetensors
++ echo 'refetched /w/h3-8step/transformer/diffusion_pytorch_model-00010-of-00014.safetensors'
+refetched /w/h3-8step/transformer/diffusion_pytorch_model-00010-of-00014.safetensors
++ for f in $(grep FAILED /root/boot.log | awk '{print $2}')
+++ grep ' /w/h3-base/transformer/diffusion_pytorch_model-00006-of-00014.safetensors$' /root/files.txt
+++ cut '-d ' -f1
++ rm -f /w/h3-base/transformer/diffusion_pytorch_model-00006-of-00014.safetensors
++ echo 'refetched /w/h3-base/transformer/diffusion_pytorch_model-00006-of-00014.safetensors'
+refetched /w/h3-base/transformer/diffusion_pytorch_model-00006-of-00014.safetensors
++ for f in $(grep FAILED /root/boot.log | awk '{print $2}')
+++ grep ' /w/h3-base/transformer/diffusion_pytorch_model-00011-of-00014.safetensors$' /root/files.txt
+++ cut '-d ' -f1
++ rm -f /w/h3-base/transformer/diffusion_pytorch_model-00011-of-00014.safetensors
++ echo 'refetched /w/h3-base/transformer/diffusion_pytorch_model-00011-of-00014.safetensors'
+refetched /w/h3-base/transformer/diffusion_pytorch_model-00011-of-00014.safetensors
++ for f in $(grep FAILED /root/boot.log | awk '{print $2}')
+++ grep ' /w/h3-8step/transformer/diffusion_pytorch_model-00011-of-00014.safetensors$' /root/files.txt
+++ cut '-d ' -f1
++ rm -f /w/h3-8step/transformer/diffusion_pytorch_model-00011-of-00014.safetensors
++ echo 'refetched /w/h3-8step/transformer/diffusion_pytorch_model-00011-of-00014.safetensors'
+refetched /w/h3-8step/transformer/diffusion_pytorch_model-00011-of-00014.safetensors
++ for f in $(grep FAILED /root/boot.log | awk '{print $2}')
+++ grep ' /w/h3-base/transformer/diffusion_pytorch_model-00010-of-00014.safetensors$' /root/files.txt
+++ cut '-d ' -f1
++ rm -f /w/h3-base/transformer/diffusion_pytorch_model-00010-of-00014.safetensors
++ echo 'refetched /w/h3-base/transformer/diffusion_pytorch_model-00010-of-00014.safetensors'
+refetched /w/h3-base/transformer/diffusion_pytorch_model-00010-of-00014.safetensors
++ for f in $(grep FAILED /root/boot.log | awk '{print $2}')
+++ cut '-d ' -f1
+++ grep ' /w/h3-base/transformer/diffusion_pytorch_model-00009-of-00014.safetensors$' /root/files.txt
++ rm -f /w/h3-base/transformer/diffusion_pytorch_model-00009-of-00014.safetensors
++ echo 'refetched /w/h3-base/transformer/diffusion_pytorch_model-00009-of-00014.safetensors'
+refetched /w/h3-base/transformer/diffusion_pytorch_model-00009-of-00014.safetensors
++ for f in $(grep FAILED /root/boot.log | awk '{print $2}')
+++ grep ' /w/h3-8step/transformer/diffusion_pytorch_model-00012-of-00014.safetensors$' /root/files.txt
+++ cut '-d ' -f1
++ rm -f /w/h3-8step/transformer/diffusion_pytorch_model-00012-of-00014.safetensors
++ echo 'refetched /w/h3-8step/transformer/diffusion_pytorch_model-00012-of-00014.safetensors'
+refetched /w/h3-8step/transformer/diffusion_pytorch_model-00012-of-00014.safetensors
++ for f in $(grep FAILED /root/boot.log | awk '{print $2}')
+++ grep ' /w/h3-base/transformer/diffusion_pytorch_model-00008-of-00014.safetensors$' /root/files.txt
+++ cut '-d ' -f1
++ rm -f /w/h3-base/transformer/diffusion_pytorch_model-00008-of-00014.safetensors
++ echo 'refetched /w/h3-base/transformer/diffusion_pytorch_model-00008-of-00014.safetensors'
+refetched /w/h3-base/transformer/diffusion_pytorch_model-00008-of-00014.safetensors
++ for c in vae audio_vae text_encoder tokenizer model_index.json
++ '[' -e /w/h3-base/vae ']'
++ ln -s /w/h3-8step/vae /w/h3-base/vae
++ for c in vae audio_vae text_encoder tokenizer model_index.json
++ '[' -e /w/h3-base/audio_vae ']'
++ ln -s /w/h3-8step/audio_vae /w/h3-base/audio_vae
++ for c in vae audio_vae text_encoder tokenizer model_index.json
++ '[' -e /w/h3-base/text_encoder ']'
++ ln -s /w/h3-8step/text_encoder /w/h3-base/text_encoder
++ for c in vae audio_vae text_encoder tokenizer model_index.json
++ '[' -e /w/h3-base/tokenizer ']'
++ ln -s /w/h3-8step/tokenizer /w/h3-base/tokenizer
++ for c in vae audio_vae text_encoder tokenizer model_index.json
++ '[' -e /w/h3-base/model_index.json ']'
++ ln -s /w/h3-8step/model_index.json /w/h3-base/model_index.json
++ chmod +x /w/h3-bin2
++ ls -la /w/h3-bin /w/h3-bin2
+-rwxr-xr-x 1 root root 20462432 Nov 14 02:28 /w/h3-bin
+-rwxr-xr-x 1 root root 20448776 Nov 14 03:10 /w/h3-bin2
++ mkdir -p /w/tables
++ echo '== V2 AdaLN tables'
+== V2 AdaLN tables
++ tail -3
+real	2m12.053s
+user	1m10.724s
+sys	0m58.339s
++ echo '== base 25-step tables'
+== base 25-step tables
++ tail -3
+real	1m58.140s
+user	1m2.741s
+sys	0m53.253s
++ echo '== base 2-step tables'
+== base 2-step tables
++ tail -3
+real	1m51.245s
+user	1m2.482s
+sys	0m47.621s
++ echo '== conformance'
+== conformance
++ timeout 1800 /w/h3-bin check --backend cuda
++ grep -E 'checks|FAIL|panick' /w/out/check.log
+all 143 checks pass (tolerance 3e-2)
++ echo '== conformance, H3_STREAM_STRESS=1'
+== conformance, H3_STREAM_STRESS=1
++ H3_STREAM_STRESS=1
++ timeout 1800 /w/h3-bin check --backend cuda
++ grep -E 'checks|FAIL|panick' /w/out/check-stress.log
+all 143 checks pass (tolerance 3e-2)
++ tar czf /root/cmd1.tgz -C /w/out .
+++ date -u
++ echo 'cmd1 done Sat Nov 14 03:16:41 UTC 2026'
+cmd1 done Sat Nov 14 03:16:41 UTC 2026
+exit 0
+
