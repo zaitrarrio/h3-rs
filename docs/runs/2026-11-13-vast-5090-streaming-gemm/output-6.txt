@@ -1,0 +1,245 @@
++ cat
++ O=/w/out
++ mkdir -p /w/out
++ cd /w
++ T=/w/tables
++ BASE='--variant h3 --model-dir /w/h3-base --weights mxfp8 --decoder-weights mxfp8 --attention dense --stream-blocks --pv8'
++ V2='--variant fasth3-v2 --model-dir /w/h3-8step --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --pv8 --tables /w/tables/v2.tables --stream-blocks'
++ echo '== binary with timing-enabled stall events'
+== binary with timing-enabled stall events
++ chmod +x /w/h3-bin2
++ ls -la /w/h3-bin2
+-rwxr-xr-x 1 root root 20448776 Nov 14 01:23 /w/h3-bin2
++ export BIN=/w/h3-bin2
++ BIN=/w/h3-bin2
++ echo '== clocks and power during a V2 run'
+== clocks and power during a V2 run
++ CL=16571
++ H3_STALL=1
++ H3_CUDA_LT_NTH=0
++ run v2-s1 1500 --variant fasth3-v2 --model-dir /w/h3-8step --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --pv8 --tables /w/tables/v2.tables --stream-blocks
++ n=v2-s1
++ t=1500
++ shift 2
++ nvidia-smi --query-gpu=timestamp,clocks.sm,clocks.mem,power.draw,temperature.gpu,pcie.link.gen.current,pcie.link.width.current --format=csv -l 2
++ echo '== v2-s1: --variant fasth3-v2 --model-dir /w/h3-8step --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --pv8 --tables /w/tables/v2.tables --stream-blocks'
+== v2-s1: --variant fasth3-v2 --model-dir /w/h3-8step --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --pv8 --tables /w/tables/v2.tables --stream-blocks
++ sp=16572
++ nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits -lms 500
++ rc=0
++ kill 16572
+++ sort -n /w/out/v2-s1.mem
+++ tail -1
++ echo 'peak VRAM MiB: 18656; exit 0'
+peak VRAM MiB: 18656; exit 0
++ grep -E '^cuda|^load|prompt:|^run |^prefetch|h2d probe|rror|panick|warning|real' /w/out/v2-s1.log
++ cut -c1-400
+h2d probe (256 MB): pageable 19.0 GB/s pinned 56.1 GB/s
+cuda NVIDIA GeForce RTX 5090 (sm_120)
+load 101.9s
+prompt: 462 rows in 109.7s
+prefetch: 400 blocks; compute stream waited 1 ms total, 0.0 ms/block, worst 0.0 ms; copies 33430 ms for 191.29 GB (5.7 GB/s while copying, 0.48 GB/block)
+run 0: total 71.24s  prepare 0.44s  adaln 0.00s  denoise 63.62s (["8.14", "7.84", "7.88", "7.92", "7.96", "7.95", "7.96", "7.95"])  decode 6.89s  audio 0.19s
+real	4m52.499s
++ '[' -f /w/out/v2-s1.y4m ']'
+++ stats /w/out/v2-s1.y4m
+++ ffmpeg -v info -i /w/out/v2-s1.y4m -frames:v 2 -vf signalstats,metadata=print:key=lavfi.signalstats.YAVG -f null -
+++ grep -o 'YAVG=[0-9.]*'
+++ head -2
+++ tr '\n' ' '
++ echo 'luma: YAVG=77.0242 YAVG=77.1186 '
+luma: YAVG=77.0242 YAVG=77.1186 
++ '[' -f /w/out/v2-s1.y4m ']'
++ grid /w/out/v2-s1.y4m /w/out/v2-s1.grid.png
++ ffmpeg -loglevel error -y -i /w/out/v2-s1.y4m -vf 'select='\''eq(n\,0)+eq(n\,40)+eq(n\,80)+eq(n\,120)'\'',scale=448:-1,tile=2x2' -vframes 1 /w/out/v2-s1.grid.png
++ ffmpeg -loglevel error -y -i /w/out/v2-s1.y4m -i /w/out/v2-s1.wav -c:v libx264 -crf 18 -pix_fmt yuv420p -c:a aac -b:a 192k -shortest /w/out/v2-s1.mp4
++ kill 16571
++ awk '-F, ' 'NR>1 && $2+0>0 {n++; c+=$2; p+=$4} END {printf "clocks: %d samples, mean sm %.0f MHz, mean power %.0f W\n", n, c/n, p/n}' /w/out/clocks-v2.log
+clocks: 147 samples, mean sm 1946 MHz, mean power 156 W
++ sort -t, -k2 -n /w/out/clocks-v2.log
++ awk '-F, ' 'NR>1{print $2}'
++ sort -n
++ awk '{a[NR]=$1} END {print "sm clock median", a[int(NR/2)], "min", a[1], "max", a[NR]}'
+sm clock median 2617 min 262 max 3015
++ H3_STALL=1
++ H3_CUDA_LT_NTH=0
++ H3_PREFETCH_DEPTH=2
++ run v2-s2 1500 --variant fasth3-v2 --model-dir /w/h3-8step --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --pv8 --tables /w/tables/v2.tables --stream-blocks
++ n=v2-s2
++ t=1500
++ shift 2
++ echo '== v2-s2: --variant fasth3-v2 --model-dir /w/h3-8step --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --pv8 --tables /w/tables/v2.tables --stream-blocks'
+== v2-s2: --variant fasth3-v2 --model-dir /w/h3-8step --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --pv8 --tables /w/tables/v2.tables --stream-blocks
++ sp=16931
++ nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits -lms 500
++ rc=0
++ kill 16931
+++ sort -n /w/out/v2-s2.mem
+++ tail -1
++ echo 'peak VRAM MiB: 19488; exit 0'
+peak VRAM MiB: 19488; exit 0
++ grep -E '^cuda|^load|prompt:|^run |^prefetch|h2d probe|rror|panick|warning|real' /w/out/v2-s2.log
++ cut -c1-400
+h2d probe (256 MB): pageable 19.4 GB/s pinned 56.6 GB/s
+cuda NVIDIA GeForce RTX 5090 (sm_120)
+load 101.6s
+prompt: 462 rows in 109.7s
+prefetch: 400 blocks; compute stream waited 1 ms total, 0.0 ms/block, worst 0.0 ms; copies 33609 ms for 191.29 GB (5.7 GB/s while copying, 0.48 GB/block)
+run 0: total 73.32s  prepare 0.46s  adaln 0.00s  denoise 65.66s (["8.22", "8.15", "8.18", "8.21", "8.21", "8.23", "8.23", "8.23"])  decode 6.92s  audio 0.19s
+real	4m54.413s
++ '[' -f /w/out/v2-s2.y4m ']'
+++ stats /w/out/v2-s2.y4m
+++ ffmpeg -v info -i /w/out/v2-s2.y4m -frames:v 2 -vf signalstats,metadata=print:key=lavfi.signalstats.YAVG -f null -
+++ grep -o 'YAVG=[0-9.]*'
+++ head -2
+++ tr '\n' ' '
++ echo 'luma: YAVG=77.0242 YAVG=77.1186 '
+luma: YAVG=77.0242 YAVG=77.1186 
++ '[' -f /w/out/v2-s2.y4m ']'
++ grid /w/out/v2-s2.y4m /w/out/v2-s2.grid.png
++ ffmpeg -loglevel error -y -i /w/out/v2-s2.y4m -vf 'select='\''eq(n\,0)+eq(n\,40)+eq(n\,80)+eq(n\,120)'\'',scale=448:-1,tile=2x2' -vframes 1 /w/out/v2-s2.grid.png
++ ffmpeg -loglevel error -y -i /w/out/v2-s2.y4m -i /w/out/v2-s2.wav -c:v libx264 -crf 18 -pix_fmt yuv420p -c:a aac -b:a 192k -shortest /w/out/v2-s2.mp4
++ cmp /w/out/v2-s1.y4m /w/out/v2-s2.y4m
++ echo 'depth 2 byte-identical to depth 1 (LT candidate pinned)'
+depth 2 byte-identical to depth 1 (LT candidate pinned)
++ psnr v2-s2 v2-s1
++ echo '== psnr v2-s2 vs v2-s1'
+== psnr v2-s2 vs v2-s1
++ ffmpeg -loglevel info -i /w/out/v2-s2.y4m -i /w/out/v2-s1.y4m -lavfi psnr -f null -
++ grep -E PSNR
+[Parsed_psnr_0 @ 0x627ca0d8c200] PSNR y:inf u:inf v:inf average:inf min:inf max:inf
++ echo '== per-kernel profile on this box'
+== per-kernel profile on this box
++ H3_PROFILE=1
++ H3_CUDA_LT_NTH=0
++ run v2-prof 1500 --variant fasth3-v2 --model-dir /w/h3-8step --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --pv8 --tables /w/tables/v2.tables --stream-blocks
++ n=v2-prof
++ t=1500
++ shift 2
++ echo '== v2-prof: --variant fasth3-v2 --model-dir /w/h3-8step --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --pv8 --tables /w/tables/v2.tables --stream-blocks'
+== v2-prof: --variant fasth3-v2 --model-dir /w/h3-8step --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --pv8 --tables /w/tables/v2.tables --stream-blocks
++ sp=17307
++ nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits -lms 500
++ rc=0
++ kill 17307
+++ sort -n /w/out/v2-prof.mem
+++ tail -1
++ echo 'peak VRAM MiB: 18656; exit 0'
+peak VRAM MiB: 18656; exit 0
++ grep -E '^cuda|^load|prompt:|^run |^prefetch|h2d probe|rror|panick|warning|real' /w/out/v2-prof.log
++ cut -c1-400
+cuda NVIDIA GeForce RTX 5090 (sm_120)
+load 103.2s
+prompt: 462 rows in 111.0s
+run 0: total 77.86s  prepare 0.47s  adaln 0.00s  denoise 69.26s (["8.70", "8.55", "8.64", "8.64", "8.67", "8.70", "8.70", "8.66"])  decode 7.84s  audio 0.21s
+real	5m1.276s
++ '[' -f /w/out/v2-prof.y4m ']'
+++ stats /w/out/v2-prof.y4m
+++ ffmpeg -v info -i /w/out/v2-prof.y4m -frames:v 2 -vf signalstats,metadata=print:key=lavfi.signalstats.YAVG -f null -
+++ grep -o 'YAVG=[0-9.]*'
+++ head -2
+++ tr '\n' ' '
++ echo 'luma: YAVG=71.4327 YAVG=71.7373 '
+luma: YAVG=71.4327 YAVG=71.7373 
++ '[' -f /w/out/v2-prof.y4m ']'
++ grid /w/out/v2-prof.y4m /w/out/v2-prof.grid.png
++ ffmpeg -loglevel error -y -i /w/out/v2-prof.y4m -vf 'select='\''eq(n\,0)+eq(n\,40)+eq(n\,80)+eq(n\,120)'\'',scale=448:-1,tile=2x2' -vframes 1 /w/out/v2-prof.grid.png
++ ffmpeg -loglevel error -y -i /w/out/v2-prof.y4m -i /w/out/v2-prof.wav -c:v libx264 -crf 18 -pix_fmt yuv420p -c:a aac -b:a 192k -shortest /w/out/v2-prof.mp4
++ grep -E 'profile \(|vsa fine|gemm mxfp8 n=21504|gemm mxfp8 n=28672|^prefetch' /w/out/v2-prof.log
++ head -8
+profile (CUDA, synced per op): 200.9 ms in ops; GEMMs 189.8 ms at 118.7 TFLOP/s
+profile (CUDA, synced per op): 4.1 ms in ops; GEMMs 3.6 ms at 202.3 TFLOP/s
+profile (CUDA, synced per op): 49151.5 ms in ops; GEMMs 29361.3 ms at 440.9 TFLOP/s
+  vsa fine (3g int8 qk + fp8 pv, d128)       12791.5 ms  26.0%     400 calls    31.979 ms/call
+  gemm mxfp8 n=21504 k=5376                   8520.1 ms  17.3%     360 calls    23.667 ms/call
+  gemm mxfp8 n=28672 k=5376 (×2)              7745.7 ms  15.8%     360 calls    21.516 ms/call
+profile (CUDA, synced per op): 1749.5 ms in ops; GEMMs 1025.6 ms at 475.3 TFLOP/s
+profile (CUDA, synced per op): 874.9 ms in ops; GEMMs 511.8 ms at 476.3 TFLOP/s
++ rm -f /w/out/v2-prof.y4m /w/out/v2-prof.wav
++ echo '== dense base, 2 steps, with the fixed accounting'
+== dense base, 2 steps, with the fixed accounting
++ H3_STALL=1
++ H3_CUDA_LT_NTH=0
++ run base2-s1 1500 --variant h3 --model-dir /w/h3-base --weights mxfp8 --decoder-weights mxfp8 --attention dense --stream-blocks --pv8 --steps 2 --tables /w/tables/base2.tables
++ n=base2-s1
++ t=1500
++ shift 2
++ echo '== base2-s1: --variant h3 --model-dir /w/h3-base --weights mxfp8 --decoder-weights mxfp8 --attention dense --stream-blocks --pv8 --steps 2 --tables /w/tables/base2.tables'
+== base2-s1: --variant h3 --model-dir /w/h3-base --weights mxfp8 --decoder-weights mxfp8 --attention dense --stream-blocks --pv8 --steps 2 --tables /w/tables/base2.tables
++ sp=17666
++ nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits -lms 500
++ rc=0
++ kill 17666
+++ sort -n /w/out/base2-s1.mem
+++ tail -1
++ echo 'peak VRAM MiB: 17244; exit 0'
+peak VRAM MiB: 17244; exit 0
++ grep -E '^cuda|^load|prompt:|^run |^prefetch|h2d probe|rror|panick|warning|real' /w/out/base2-s1.log
++ cut -c1-400
+h2d probe (256 MB): pageable 19.4 GB/s pinned 56.6 GB/s
+cuda NVIDIA GeForce RTX 5090 (sm_120)
+load 93.5s
+prompt: 462 rows in 107.7s
+prefetch: 100 blocks; compute stream waited 0 ms total, 0.0 ms/block, worst 0.0 ms; copies 15349 ms for 43.47 GB (2.8 GB/s while copying, 0.43 GB/block)
+run 0: total 27.30s  prepare 0.02s  adaln 0.00s  denoise 20.12s (["10.10", "10.03"])  decode 6.89s  audio 0.18s
+real	3m57.938s
++ '[' -f /w/out/base2-s1.y4m ']'
+++ stats /w/out/base2-s1.y4m
+++ ffmpeg -v info -i /w/out/base2-s1.y4m -frames:v 2 -vf signalstats,metadata=print:key=lavfi.signalstats.YAVG -f null -
+++ grep -o 'YAVG=[0-9.]*'
+++ head -2
+++ tr '\n' ' '
++ echo 'luma: YAVG=67.9478 YAVG=69.9374 '
+luma: YAVG=67.9478 YAVG=69.9374 
++ '[' -f /w/out/base2-s1.y4m ']'
++ grid /w/out/base2-s1.y4m /w/out/base2-s1.grid.png
++ ffmpeg -loglevel error -y -i /w/out/base2-s1.y4m -vf 'select='\''eq(n\,0)+eq(n\,40)+eq(n\,80)+eq(n\,120)'\'',scale=448:-1,tile=2x2' -vframes 1 /w/out/base2-s1.grid.png
++ ffmpeg -loglevel error -y -i /w/out/base2-s1.y4m -i /w/out/base2-s1.wav -c:v libx264 -crf 18 -pix_fmt yuv420p -c:a aac -b:a 192k -shortest /w/out/base2-s1.mp4
++ H3_STALL=1
++ H3_CUDA_LT_NTH=0
++ H3_PREFETCH_DEPTH=2
++ run base2-s2 1500 --variant h3 --model-dir /w/h3-base --weights mxfp8 --decoder-weights mxfp8 --attention dense --stream-blocks --pv8 --steps 2 --tables /w/tables/base2.tables
++ n=base2-s2
++ t=1500
++ shift 2
++ echo '== base2-s2: --variant h3 --model-dir /w/h3-base --weights mxfp8 --decoder-weights mxfp8 --attention dense --stream-blocks --pv8 --steps 2 --tables /w/tables/base2.tables'
+== base2-s2: --variant h3 --model-dir /w/h3-base --weights mxfp8 --decoder-weights mxfp8 --attention dense --stream-blocks --pv8 --steps 2 --tables /w/tables/base2.tables
++ sp=18013
++ nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits -lms 500
++ rc=0
++ kill 18013
+++ sort -n /w/out/base2-s2.mem
+++ tail -1
++ echo 'peak VRAM MiB: 17500; exit 0'
+peak VRAM MiB: 17500; exit 0
++ grep -E '^cuda|^load|prompt:|^run |^prefetch|h2d probe|rror|panick|warning|real' /w/out/base2-s2.log
++ cut -c1-400
+h2d probe (256 MB): pageable 19.4 GB/s pinned 56.6 GB/s
+cuda NVIDIA GeForce RTX 5090 (sm_120)
+load 95.2s
+prompt: 462 rows in 108.7s
+prefetch: 100 blocks; compute stream waited 0 ms total, 0.0 ms/block, worst 0.0 ms; copies 15663 ms for 43.47 GB (2.8 GB/s while copying, 0.43 GB/block)
+run 0: total 28.18s  prepare 0.02s  adaln 0.00s  denoise 21.08s (["10.68", "10.39"])  decode 6.81s  audio 0.19s
+real	4m1.682s
++ '[' -f /w/out/base2-s2.y4m ']'
+++ stats /w/out/base2-s2.y4m
+++ ffmpeg -v info -i /w/out/base2-s2.y4m -frames:v 2 -vf signalstats,metadata=print:key=lavfi.signalstats.YAVG -f null -
+++ grep -o 'YAVG=[0-9.]*'
+++ head -2
+++ tr '\n' ' '
++ echo 'luma: YAVG=67.9478 YAVG=69.9374 '
+luma: YAVG=67.9478 YAVG=69.9374 
++ '[' -f /w/out/base2-s2.y4m ']'
++ grid /w/out/base2-s2.y4m /w/out/base2-s2.grid.png
++ ffmpeg -loglevel error -y -i /w/out/base2-s2.y4m -vf 'select='\''eq(n\,0)+eq(n\,40)+eq(n\,80)+eq(n\,120)'\'',scale=448:-1,tile=2x2' -vframes 1 /w/out/base2-s2.grid.png
++ ffmpeg -loglevel error -y -i /w/out/base2-s2.y4m -i /w/out/base2-s2.wav -c:v libx264 -crf 18 -pix_fmt yuv420p -c:a aac -b:a 192k -shortest /w/out/base2-s2.mp4
++ cmp /w/out/base2-s1.y4m /w/out/base2-s2.y4m
++ echo 'base depth 2 byte-identical'
+base depth 2 byte-identical
++ rm -f /w/out/base2-s1.y4m /w/out/base2-s2.y4m /w/out/base2-s1.wav /w/out/base2-s2.wav
++ tar czf /root/cmd6.tgz -C /w/out '--exclude=*.y4m' '--exclude=*.wav' '--exclude=*.mp4' .
+++ date -u
++ echo 'cmd6 done Sat Nov 14 01:46:05 UTC 2026'
+cmd6 done Sat Nov 14 01:46:05 UTC 2026
+exit 0
+

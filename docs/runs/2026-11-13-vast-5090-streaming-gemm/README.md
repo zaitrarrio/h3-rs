@@ -50,9 +50,12 @@ Slower than the RunPod 5090 pods on identical code, with the same driver
 and a wider link: the V2 forward 7.9 s against 6.1–6.5 s, the dense
 base step 10.2 s against 7.8–8.7 s, the INT8+FP8 attention call 91 ms
 against 82 ms, the MXFP8 FFN-up GEMM 22.3 ms against 18.2 ms. The
-550 W limit and whatever clocks this host's cooling allows are the
-difference (CLOCKS_TBD); the numbers below compare against each other on
-this box, and only the ratios carry to other 5090s.
+clocks are the difference: during the denoise this card runs at a
+**median 2055 MHz** (mean 2291, 2010–3015, 478 W mean draw;
+`stall/clocks-v2.log`) where the RunPod pods ran a median 2445 MHz under
+their 575 W limit, 15–20 % apart like the kernels. The numbers below
+compare against each other on this box, and only the ratios carry to
+other 5090s.
 
 ## Item 1: the non-kernel time was the bf16 edge blocks' uploads
 
@@ -105,7 +108,42 @@ Prefetch depth 2 (`H3_PREFETCH_DEPTH=2`) was slower on this box with the
 f32-host edge blocks (V2 8.24 s against 7.92 s; base 10.42 against
 10.18): the host sync in `prefetch_begin` now waits for the newer of two
 copies before issuing the next, so the pageable edge-block copies held
-the host longer. Re-measured with the bf16 path below.
+the host longer. Its clips are **byte-identical** to depth 1's on CUDA
+with the cuBLASLt candidate pinned (`H3_CUDA_LT_NTH=0`, V2 and base),
+so the FIFO fences are right; without the pin two runs of the same
+configuration differ at the rounding level and the DMD sampler turns
+that into a 21–22 dB clip difference (`fix/`, the first pair).
+
+### The event accounting (`stall/`, timing-enabled events)
+
+| | h2d probe, 256 MB | compute stream waited on the prefetch fence | copy windows | kernels (profile) | wall |
+|---|---|---|---|---|---|
+| V2, 8 forwards | pageable 19.0 GB/s, **pinned 56.1 GB/s** | **1 ms** over 400 blocks | 33.4 s for 191 GB, 5.7 GB/s | 6.14 s / forward | 7.92 s / forward |
+| base, 2 steps | same | 0 ms over 100 blocks | 15.3 s for 43 GB, 2.8 GB/s | ≈ 8.0 s / step | 10.1 s / step |
+
+The link is fast (56 GB/s pinned) and the GPU **never waits for the
+fence**: by the time the compute stream reaches `prefetch_wait` the
+copies are long done. The 1.8 s per V2 forward and 2 s per base step
+that are in no kernel are the **host**: for each f32-host edge block,
+`Backend::weight` ran a single-threaded f32 → bf16 pass over 385 M
+values and then a synchronous pageable copy, with no kernels queued
+behind it, so the GPU idled until the host came back; the copy windows
+read slow for the same reason (they bracket those host passes). The
+quantized blocks (byte copies, page-locked DMA) were never the problem,
+and PCIe ×8 against ×16 does not matter at these sizes.
+
+### The fix: streamed native blocks as bf16 bytes (6fbed45, 2b0b5e1)
+
+`HostWeight::Bf16` / `Backend::weight_bf16`: when the backend stores
+bf16 anyway (`Backend::bf16_weights`, CUDA), a streamed native-precision
+block is converted once at load and page-locked like the quantized
+ones, so its upload is the same DMA; the f32 reference keeps f32 (its
+streamed and resident paths stay bit-identical, `cpu_agrees_with_itself`).
+Half the host memory for those blocks, too. Measured on this box
+(`bf16pin/`), the cuBLASLt candidate pinned so the clip can be compared
+byte for byte with the f32-host path:
+
+BF16_TBD
 
 ## Item 5: ComfyUI's block-sparse rows, and V2 at its budget
 
