@@ -85,9 +85,10 @@ fn hf_parity_audio_vae() {
     let vae = AudioVae::load(&be, cfg.clone(), &src, true, true).unwrap();
     let wave = src.get("input.wave", &[95]).unwrap();
     let post = vae.encode(&be, &wave).unwrap();
-    assert!(rel(&post.mean.data, &src.get("expected.mean", &[4, 10]).unwrap()) < 2e-3);
-    assert!(rel(&post.logs.data, &src.get("expected.logs", &[4, 10]).unwrap()) < 2e-3);
-    let z = AudioLatents { channels: 4, frames: 6, data: src.get("input.latent", &[4, 6]).unwrap() };
+    let (rm, rl) = (rel(&post.mean.data, &src.get("expected.mean", &[6, 10]).unwrap()), rel(&post.logs.data, &src.get("expected.logs", &[6, 10]).unwrap()));
+    assert!(rm < 2e-3 && rl < 2e-3, "mean {rm:.2e} logs {rl:.2e}");
+    let z = AudioLatents { channels: 6, frames: 6, data: src.get("input.latent", &[6, 6]).unwrap() };
     let out = vae.decode(&be, &z).unwrap();
-    assert!(rel(&out, &src.get("expected.wave", &[60]).unwrap()) < 2e-3);
+    let rw = rel(&out, &src.get("expected.wave", &[60]).unwrap());
+    assert!(rw < 2e-3, "wave {rw:.2e}");
 }

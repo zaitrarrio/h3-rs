@@ -1,34 +1,60 @@
 """Reference fixtures from the real implementations, tiny random weights.
 
-    pip install torch transformers diffusers safetensors
-    git clone https://github.com/hao-ai-lab/FastVideo && pip install -e FastVideo
-    python scripts/reference/make_fixtures.py
+Run on CPU (no GPU needed; the models are tiny). What produced the committed
+fixtures on 2026-11-14:
+
+    python3 -m venv venv && . venv/bin/activate
+    pip install --index-url https://download.pytorch.org/whl/cpu torch==2.12.0 torchvision torchaudio
+    pip install "transformers>=5.15" diffusers safetensors einops numpy scipy cloudpickle imageio remote_pdb ftfy psutil
+    git clone --depth 1 https://github.com/hao-ai-lab/FastVideo   # b4faeae, 2026-11-13
+    PYTHONPATH=$PWD/FastVideo python scripts/reference/make_fixtures.py
+
+(FastVideo is put on PYTHONPATH rather than installed: its install pins a CUDA
+torch and flash-attention.) Versions behind the committed files: torch
+2.12.0+cpu, transformers 5.23.0, diffusers 0.43.0, FastVideo b4faeae.
 
 Writes small safetensors files the Rust tests compare against
-(`cargo test -p h3-model --test parity`; the tests skip with a message when a
-file is missing):
+(`cargo test -p h3-model --test parity`, `cargo test -p h3-text --test parity`;
+the tests skip with a message when a file is missing):
 
-  crates/h3-model/tests/fixtures/h3_dit_tiny.safetensors     FastVideo MiniMaxH3Transformer3DModel (tiny)
+  crates/h3-model/tests/fixtures/h3_dit_tiny.safetensors     FastVideo MiniMaxH3Transformer3DModel (tiny), Diffusers key names
   crates/h3-model/tests/fixtures/h3_vae_tiny.safetensors     FastVideo AutoencoderKLMiniMaxH3 (tiny): encode + decode
   crates/h3-model/tests/fixtures/h3_avae_tiny.safetensors    FastVideo MiniMaxH3AudioVAE (tiny): encode + decode
-  crates/h3-text/tests/fixtures/qwen3vl_tiny.safetensors     transformers Qwen3VLForConditionalGeneration (tiny): hidden_states[2]
+  crates/h3-text/tests/fixtures/qwen3vl_tiny.safetensors     transformers Qwen3VLForConditionalGeneration (tiny): hidden_states[0..2], DeepStack features
 
-Each holds the model's weights (f32, their real key names) plus `input.*`
+Each holds the model's weights (f32, the checkpoint key names) plus `input.*`
 and `expected.*` tensors. The tiny shapes follow `H3Config::tiny()`,
 `VideoVaeConfig::tiny()`, `AudioVaeConfig::tiny()` and `Qwen3VlConfig::tiny()`
 in crates/h3-core/src/config.rs; keep both sides in step. Regenerate only
 when a reference library changes, and record which version.
 
-This script has not been run in the environment that wrote it (no PyTorch
-there): it is the specification of the fixtures, and the first run should be
-treated as a review of it.
+The first run (2026-11-14) was the review this script had been waiting for:
+the DiT needs `hf_config={}`, FastVideo's single-process distributed state and
+a forward context; the packed layout was being built at 64×96 instead of the
+4×6 the test uses; the audio VAE's `latent_dim` must be a multiple of its
+channels (the tiny went to 24 × 6); FastVideo's DiT state dict uses its
+internal names (`ff.fc_in`, `attn.to_out`), mapped back to Diffusers' here;
+transformers 5 wants `mm_token_type_ids`; and its recorded `hidden_states`
+exclude the DeepStack injection that follows a block (see the Rust test).
 """
-import pathlib, sys
+import os, pathlib, sys
 import torch
 from safetensors.torch import save_file
 
 root = pathlib.Path(__file__).resolve().parents[2]
 torch.manual_seed(0)
+for d in ("crates/h3-model/tests/fixtures", "crates/h3-text/tests/fixtures"):
+    (root / d).mkdir(parents=True, exist_ok=True)
+
+# FastVideo's modules expect its single-process distributed state and a forward
+# context; on a CPU-only box the attention backend is torch's SDPA.
+os.environ.setdefault("FASTVIDEO_ATTENTION_BACKEND", "TORCH_SDPA")
+for k, v in {"MASTER_ADDR": "127.0.0.1", "MASTER_PORT": "29571", "RANK": "0", "WORLD_SIZE": "1", "LOCAL_RANK": "0"}.items():
+    os.environ.setdefault(k, v)
+from fastvideo.distributed import maybe_init_distributed_environment_and_model_parallel
+from fastvideo.forward_context import set_forward_context
+
+maybe_init_distributed_environment_and_model_parallel(1, 1)
 
 
 def jitter(model):
@@ -45,10 +71,19 @@ def jitter(model):
                 p.copy_(torch.randn_like(p) / fan_in**0.5)
 
 
-def tensors(model, extra):
-    sd = {k: v.detach().float().contiguous().clone() for k, v in model.state_dict().items()}
+def tensors(model, extra, rename=None):
+    sd = {(rename(k) if rename else k): v.detach().float().contiguous().clone() for k, v in model.state_dict().items()}
     sd.update({k: v.detach().float().contiguous() for k, v in extra.items()})
     return sd
+
+
+def diffusers_name(k):
+    """FastVideo's internal DiT names back to the Diffusers checkpoint names (the
+    inverse of `MiniMaxH3ArchConfig.param_names_mapping`), which is what the Rust
+    loader reads. The row order of `ff.net.0.proj` is Diffusers' `[value | gate]`
+    either way: FastVideo's mapping renames only."""
+    return (k.replace("time_embedder.fc_in.", "time_embedder.linear_1.").replace("time_embedder.fc_out.", "time_embedder.linear_2.")
+            .replace(".attn.to_out.", ".attn.to_out.0.").replace(".ff.fc_in.", ".ff.net.0.proj.").replace(".ff.fc_out.", ".ff.net.2."))
 
 
 # ---- H3 DiT (FastVideo) ---------------------------------------------------------
@@ -60,22 +95,22 @@ arch = MiniMaxH3ArchConfig(num_attention_heads=2, attention_head_dim=16, hidden_
                            ffn_dim=48, in_channels=4, audio_in_channels=6, patch_size=(1, 2, 2), text_dim=24, freq_dim=16,
                            time_embed_hidden_dim=32, time_embed_dim=24, rope_freq_dim=2, rope_theta=10000.0,
                            norm_eps=1e-5, qk_norm_eps=1e-5, final_norm_eps=1e-5)
-dit = MiniMaxH3Transformer3DModel(MiniMaxH3Config(arch_config=arch)).eval()
+dit = MiniMaxH3Transformer3DModel(MiniMaxH3Config(arch_config=arch), hf_config={}).eval()
 jitter(dit)
 text_tags = torch.tensor([1, 1, 0, 1, 1, 1])
-layout = build_packed_sequence(text_tags, 5, 64, 96, 5, (1, 2, 2), ("first",))  # 2 latent frames, 4×6 latent, 5 audio latents
+layout = build_packed_sequence(text_tags, 2, 4, 6, 5, (1, 2, 2), ("first",))  # 2 latent frames, 4×6 latent, 5 audio latents
 video = torch.randn(layout.video_indices.numel(), 4 * 4)
 audio = torch.randn(layout.audio_indices.numel(), 6)
 text = torch.randn(6, 24)
 unique, inverse = build_row_timesteps(layout, video_timestep=0.25, audio_timestep=0.7,
                                       condition_video_timestep=0.999, condition_audio_timestep=1.0)
-with torch.no_grad():
+with torch.no_grad(), set_forward_context(current_timestep=0, attn_metadata=None):
     v, a = dit(hidden_states=video[None], audio_hidden_states=audio[None], encoder_hidden_states=text[None],
                timestep=unique, timestep_indices=inverse, token_tags=layout.token_tags,
                position_ids=layout.position_ids, video_indices=layout.video_indices,
                audio_indices=layout.audio_indices, text_indices=layout.text_indices)
 save_file(tensors(dit, {"input.video_rows": video, "input.audio_rows": audio, "input.text": text,
-                        "input.text_tags": text_tags.float(), "expected.video": v[0], "expected.audio": a[0]}),
+                        "input.text_tags": text_tags.float(), "expected.video": v[0], "expected.audio": a[0]}, rename=diffusers_name),
           root / "crates/h3-model/tests/fixtures/h3_dit_tiny.safetensors")
 print("dit", v.shape, a.shape)
 
@@ -104,14 +139,15 @@ print("vae", moments.shape, dec.shape)
 from fastvideo.configs.models.vaes.minimax_h3_audio import MiniMaxH3AudioVAEArchConfig, MiniMaxH3AudioVAEConfig
 from fastvideo.models.vaes.minimax_h3_audio import MiniMaxH3AudioVAE
 
-aarch = MiniMaxH3AudioVAEArchConfig(encoder_dim=4, encoder_rates=(2, 5), latent_dim=16, latent_channels=4, decoder_dim=8,
+aarch = MiniMaxH3AudioVAEArchConfig(encoder_dim=4, encoder_rates=(2, 5), latent_dim=24, latent_channels=6, decoder_dim=8,
                                     decoder_rates=(5, 2), decoder_kernel_sizes=(9, 4), num_attention_heads=2,
                                     resblock_kernel_sizes=(3, 7), resblock_dilation_sizes=((1, 3), (1, 3)),
-                                    sampling_rate=320, latents_mean=(0.0, 0.1, -0.1, 0.2), latents_std=(1.0, 1.5, 0.8, 1.2))
+                                    sampling_rate=320, latents_mean=(0.0, 0.1, -0.1, 0.2, 0.05, -0.3),
+                                    latents_std=(1.0, 1.5, 0.8, 1.2, 0.9, 1.1))
 avae = MiniMaxH3AudioVAE(MiniMaxH3AudioVAEConfig(arch_config=aarch)).eval()
 jitter(avae)
 wave = torch.sin(torch.arange(95) * 0.3)[None, None] * 0.5
-za = torch.randn(1, 4, 6)
+za = torch.randn(1, 6, 6)
 with torch.no_grad():
     post = avae.encode(wave).latent_dist
     out = avae.decode(za).sample
@@ -124,7 +160,7 @@ print("avae", post.mean.shape, out.shape)
 from transformers import Qwen3VLConfig, Qwen3VLForConditionalGeneration
 
 qcfg = Qwen3VLConfig(
-    text_config=dict(vocab_size=64, hidden_size=32, intermediate_size=48, num_hidden_layers=4, num_attention_heads=4,
+    text_config=dict(vocab_size=64, hidden_size=32, intermediate_size=48, num_hidden_layers=3, num_attention_heads=4,
                      num_key_value_heads=2, head_dim=8, rms_norm_eps=1e-6, rope_theta=5e6,
                      rope_scaling={"mrope_interleaved": True, "mrope_section": [2, 1, 1], "rope_type": "default"}),
     vision_config=dict(depth=2, hidden_size=16, intermediate_size=24, num_heads=2, patch_size=16, spatial_merge_size=2,
@@ -137,7 +173,21 @@ ids = torch.tensor([[5, 17, 60, 62, 62, 62, 62, 61, 9, 1, 8]])  # 2 text, one 64
 pixels = torch.randn(16, 3 * 2 * 16 * 16)
 grid = torch.tensor([[1, 4, 4]])
 with torch.no_grad():
-    hs = q.model(input_ids=ids, pixel_values=pixels, image_grid_thw=grid, output_hidden_states=True).hidden_states[2][0]
-save_file(tensors(q, {"input.ids": ids[0].float(), "input.pixels": pixels, "expected.hidden2": hs}),
+    # transformers ≥ 5 wants the multimodal token types (1 = image) for M-RoPE instead of inferring them.
+    mm = (ids == qcfg.image_token_id).long()
+    out = q.model(input_ids=ids, pixel_values=pixels, image_grid_thw=grid, mm_token_type_ids=mm, output_hidden_states=True)
+    hs = out.hidden_states[2][0]
+    # The earlier layers' outputs too, so a mismatch can be placed: hidden0 is the
+    # embeddings with the merged image tokens in place, hidden1 after one block.
+    hs0, hs1 = out.hidden_states[0][0], out.hidden_states[1][0]
+    vis = q.model.visual(pixels, grid_thw=grid)
+    # DeepStack features per index ([merged tokens, hidden]): transformers records
+    # `hidden_states[k]` as block k-1's output *before* the injection that follows
+    # it, so the Rust side, whose state after block k-1 includes that injection,
+    # adds `deepstack{k-1}` back when comparing (the real conditioner takes layer
+    # 50, far past the last DeepStack index, where the two readings agree).
+    deep = list(vis.deepstack_features)
+save_file(tensors(q, {"input.ids": ids[0].float(), "input.pixels": pixels, "expected.hidden2": hs, "expected.hidden0": hs0,
+                      "expected.hidden1": hs1, **{f"expected.deepstack{i}": d for i, d in enumerate(deep)}}),
           root / "crates/h3-text/tests/fixtures/qwen3vl_tiny.safetensors")
 print("qwen3vl", hs.shape)

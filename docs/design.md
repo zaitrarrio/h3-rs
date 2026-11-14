@@ -74,10 +74,19 @@ time); when the tables do not fit, they are uploaded per step.
 - CUDA and WebGPU on an RTX A6000: 90 / 90 checks each; real clips from
   FastH3-8-Step-V2 and FastH3-Trim at 1344×768×124 with sound, matching
   their prompt (`docs/runs/2026-11-06-vast-a6000-first-gpu`).
-- Parity with PyTorch: `scripts/reference/make_fixtures.py` specifies the
-  fixtures; it has not been run (no PyTorch in the authoring environment), so
-  the parity tests currently skip. The clips show the pipeline is right; the
-  fixtures would show how right (a PSNR against the reference sample).
+- Parity with PyTorch: `scripts/reference/make_fixtures.py` was run on
+  2026-11-14 (CPU, FastVideo b4faeae, transformers 5.23.0) and the four
+  parity tests pass at 2e-3: the tiny DiT forward, both VAEs' encode and
+  decode, and the Qwen3-VL conditioner layer by layer. The first run found
+  only script-side mistakes (API shape, a wrong packed layout, FastVideo's
+  internal key names, transformers 5's `mm_token_type_ids`) and one real
+  divergence of definition: transformers' recorded `hidden_states[k]`
+  exclude the DeepStack injection that follows block k − 1, while
+  FastVideo's own H3 text stack (and ours) returns the injected state; the
+  test adds the injection to the expectation, and the real conditioner's
+  layer 50 is past the last DeepStack index either way. A PSNR against a
+  reference clip at full size is still open (it needs the real weights on
+  both sides).
 - Speed: A6000 numbers in that run directory; nothing on a 4090 / 5090 /
   AMD / Apple yet.
 
@@ -114,7 +123,7 @@ time); when the tables do not fit, they are uploaded per step.
    is instruction bound like the bf16 one, so the next step there is
    INT8 / FP8 P·V (SageAttention2's second half), which also halves the
    V staging.
-5. Generate the parity fixtures; fix what they find.
+5. ~~Generate the parity fixtures; fix what they find.~~ Done 2026-11-14: generated, four parity tests green (see above).
 6. WebGPU: 16× behind CUDA on the same card; f16 activations and a
    tensor-core-friendly GEMM tiling are the two levers (the 4 GiB buffer /
    2 GiB binding limits also cap clips above ~38k tokens until activations

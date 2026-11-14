@@ -122,8 +122,11 @@ Per block at that geometry: 470 ms VSA / 815 ms dense on the A6000, 230 /
 `docs/runs/2026-11-07-vast-l40s-vsa-phases`: fine stage 66.5 ms (was 87),
 coarse + top-k 3.6 ms (was 6.4), pool 2.8 ms; the fine stage is still
 ~2.7× its tensor-core floor and the record says what to try next.
-No PyTorch parity number yet (`scripts/reference/make_fixtures.py` needs a
-machine with torch); the clips themselves match their prompts
+Parity with PyTorch at the tiny scale: the fixtures from
+`scripts/reference/make_fixtures.py` (FastVideo b4faeae, transformers 5.23.0,
+2026-11-14) hold the DiT, both VAEs and the Qwen3-VL conditioner within 2e-3
+of the reference (`cargo test -p h3-model --test parity`, `-p h3-text --test
+parity`); the clips themselves match their prompts
 (`docs/runs/2026-11-06-vast-a6000-first-gpu/*.png`).
 
 ## Use

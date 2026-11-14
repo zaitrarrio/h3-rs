@@ -338,9 +338,17 @@ State and invariants only; the reasoning is in `docs/design.md`.
   dense kernel there (CUDA `fw_vsa_gate_add`, WebGPU elementwise op 20),
   the all-tiles fine stage having cost ~2× for the same softmax
   (`docs/runs/2026-11-14-vast-5090-dense-steps`).
-- Parity fixtures (`scripts/reference/make_fixtures.py`) have not been
-  generated: the container had no PyTorch. The parity tests skip without
-  them and must be run before any parity claim.
+- Parity with PyTorch: `scripts/reference/make_fixtures.py` (run on CPU
+  against FastVideo b4faeae / transformers 5.23.0 / torch 2.12.0+cpu on
+  2026-11-14; the recipe is in its docstring) writes the committed tiny
+  fixtures, and `cargo test -p h3-model --test parity`, `-p h3-text --test
+  parity` hold the DiT, both VAEs (encode and decode) and the Qwen3-VL
+  conditioner (every layer up to its output, DeepStack included) within
+  2e-3 of the reference. The tiny configs are pinned to the fixtures
+  (audio VAE `latent_dim` 24 = 4 × 6 channels, Qwen3-VL vision patch 16,
+  DeepStack indexes [0, 1], image / video / vision-start / end ids 62 /
+  63 / 60 / 61); a tiny-config change means regenerating. Regenerate only
+  when a reference library changes, and record the version.
 - WGSL rules (from fastwan-rs): named vec4 accumulators, never arrays indexed
   in loops; zero loop-local accumulators explicitly; every declared binding
   statically used. Kernels and their CUDA twins share names (`fw_<op>`).
