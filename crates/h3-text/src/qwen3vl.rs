@@ -41,12 +41,12 @@ fn nvfp4_of(src: &SafetensorsDir, key: &str, rows: usize, cols: usize) -> Result
 fn linear<B: Backend>(be: &B, src: &SafetensorsDir, key: &str, rows: usize, cols: usize, bias: bool) -> Result<Linear<B>> {
     let b = if bias { Some(be.upload(&src.get(&format!("{key}.bias"), &[rows])?)) } else { None };
     if src.contains_raw(&format!("{key}.weight")) {
-        return Ok(Linear { w: be.weight(&src.get(&format!("{key}.weight"), &[rows, cols])?, rows, cols), b, rows, cols });
+        return Ok(Linear { w: be.weight(&src.get(&format!("{key}.weight"), &[rows, cols])?, rows, cols), b, rows, cols, lora: None });
     }
     if src.contains_raw(&format!("{key}.weight_packed")) {
         let q = nvfp4_of(src, key, rows, cols)?;
         let _ = e4m3_to_f32;
-        return Ok(Linear { w: be.weight_nvfp4(&q), b, rows, cols });
+        return Ok(Linear { w: be.weight_nvfp4(&q), b, rows, cols , lora: None });
     }
     Err(Error::Weights(format!("missing linear `{key}`")))
 }
@@ -62,7 +62,7 @@ fn fused<B: Backend>(be: &B, src: &SafetensorsDir, keys: &[(&str, usize)], cols:
             w.extend(nvfp4_of(src, k, *r, cols)?.dequantize());
         }
     }
-    Ok(Linear { w: be.weight(&w, rows, cols), b: None, rows, cols })
+    Ok(Linear { w: be.weight(&w, rows, cols), b: None, rows, cols , lora: None })
 }
 
 struct TextLayer<B: Backend> {
@@ -183,7 +183,7 @@ impl<B: Backend> Qwen3Vl<B> {
         }
         let pe = {
             let w = src.get(&format!("{VIS}.patch_embed.proj.weight"), &[vh, 3, cfg.vision_temporal_patch, cfg.vision_patch, cfg.vision_patch])?;
-            Linear { w: be.weight(&w, vh, pf), b: Some(be.upload(&src.get(&format!("{VIS}.patch_embed.proj.bias"), &[vh])?)), rows: vh, cols: pf }
+            Linear { w: be.weight(&w, vh, pf), b: Some(be.upload(&src.get(&format!("{VIS}.patch_embed.proj.bias"), &[vh])?)), rows: vh, cols: pf, lora: None }
         };
         Ok(VisionTower {
             patch_embed: pe,

@@ -376,6 +376,7 @@ impl<B: Backend> AudioVae<B> {
                 b: Some(be.upload(&src.get("dec_in_proj.bias", &[cfg.latent_dim])?)),
                 rows: cfg.latent_dim,
                 cols: cfg.latent_channels,
+                lora: None,
             },
             conv_pre: conv(be, src, "decoder.conv_pre", dd, cfg.latent_dim, 7, true)?,
             ups,

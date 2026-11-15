@@ -113,6 +113,64 @@ impl Adapter {
         Ok(used)
     }
 
+    /// Whether the adapter changes `module` other than through a LoRA pair
+    /// (`set_weight` / `diff`), i.e. whether its weight must be rebuilt in f32.
+    pub fn touches_dense(&self, module: &str) -> bool {
+        let k = self.key(module);
+        self.src.contains_raw(&format!("{k}.set_weight")) || self.src.contains_raw(&format!("{k}.diff"))
+    }
+
+    /// Whether the adapter holds a LoRA pair for `module`.
+    pub fn has_lora(&self, module: &str) -> bool {
+        self.lora_names(module).is_some()
+    }
+
+    /// [`Adapter::apply_weight`] without the LoRA pair: the dense deltas only,
+    /// for a linear whose pair runs as an unmerged branch.
+    pub fn apply_dense(&self, module: &str, w: &mut [f32], out: usize, inp: usize) -> Result<usize> {
+        let mut used = 0;
+        let k = self.key(module);
+        let set = format!("{k}.set_weight");
+        if self.src.contains_raw(&set) {
+            w.copy_from_slice(&self.src.get(&set, &[out, inp])?);
+            used += 1;
+        }
+        let diff = format!("{k}.diff");
+        if self.src.contains_raw(&diff) {
+            for (a, b) in w.iter_mut().zip(self.src.get(&diff, &[out, inp])?) {
+                *a += b;
+            }
+            used += 1;
+        }
+        Ok(used)
+    }
+
+    /// The LoRA pair of `module` as an unmerged branch: `A [r, in]` and
+    /// `scale · B [out, r]`, so `W x + B (A x)` is the merged linear.
+    ///
+    /// Merging is exact only in f32: a few-step student's delta can sit far
+    /// below one bf16 / f16 / E4M3 step of the weight it is added to (the
+    /// LongLive-Plug H3 adapter: |ΔW| / |W| ≈ 2·10⁻⁴, of which a bf16 merge
+    /// keeps a third and an MXFP8 one a tenth;
+    /// `docs/runs/2026-11-15-runpod-6000s-longlive-plug`), so the device
+    /// keeps the factors and adds the branch at run time.
+    pub fn lora_factors(&self, module: &str, out: usize, inp: usize) -> Result<Option<(Vec<f32>, Vec<f32>, usize)>> {
+        let Some((an, bn)) = self.lora_names(module) else { return Ok(None) };
+        let (_, ashape, _) = self.src.raw(&an)?;
+        if ashape.len() != 2 || ashape[1] != inp {
+            return Err(Error::Weights(format!("`{an}` is {ashape:?}, expected [r, {inp}]")));
+        }
+        let r = ashape[0];
+        let a = self.src.get(&an, &[r, inp])?;
+        let mut b = self.src.get(&bn, &[out, r])?;
+        if self.scale != 1.0 {
+            for x in &mut b {
+                *x *= self.scale;
+            }
+        }
+        Ok(Some((a, b, r)))
+    }
+
     /// Apply a bias delta (`diff_b`) if present.
     pub fn apply_bias(&self, module: &str, b: &mut [f32]) -> Result<bool> {
         let n = format!("{}.diff_b", self.key(module));

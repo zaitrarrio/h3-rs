@@ -63,7 +63,18 @@ pub struct HostAttnFf {
     ff_out: HostLinear,
 }
 
+impl<B: Backend> AttnFf<B> {
+    /// The widest LoRA branch of the unit's linears (0 without adapters).
+    pub fn rank(&self) -> usize {
+        [&self.qkv, &self.out, &self.ff_in, &self.ff_out].into_iter().chain(self.gate.as_ref()).map(Linear::rank).max().unwrap_or(0)
+    }
+}
+
 impl HostAttnFf {
+    fn rank(&self) -> usize {
+        [&self.qkv, &self.out, &self.ff_in, &self.ff_out].into_iter().chain(self.gate.as_ref()).map(|l| l.lora.as_ref().map_or(0, |x| x.rank)).max().unwrap_or(0)
+    }
+
     /// Native-precision linears to bf16 bits (see `HostWeight::to_bf16`).
     fn to_bf16(&mut self) {
         for l in [&mut self.qkv, &mut self.out, &mut self.ff_in, &mut self.ff_out].into_iter().chain(self.gate.as_mut()) {
@@ -91,7 +102,7 @@ impl HostAttnFf {
         }
     }
     pub fn bytes(&self) -> usize {
-        self.qkv.w.bytes() + self.out.w.bytes() + self.ff_in.w.bytes() + self.ff_out.w.bytes() + self.gate.as_ref().map_or(0, |g| g.w.bytes())
+        self.qkv.bytes() + self.out.bytes() + self.ff_in.bytes() + self.ff_out.bytes() + self.gate.as_ref().map_or(0, |g| g.bytes())
     }
 }
 
@@ -160,6 +171,9 @@ pub struct H3Dit<B: Backend> {
     norm_out_lin: (Vec<f32>, Vec<f32>),
     pub has_gate: bool,
     pub quant: WeightQuant,
+    /// Widest unmerged LoRA branch of the blocks (0 without adapters): the
+    /// workspace's rank scratch.
+    pub block_rank: usize,
 }
 
 /// AdaLN tables for a set of timesteps: per block `[U, 18·d]` (row `u` holds
@@ -266,6 +280,8 @@ pub fn runs(indices: &[u32]) -> Vec<Run> {
 
 /// Activation buffers for one layout, reused by every block and step.
 pub struct Workspace<B: Backend> {
+    /// `[tokens, block_rank]` for the blocks' LoRA branches.
+    lora_t: Option<B::Buf>,
     pub attention: Attention,
     pub tokens: usize,
     pub ffn_chunk: usize,
@@ -291,6 +307,13 @@ pub struct Workspace<B: Backend> {
 
 impl<B: Backend> H3Dit<B> {
     pub fn load(be: &B, cfg: H3Config, src: &dyn WeightSource, opts: &LoadOptions, adapters: &[Adapter]) -> Result<Self> {
+        Self::load_with(be, cfg, src, opts, adapters, false)
+    }
+
+    /// [`H3Dit::load`]; `merge_lora` merges the blocks' LoRA pairs into their
+    /// weights instead of keeping them as branches (exact only on an f32
+    /// backend: the checker's branch-equals-merge case).
+    pub fn load_with(be: &B, cfg: H3Config, src: &dyn WeightSource, opts: &LoadOptions, adapters: &[Adapter], merge_lora: bool) -> Result<Self> {
         let d = cfg.hidden;
         let qkv = cfg.dim();
         let has_gate = (0..cfg.layers).all(|l| src.has_linear(&format!("transformer_blocks.{l}.attn.to_gate_compress")))
@@ -304,7 +327,7 @@ impl<B: Backend> H3Dit<B> {
             Ok(v)
         };
         let unit_host = |p: &str, gate: bool, quant: WeightQuant| -> Result<HostAttnFf> {
-            let lin = |keys: &[&str], bias: bool| linear::load_host(src, &shapes, keys, bias, quant, adapters);
+            let lin = |keys: &[&str], bias: bool| linear::load_host(src, &shapes, keys, bias, quant, adapters, !merge_lora);
             Ok(HostAttnFf {
                 qkv: lin(&[&format!("{p}.attn.to_q"), &format!("{p}.attn.to_k"), &format!("{p}.attn.to_v")], false)?,
                 out: lin(&[&format!("{p}.attn.to_out.0")], false)?,
@@ -342,8 +365,16 @@ impl<B: Backend> H3Dit<B> {
                 Residency::Device(h.upload(be))
             });
         }
+        let block_rank = blocks
+            .iter()
+            .map(|b| match b {
+                Residency::Device(w) => w.rank(),
+                Residency::Host(h) => h.rank(),
+            })
+            .max()
+            .unwrap_or(0);
         let plain = |k: &str| -> Result<Linear<B>> {
-            Ok(linear::load_host(src, &shapes, &[k], true, WeightQuant::Native, adapters)?.upload(be))
+            Ok(linear::load_host(src, &shapes, &[k], true, WeightQuant::Native, adapters, false)?.upload(be))
         };
         let te_in = cfg.time_embed_hidden;
         let adaln_in = cfg.adaln_rank.unwrap_or(cfg.time_embed_dim);
@@ -433,6 +464,7 @@ impl<B: Backend> H3Dit<B> {
             norm_out_lin,
             has_gate,
             quant: opts.quant,
+            block_rank,
             cfg,
         })
     }
@@ -472,7 +504,7 @@ impl<B: Backend> H3Dit<B> {
         let mut blocks = Vec::with_capacity(cfg.layers);
         for l in 0..cfg.layers {
             let key = format!("transformer_blocks.{l}.adaln_proj.linear");
-            let lin = linear::load_host(src, &shapes, &[&key], true, WeightQuant::Native, adapters)?.upload(be);
+            let lin = linear::load_host(src, &shapes, &[&key], true, WeightQuant::Native, adapters, false)?.upload(be);
             be.linear(&gx, 0, u, &lin.w, lin.b.as_ref(), Act::None, &gy, 0);
             let mut t = be.download(&gy);
             t.truncate(u * mods);
@@ -553,16 +585,19 @@ impl<B: Backend> H3Dit<B> {
             be.alloc(rows * c.ffn_dim),
         );
         let (normed, qkvb, q, k, v, attn, tmp, hid, hid2) = (&bufs.0, &bufs.1, &bufs.2, &bufs.3, &bufs.4, &bufs.5, &bufs.6, &bufs.7, &bufs.8);
+        let rank = self.refiner.iter().map(AttnFf::rank).max().unwrap_or(0);
+        let lt = (rank > 0).then(|| be.alloc(rows * rank));
+        let t = lt.as_ref();
         for bl in &self.refiner {
             be.rms_norm(&h, rows, d, Some(&bl.norm1), Modulation::None, c.norm_eps, normed);
-            be.linear(normed, 0, rows, &bl.qkv.w, None, Act::None, qkvb, 0);
+            bl.qkv.apply(be, normed, 0, rows, qkvb, 0, t);
             self.split_qkv(be, bl, qkvb, rows, None, q, k, v);
             be.attention(q, k, v, c.heads, c.heads, rows, rows, c.head_dim, false, attn);
-            be.linear(attn, 0, rows, &bl.out.w, None, Act::None, tmp, 0);
+            bl.out.apply(be, attn, 0, rows, tmp, 0, t);
             be.residual_rms_norm(&h, tmp, rows, d, Gate::None, Some(&bl.norm2), Modulation::None, c.norm_eps, normed);
-            be.linear(normed, 0, rows, &bl.ff_in.w, None, Act::None, hid, 0);
+            bl.ff_in.apply(be, normed, 0, rows, hid, 0, t);
             be.swiglu(hid, rows, c.ffn_dim, hid2);
-            be.linear(hid2, 0, rows, &bl.ff_out.w, None, Act::None, tmp, 0);
+            bl.ff_out.apply(be, hid2, 0, rows, tmp, 0, t);
             be.gate_residual(&h, tmp, rows, d, Gate::None);
         }
         let out = be.alloc(rows * d);
@@ -602,6 +637,7 @@ impl<B: Backend> H3Dit<B> {
             }
         };
         Ok(Workspace {
+            lora_t: (self.block_rank > 0).then(|| be.alloc(s * self.block_rank)),
             attention,
             tokens: s,
             ffn_chunk: chunk,
@@ -704,12 +740,13 @@ impl<B: Backend> H3Dit<B> {
             };
             let t = ModTable { table: m, idx: &mods.adaln_idx, slots: H3Config::MOD_SLOTS };
             be.rms_norm(&ws.h, s, d, Some(&w.norm1), Modulation::Table { m: t, scale: SCALE_MSA, shift: SHIFT_MSA }, c.norm_eps, &ws.normed);
-            be.linear(&ws.normed, 0, s, &w.qkv.w, None, Act::None, &ws.qkv, 0);
+            let lt = ws.lora_t.as_ref();
+            w.qkv.apply(be, &ws.normed, 0, s, &ws.qkv, 0, lt);
             self.split_qkv(be, w, &ws.qkv, s, rope, &ws.q, &ws.k, &ws.v);
             match (&ws.vsa, &w.gate) {
                 (Some(vsa), gate) => {
                     let g = gate.as_ref().map(|gl| {
-                        be.linear(&ws.normed, 0, s, &gl.w, None, Act::None, &ws.attn, 0);
+                        gl.apply(be, &ws.normed, 0, s, &ws.attn, 0, lt);
                         be.head_split(&ws.attn, s, c.dim(), 0, c.heads, c.head_dim, None, None, &ws.g);
                         &ws.g
                     });
@@ -725,7 +762,7 @@ impl<B: Backend> H3Dit<B> {
             if first {
                 stat(&format!("block {l} attn"), &ws.attn);
             }
-            be.linear(&ws.attn, 0, s, &w.out.w, None, Act::None, &ws.tmp, 0);
+            w.out.apply(be, &ws.attn, 0, s, &ws.tmp, 0, lt);
             be.residual_rms_norm(
                 &ws.h,
                 &ws.tmp,
@@ -740,9 +777,9 @@ impl<B: Backend> H3Dit<B> {
             let mut r0 = 0;
             while r0 < s {
                 let n = ws.ffn_chunk.min(s - r0);
-                be.linear(&ws.normed, r0, n, &w.ff_in.w, None, Act::None, &ws.hid, 0);
+                w.ff_in.apply(be, &ws.normed, r0, n, &ws.hid, 0, lt);
                 be.swiglu(&ws.hid, n, c.ffn_dim, &ws.hid2);
-                be.linear(&ws.hid2, 0, n, &w.ff_out.w, None, Act::None, &ws.tmp, r0);
+                w.ff_out.apply(be, &ws.hid2, 0, n, &ws.tmp, r0, lt);
                 r0 += n;
             }
             be.gate_residual(&ws.h, &ws.tmp, s, d, Gate::Table(ModRef { table: t, slot: GATE_MLP }));
@@ -808,8 +845,8 @@ fn fused_heads<B: Backend>(be: &B, pdd: &PddHeads, vw: &[f64], aw: &[f64], start
     let (aw, ab) = fuse(&pdd.audio_w, &pdd.audio_b, aw);
     let (vo, ao) = (vb.len(), ab.len());
     OutputHeads {
-        video: Linear { w: be.weight(&vw, vo, d), b: Some(be.upload(&vb)), rows: vo, cols: d },
-        audio: Linear { w: be.weight(&aw, ao, d), b: Some(be.upload(&ab)), rows: ao, cols: d },
+        video: Linear { w: be.weight(&vw, vo, d), b: Some(be.upload(&vb)), rows: vo, cols: d , lora: None },
+        audio: Linear { w: be.weight(&aw, ao, d), b: Some(be.upload(&ab)), rows: ao, cols: d , lora: None },
     }
 }
 

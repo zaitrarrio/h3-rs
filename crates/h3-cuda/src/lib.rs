@@ -1763,6 +1763,61 @@ impl Backend for Cuda {
         }
     }
 
+    fn linear_add(&self, x: &CuBuf, x_row: usize, rows: usize, w: &CuWeight, out: usize, y: &CuBuf, y_row: usize) {
+        let (n, k) = (w.rows, w.cols);
+        assert_eq!(n, out, "linear_add: weight rows {n} != output width {out}");
+        assert!((x_row + rows) * k <= x.len && (y_row + rows) * n <= y.len);
+        if rows == 0 {
+            return;
+        }
+        if w.quant.is_some() {
+            // LoRA factors are plain bf16; anything else takes the composite.
+            let chunk = ((1usize << 24) / n.max(1)).clamp(1, rows);
+            let scratch = self.alloc(chunk * n);
+            let mut r = 0;
+            while r < rows {
+                let m = chunk.min(rows - r);
+                self.linear(x, x_row + r, m, w, None, Act::None, &scratch, 0);
+                self.axpby(y, (y_row + r) * n, 1.0, &scratch, 0, 1.0, m * n);
+                r += m;
+            }
+            return;
+        }
+        let (yp, xp, wp) = (self.ptr_at(y, y_row * n), self.ptr_at(x, x_row * k), self.ptr(&w.buf));
+        let (alpha, beta) = (1.0f32, 1.0f32);
+        // As in `linear`'s fallback (column-major yᵀ = W·xᵀ), with beta = 1:
+        // the GEMM reads y and writes y + x·Wᵀ in one pass.
+        // SAFETY: pointers and extents checked above; alpha/beta outlive the call.
+        self.timed(
+            || format!("gemm+acc n={n} k={k}{}", if rows < 1024 { " (small)" } else { "" }),
+            || unsafe {
+                cudarc::cublas::result::gemm_ex(
+                    *self.blas.handle(),
+                    blas_sys::cublasOperation_t::CUBLAS_OP_T,
+                    blas_sys::cublasOperation_t::CUBLAS_OP_N,
+                    n as i32,
+                    rows as i32,
+                    k as i32,
+                    (&alpha) as *const f32 as *const _,
+                    wp as *const _,
+                    blas_sys::cudaDataType_t::CUDA_R_16BF,
+                    k as i32,
+                    xp as *const _,
+                    blas_sys::cudaDataType_t::CUDA_R_16BF,
+                    k as i32,
+                    (&beta) as *const f32 as *const _,
+                    yp as *mut _,
+                    blas_sys::cudaDataType_t::CUDA_R_16BF,
+                    n as i32,
+                    blas_sys::cublasComputeType_t::CUBLAS_COMPUTE_32F,
+                    blas_sys::cublasGemmAlgo_t::CUBLAS_GEMM_DEFAULT,
+                )
+                .expect("cublas gemm (accumulate)");
+            },
+        );
+        self.count_flops(rows, n, k);
+    }
+
     fn swiglu(&self, x: &CuBuf, rows: usize, dim: usize, out: &CuBuf) {
         let n = rows * dim;
         assert!(2 * n <= x.len && n <= out.len);

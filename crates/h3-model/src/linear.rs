@@ -17,6 +17,38 @@ pub struct Linear<B: Backend> {
     pub b: Option<B::Buf>,
     pub rows: usize,
     pub cols: usize,
+    /// Unmerged LoRA pairs ([`LowRank`]): `y = W x + b + B (A x)`.
+    pub lora: Option<LowRank<B>>,
+}
+
+/// The LoRA pairs of one (possibly fused) linear, kept as factors: `a`
+/// `[rank, cols]` (every pair's `A` stacked), `b` `[rows, rank]` (each pair's
+/// `scale · B` in its rows and columns, zeros elsewhere, so a fused QKV keeps
+/// one branch). Merging into the device weight would round most of a small
+/// delta away ([`h3_core::lora::Adapter::lora_factors`]).
+pub struct LowRank<B: Backend> {
+    pub a: B::Weight,
+    pub b: B::Weight,
+    pub rank: usize,
+}
+
+impl<B: Backend> Linear<B> {
+    /// `y[y_row + i] = x[x_row + i] · Wᵀ (+ b) (+ B·A·x)` for `i < rows`, no
+    /// activation (the branch must land before one). `t` holds `rows × rank`
+    /// when the linear has a branch ([`Linear::rank`]).
+    #[allow(clippy::too_many_arguments)]
+    pub fn apply(&self, be: &B, x: &B::Buf, x_row: usize, rows: usize, y: &B::Buf, y_row: usize, t: Option<&B::Buf>) {
+        be.linear(x, x_row, rows, &self.w, self.b.as_ref(), h3_core::backend::Act::None, y, y_row);
+        if let Some(l) = &self.lora {
+            let t = t.expect("a linear with a LoRA branch needs its rank scratch");
+            be.linear(x, x_row, rows, &l.a, None, h3_core::backend::Act::None, t, 0);
+            be.linear_add(t, 0, rows, &l.b, self.rows, y, y_row);
+        }
+    }
+
+    pub fn rank(&self) -> usize {
+        self.lora.as_ref().map_or(0, |l| l.rank)
+    }
 }
 
 /// A linear's weights before they reach a device: the host side of a
@@ -50,6 +82,21 @@ pub struct HostLinear {
     pub b: Option<Vec<f32>>,
     pub rows: usize,
     pub cols: usize,
+    pub lora: Option<HostLowRank>,
+}
+
+/// [`LowRank`] on the host: `a` `[rank, cols]`, `b` `[rows, rank]`, f32 or
+/// (streamed) bf16.
+pub struct HostLowRank {
+    pub a: HostWeight,
+    pub b: HostWeight,
+    pub rank: usize,
+}
+
+/// Whether block linears keep their LoRA pairs as branches (`H3_LORA_MERGE=1`
+/// merges them into the weight instead, as before 2026-11-15, to compare).
+pub fn lora_branches() -> bool {
+    !std::env::var("H3_LORA_MERGE").is_ok_and(|v| v == "1")
 }
 
 /// A page-lock guard ([`Backend::pin_host`]); dropped before its buffer.
@@ -83,25 +130,48 @@ impl HostWeight {
     }
 }
 
-impl HostLinear {
-    pub fn pin<B: Backend>(&self, be: &B, out: &mut Vec<PinGuard>) {
-        self.w.pin(be, out);
-    }
-
-    pub fn to_bf16(&mut self) {
-        self.w.to_bf16();
-    }
-
-    pub fn upload<B: Backend>(&self, be: &B) -> Linear<B> {
-        let w = match &self.w {
-            HostWeight::F32(v) => be.weight(v, self.rows, self.cols),
-            HostWeight::Bf16(v) => be.weight_bf16(v, self.rows, self.cols),
+impl HostWeight {
+    fn upload<B: Backend>(&self, be: &B, rows: usize, cols: usize) -> B::Weight {
+        match self {
+            HostWeight::F32(v) => be.weight(v, rows, cols),
+            HostWeight::Bf16(v) => be.weight_bf16(v, rows, cols),
             HostWeight::Q8(q) => be.weight_q8(q),
             HostWeight::Q4(q) => be.weight_q4(q),
             HostWeight::Nvfp4(q) => be.weight_nvfp4(q),
             HostWeight::Mxfp8(q) => be.weight_mxfp8(q),
-        };
-        Linear { w, b: self.b.as_ref().map(|b| be.upload(b)), rows: self.rows, cols: self.cols }
+        }
+    }
+}
+
+impl HostLinear {
+    pub fn pin<B: Backend>(&self, be: &B, out: &mut Vec<PinGuard>) {
+        self.w.pin(be, out);
+        if let Some(l) = &self.lora {
+            l.a.pin(be, out);
+            l.b.pin(be, out);
+        }
+    }
+
+    pub fn to_bf16(&mut self) {
+        self.w.to_bf16();
+        if let Some(l) = &mut self.lora {
+            l.a.to_bf16();
+            l.b.to_bf16();
+        }
+    }
+
+    pub fn bytes(&self) -> usize {
+        self.w.bytes() + self.lora.as_ref().map_or(0, |l| l.a.bytes() + l.b.bytes())
+    }
+
+    pub fn upload<B: Backend>(&self, be: &B) -> Linear<B> {
+        Linear {
+            w: self.w.upload(be, self.rows, self.cols),
+            b: self.b.as_ref().map(|b| be.upload(b)),
+            rows: self.rows,
+            cols: self.cols,
+            lora: self.lora.as_ref().map(|l| LowRank { a: l.a.upload(be, l.rank, self.cols), b: l.b.upload(be, self.rows, l.rank), rank: l.rank }),
+        }
     }
 }
 
@@ -117,9 +187,16 @@ pub fn load_host(
     bias: bool,
     quant: WeightQuant,
     adapters: &[Adapter],
+    branch: bool,
 ) -> Result<HostLinear> {
     let err = |m: String| Error::Weights(m);
-    let touched = adapters.iter().any(|a| keys.iter().any(|k| a.touches(k)));
+    // With `branch`, LoRA pairs stay factors (`HostLowRank`) and only dense
+    // deltas (set_weight / diff) force the f32 rebuild, so a stored quantized
+    // file keeps its codes under a LoRA.
+    let branch = branch && lora_branches();
+    let touched = adapters.iter().any(|a| keys.iter().any(|k| if branch { a.touches_dense(k) } else { a.touches(k) }));
+    // (row offset, rows, A [r, cols], scale·B [rows, r], r) per key and adapter.
+    let mut pairs: Vec<(usize, usize, Vec<f32>, Vec<f32>, usize)> = Vec::new();
     let (mut w, mut b, mut stored, mut rows, mut cols) = (Vec::new(), Vec::new(), Vec::<Stored>::new(), 0usize, 0usize);
     for k in keys {
         let shape = shapes.get(&format!("{k}.weight")).ok_or_else(|| err(format!("`{k}` is not in the manifest")))?;
@@ -141,7 +218,18 @@ pub fn load_host(
         if touched {
             let start = w.len() - o * i;
             for a in adapters {
-                a.apply_weight(k, &mut w[start..], o, i)?;
+                if branch {
+                    a.apply_dense(k, &mut w[start..], o, i)?;
+                } else {
+                    a.apply_weight(k, &mut w[start..], o, i)?;
+                }
+            }
+        }
+        if branch {
+            for a in adapters {
+                if let Some((fa, fb, r)) = a.lora_factors(k, o, i)? {
+                    pairs.push((rows, o, fa, fb, r));
+                }
             }
         }
         if bias {
@@ -188,7 +276,21 @@ pub fn load_host(
     } else {
         return Err(err(format!("{keys:?}: mixed stored formats")));
     };
-    Ok(HostLinear { w, b: bias.then_some(b), rows, cols })
+    let lora = (!pairs.is_empty()).then(|| {
+        let rank: usize = pairs.iter().map(|p| p.4).sum();
+        let mut a = Vec::with_capacity(rank * cols);
+        let mut b = vec![0f32; rows * rank];
+        let mut c = 0;
+        for (r0, o, fa, fb, r) in &pairs {
+            a.extend_from_slice(fa);
+            for i in 0..*o {
+                b[(r0 + i) * rank + c..(r0 + i) * rank + c + r].copy_from_slice(&fb[i * r..(i + 1) * r]);
+            }
+            c += r;
+        }
+        HostLowRank { a: HostWeight::F32(a), b: HostWeight::F32(b), rank }
+    });
+    Ok(HostLinear { w, b: bias.then_some(b), rows, cols, lora })
 }
 
 pub fn load<B: Backend>(
@@ -200,14 +302,14 @@ pub fn load<B: Backend>(
     quant: WeightQuant,
     adapters: &[Adapter],
 ) -> Result<Linear<B>> {
-    Ok(load_host(src, shapes, keys, bias, quant, adapters)?.upload(be))
+    Ok(load_host(src, shapes, keys, bias, quant, adapters, false)?.upload(be))
 }
 
 /// A plain f32 `[rows, cols]` matrix (+ bias) from the source, as a device linear.
 pub fn load_plain<B: Backend>(be: &B, src: &dyn WeightSource, key: &str, rows: usize, cols: usize, bias: bool) -> Result<Linear<B>> {
     let w = src.get(&format!("{key}.weight"), &[rows, cols])?;
     let b = if bias { Some(be.upload(&src.get(&format!("{key}.bias"), &[rows])?)) } else { None };
-    Ok(Linear { w: be.weight(&w, rows, cols), b, rows, cols })
+    Ok(Linear { w: be.weight(&w, rows, cols), b, rows, cols, lora: None })
 }
 
 /// A 1-D vector from the source.

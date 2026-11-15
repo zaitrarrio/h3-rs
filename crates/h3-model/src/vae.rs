@@ -423,7 +423,7 @@ impl<B: Backend> VideoVae<B> {
                 WeightQuant::Int8 => be.weight_q8(&Q8::quantize(&w, rows, cols)),
                 _ => be.weight(&w, rows, cols),
             };
-            Linear { w, b: Some(be.upload(&b)), rows, cols }
+            Linear { w, b: Some(be.upload(&b)), rows, cols, lora: None }
         };
         let lin = |key: &str, rows: usize, cols: usize| -> Result<Linear<B>> {
             Ok(block_linear(src.get(&format!("{key}.weight"), &[rows, cols])?, src.get(&format!("{key}.bias"), &[rows])?, rows, cols))

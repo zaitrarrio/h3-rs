@@ -634,6 +634,13 @@ fn main() -> Result<()> {
             if weights == WeightQuant::Native && r.adapters.is_empty() && !skip_adaln {
                 bail!("--weights native with no adapters and without --skip-adaln would only convert to f16");
             }
+            if r.adapters.iter().any(|a| !a.modules().is_empty() && a.modules().iter().any(|m| a.has_lora(m))) {
+                eprintln!(
+                    "warning: merging LoRA pairs into a {} file keeps only part of a small delta (LongLive-Plug's H3 adapter: a third in bf16, a tenth in MXFP8; \
+                     docs/runs/2026-11-15-runpod-6000s-longlive-plug). `generate` keeps them as branches: quantize the base and pass the adapter there instead.",
+                    weights
+                );
+            }
             let t0 = std::time::Instant::now();
             let adapters = &r.adapters;
             let patch = |name: &str, w: &mut [f32], shape: &[usize]| -> h3_core::Result<()> {

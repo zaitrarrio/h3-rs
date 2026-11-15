@@ -444,6 +444,28 @@ pub trait Backend {
         y_row: usize,
     );
 
+    /// `y[y_row + i, :out] += x[x_row + i, :] · Wᵀ` for `i < rows` (`W` is
+    /// `[out, in]`, no bias, no activation): the up-projection of an unmerged
+    /// LoRA branch ([`crate::lora::Adapter::lora_factors`]). The default runs
+    /// [`Backend::linear`] into a scratch buffer, a bounded number of rows at
+    /// a time, and adds it with [`Backend::axpby`]; CUDA accumulates in the
+    /// GEMM (`beta = 1`).
+    #[allow(clippy::too_many_arguments)]
+    fn linear_add(&self, x: &Self::Buf, x_row: usize, rows: usize, w: &Self::Weight, out: usize, y: &Self::Buf, y_row: usize) {
+        if rows == 0 {
+            return;
+        }
+        let chunk = ((1usize << 24) / out.max(1)).clamp(1, rows);
+        let scratch = self.alloc(chunk * out);
+        let mut r = 0;
+        while r < rows {
+            let m = chunk.min(rows - r);
+            self.linear(x, x_row + r, m, w, None, Act::None, &scratch, 0);
+            self.axpby(y, (y_row + r) * out, 1.0, &scratch, 0, 1.0, m * out);
+            r += m;
+        }
+    }
+
     /// `out[i, :dim] = x[i, :dim] · silu(x[i, dim:2·dim])` (H3 / Qwen3-VL
     /// `value, gate` halves; `x` rows are `2·dim` wide).
     fn swiglu(&self, x: &Self::Buf, rows: usize, dim: usize, out: &Self::Buf);

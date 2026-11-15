@@ -71,6 +71,8 @@ trait Runner {
 /// The subset of ops exercised by the checks, over erased buffers.
 pub trait ErasedBackend {
     fn linear(&self, x: &[f32], x_row: usize, rows: usize, w: &Mat, bias: Option<&[f32]>, act: Act, y_rows: usize, y_row: usize) -> Vec<f32>;
+    /// `y0` with `x[x_row..x_row + rows] · Wᵀ` added at row `y_row`.
+    fn linear_add(&self, x: &[f32], x_row: usize, rows: usize, w: &Mat, y0: &[f32], y_row: usize) -> Vec<f32>;
     fn swiglu(&self, x: &[f32], rows: usize, dim: usize) -> Vec<f32>;
     fn rms_norm(&self, x: &[f32], rows: usize, dim: usize, w: Option<&[f32]>, m: Option<(&[f32], &[u32], usize, usize, usize)>, eps: f32) -> Vec<f32>;
     fn residual_rms_norm(&self, h: &[f32], a: &[f32], rows: usize, dim: usize, gate: GateSpec<'_>, w: Option<&[f32]>, m: Option<(&[f32], &[u32], usize, usize, usize)>, eps: f32) -> (Vec<f32>, Vec<f32>);
@@ -156,6 +158,19 @@ impl<B: Backend> ErasedBackend for BackendRunner<'_, B> {
         };
         let gy = be.alloc(y_rows * n);
         be.linear(&gx, x_row, rows, &gw, gb.as_ref(), act, &gy, y_row);
+        be.download(&gy)
+    }
+    fn linear_add(&self, x: &[f32], x_row: usize, rows: usize, w: &Mat, y0: &[f32], y_row: usize) -> Vec<f32> {
+        let be = self.0;
+        let n = match w {
+            Mat::F32(_, r, _) => *r,
+            Mat::Q8(q) => q.rows,
+            Mat::Q4(q) => q.rows,
+            Mat::Nvfp4(q) => q.rows,
+            Mat::Mxfp8(q) => q.rows,
+        };
+        let (gx, gw, gy) = (be.upload(x), self.mat(w), be.upload(y0));
+        be.linear_add(&gx, x_row, rows, &gw, n, &gy, y_row);
         be.download(&gy)
     }
     fn swiglu(&self, x: &[f32], rows: usize, dim: usize) -> Vec<f32> {
@@ -527,6 +542,15 @@ fn ops<B: Backend>(p: &mut Pair<'_, B>, rng: &mut Rng) {
         p.record(format!("linear mxfp8 {m}x{k}x{n} first call (split-decided)"), first.clone(), want);
         p.record_exact(format!("linear mxfp8 {m}x{k}x{n} second call == first"), second, first);
     }
+    // linear_add (an unmerged LoRA branch's up-projection): y += x·Wᵀ into a
+    // row offset of a buffer that already holds values.
+    {
+        let (m, k, n) = (37, 24, 40);
+        let x = rng.normal((m + 3) * k);
+        let w = rng.uniform(n * k, 0.3);
+        let y0 = rng.normal((m + 5) * n);
+        p.op(format!("linear_add {m}x{k}x{n}"), |r| r.linear_add(&x, 3, m, &Mat::F32(&w, n, k), &y0, 2));
+    }
     // swiglu
     {
         let x = rng.normal(19 * 2 * 48);
@@ -816,6 +840,7 @@ fn models<B: Backend>(p: &mut Pair<'_, B>) {
         dit_check(p, Attention::Dense { qk8: false, pv8: false }, quant, false);
         dit_check(p, Attention::Vsa { sparsity: 0.5, tile: 64, ref_sparsity: 0.5, qk8: false, pv8: false }, quant, true);
     }
+    lora_check(p);
     dit_check(p, Attention::Dense { qk8: true, pv8: false }, WeightQuant::Native, false);
     dit_check(p, Attention::Dense { qk8: true, pv8: true }, WeightQuant::Native, false);
     dit_check(p, Attention::Vsa { sparsity: 0.5, tile: 64, ref_sparsity: 0.5, qk8: true, pv8: false }, WeightQuant::Native, false);
@@ -827,6 +852,38 @@ fn models<B: Backend>(p: &mut Pair<'_, B>) {
 }
 
 fn dit_forward<B: Backend>(be: &B, attention: Attention, quant: WeightQuant, gate: bool, stream: bool) -> Vec<f32> {
+    dit_forward_lora(be, attention, quant, gate, stream, &[], false)
+}
+
+/// A rank-3 LoRA (alpha 6: scale 2) on every attention and FF linear of the
+/// tiny DiT's blocks and refiner, PEFT names, written once per process.
+fn tiny_lora() -> h3_core::lora::Adapter {
+    use h3_core::export::{f32_bytes, write};
+    let cfg = H3Config::tiny_vsa();
+    let shapes: std::collections::HashMap<String, Vec<usize>> = h3_core::weights::h3_manifest(&cfg, true).into_iter().collect();
+    let path = std::env::temp_dir().join(format!("h3-check-lora-{}.safetensors", std::process::id()));
+    if !path.is_file() {
+        let mut rng = Rng::new(17);
+        let mut t = Vec::new();
+        let prefixes = (0..cfg.layers).map(|l| format!("transformer_blocks.{l}")).chain((0..cfg.refiner_layers).map(|l| format!("token_refiner.refiner_blocks.{l}")));
+        for p in prefixes {
+            for m in ["attn.to_q", "attn.to_k", "attn.to_v", "attn.to_out.0", "ff.net.0.proj", "ff.net.2"] {
+                let k = format!("{p}.{m}");
+                let sh = &shapes[&format!("{k}.weight")];
+                let (o, i) = (sh[0], sh[1]);
+                let a = rng.uniform(3 * i, 0.3);
+                let b = rng.uniform(o * 3, 0.3);
+                t.push((format!("{k}.lora_A.weight"), safetensors::Dtype::F32, vec![3, i], f32_bytes(&a)));
+                t.push((format!("{k}.lora_B.weight"), safetensors::Dtype::F32, vec![o, 3], f32_bytes(&b)));
+            }
+        }
+        write(&path, &t, Default::default()).unwrap();
+    }
+    h3_core::lora::Adapter::open(&path, Some(6.0), Some(3)).unwrap()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn dit_forward_lora<B: Backend>(be: &B, attention: Attention, quant: WeightQuant, gate: bool, stream: bool, adapters: &[h3_core::lora::Adapter], merge: bool) -> Vec<f32> {
     let cfg = H3Config::tiny_vsa();
     let src = Synthetic { seed: 11 };
     // Gate presence: the synthetic source answers every name, so the loader
@@ -841,7 +898,7 @@ fn dit_forward<B: Backend>(be: &B, attention: Attention, quant: WeightQuant, gat
         }
     }
     let src_dyn: Box<dyn h3_core::weights::WeightSource> = if gate { Box::new(src) } else { Box::new(NoGate(src)) };
-    let dit = H3Dit::load(be, cfg.clone(), src_dyn.as_ref(), &LoadOptions { quant, stream_blocks: stream }, &[]).unwrap();
+    let dit = H3Dit::load_with(be, cfg.clone(), src_dyn.as_ref(), &LoadOptions { quant, stream_blocks: stream }, adapters, merge).unwrap();
     // A small FL2VA layout: 6 text rows (one vision tag), one first keyframe,
     // 3×4×6 latent, 5 audio latents.
     let text = vec![TEXT_TAG, TEXT_TAG, 0, TEXT_TAG, TEXT_TAG, TEXT_TAG];
@@ -878,6 +935,31 @@ fn dit_check<B: Backend>(p: &mut Pair<'_, B>, attention: Attention, quant: Weigh
     // inside the CUDA tolerance, but never as zero here. `H3_STREAM_STRESS=1`
     // makes such a bug deterministic.
     p.record_exact(format!("dit tiny {attention:?} {quant} streamed == resident"), streamed, got);
+}
+
+/// Unmerged LoRA branches (`Linear::apply` + `linear_add`): the tiny DiT with
+/// a LoRA on every block / refiner linear against the CPU, native and MXFP8,
+/// resident and streamed; and on the CPU (f32, where merging is exact) the
+/// branch against the merge, which pins the branch's arithmetic (fused-QKV
+/// block layout, the folded scale) to what a merge means.
+fn lora_check<B: Backend>(p: &mut Pair<'_, B>) {
+    let a = [tiny_lora()];
+    let dense = Attention::Dense { qk8: false, pv8: false };
+    for quant in [WeightQuant::Native, WeightQuant::Mxfp8] {
+        let got = dit_forward_lora(p.be, dense, quant, false, false, &a, false);
+        let want = dit_forward_lora(&Cpu, dense, quant, false, false, &a, false);
+        p.record(format!("dit tiny {quant} + LoRA branch"), got.clone(), want);
+        let streamed = dit_forward_lora(p.be, dense, quant, false, true, &a, false);
+        p.record_exact(format!("dit tiny {quant} + LoRA branch streamed == resident"), streamed, got);
+    }
+    let branch = dit_forward_lora(&Cpu, dense, WeightQuant::Native, false, false, &a, false);
+    let merged = dit_forward_lora(&Cpu, dense, WeightQuant::Native, false, false, &a, true);
+    let plain = dit_forward_lora(&Cpu, dense, WeightQuant::Native, false, false, &[], false);
+    let e = rel(&branch, &merged);
+    p.out.push(CheckResult { name: "dit tiny LoRA branch == merge (CPU, f32)".into(), rel_err: e, ok: e <= 1e-4 });
+    // …and the adapter must matter, or the two cases above test nothing.
+    let moved = rel(&plain, &merged);
+    p.out.push(CheckResult { name: "dit tiny LoRA changes the forward (CPU)".into(), rel_err: moved, ok: moved > 1e-2 });
 }
 
 fn vae_check<B: Backend>(p: &mut Pair<'_, B>) {
