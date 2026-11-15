@@ -298,8 +298,19 @@ State and invariants only; the reasoning is in `docs/design.md`.
   ff.fc_in` etc.).
 - Variants are presets in `h3_core::variant`; a checkpoint's
   `fastvideo_inference.json` overrides the preset. Base and Pika Ref2VA use
-  `transformer_ref`. Adapters (Pika LoRA, Regen-2K LoRA, FastH3 V1 diffs) are
-  merged in f32 at load, before quantization. Run with real weights on the
+  `transformer_ref`. Adapters (Pika LoRA, Regen-2K LoRA, FastH3 V1 diffs,
+  LongLive-Plug): dense deltas (`set_weight`, `diff`) merge in f32 at load,
+  before quantization; LoRA pairs on the block and refiner linears stay an
+  unmerged branch, `y = W x + B (A x)` (`linear::LowRank`,
+  `Backend::linear_add`), because a merge keeps only what survives the
+  device weight's rounding: LongLive-Plug's |ΔW|/|W| ≈ 2·10⁻⁴ kept a third
+  in bf16 and a tenth in MXFP8, and its MXFP8 clips turned stylised
+  (`docs/runs/2026-11-15-runpod-6000s-longlive-plug`). `H3_LORA_MERGE=1`
+  merges as before. `h3-plug4` is the base with LongLive-Plug's four-step
+  adapter (convert `generator_lora.pt` with
+  `scripts/reference/convert_longlive_plug.py`) on Pika's renoise rule over
+  linspace(1, 0, 5) shifted 12 / 3, no CFG; a variant's missing adapter is
+  an error. Run with real weights on the
   600 W Server Edition (`docs/runs/2026-11-08-vast-pro6000-server-variants`):
   base T2VA (49 × 10.7 s), FL2VA (49 × 12.7 s), Ref2VA (49 × 18.3 s: the
   reference image is 7176 Qwen3-VL tokens at the contract's 2048 short

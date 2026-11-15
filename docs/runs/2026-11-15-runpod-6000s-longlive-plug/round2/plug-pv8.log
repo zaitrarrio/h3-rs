@@ -1,0 +1,16 @@
++ timeout 1500 /w/h3-bin generate --backend cuda --seed 7 --width 1344 --height 768 --frames 124 --prompt 'A red fox trots through fresh snow at dawn in a quiet pine forest; snow crunches softly under its paws and a light wind moves through the branches.' --out /root/out/plug-pv8.y4m --variant h3-plug4 --model-dir /w/h3-base --variant-dir /workspace/h3-rs/plug4 --tables /workspace/h3-rs/plug4/plug4.tables --pv8
+adapter: /workspace/h3-rs/plug4/generator_lora.safetensors
+cuda NVIDIA RTX PRO 6000 Blackwell Server Edition (sm_120)
+load 107.4s
+prompt: 33 rows in 80.9s
+step 1/4 7.76s
+step 2/4 7.79s
+step 3/4 7.81s
+step 4/4 7.83s
+run 0: total 40.03s  prepare 0.03s  adaln 0.00s  denoise 31.20s (["7.76", "7.79", "7.81", "7.83"])  decode 8.52s  audio 0.19s
+wrote /root/out/plug-pv8.y4m (124 frames 1344x768) and /root/out/plug-pv8.wav
+mux: ffmpeg -i /root/out/plug-pv8.y4m -i /root/out/plug-pv8.wav -c:v libx264 -pix_fmt yuv420p -c:a aac /root/out/plug-pv8.mp4
+
+real	4m1.157s
+user	5m17.122s
+sys	1m53.557s

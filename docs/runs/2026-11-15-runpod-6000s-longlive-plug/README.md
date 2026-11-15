@@ -67,8 +67,60 @@ turns stylised. A dense forward is 6.5 s against V2's 4.5 s (no VSA gate
 in the base, so dense attention), so the 4 forwards save less than the step
 count suggests.
 
-## Round 2: which part of the fast recipe does it
+## Round 2 (`round2/`): which part of the fast recipe does it
 
-_In progress: the same fox / seed with bf16 weights + `--pv8`, bf16 + `--qk8`,
-MXFP8 weights + bf16 attention, MXFP8 on every block, and the bf16 path
-again for run-to-run determinism, each against the bf16 clip._
+Second pod (same card class and driver), binary 7a74532, the fox at seed 7,
+each clip against round 1's bf16 clip (PSNR between the two x264 encodes):
+
+| run | denoise | luma | against the bf16 clip | look |
+|---|---|---|---|---|
+| bf16 weights, `--pv8` (INT8 Q·Kᵀ + FP8 P·V) | 31.2 s (4 × 7.8 s) | 86–87 | **21.2 dB** | the same natural scene (`plug-pv8.grid.png`) |
+| bf16 weights, `--qk8` | 34.8 s | 86–87 | **22.0 dB** | the same scene |
+| `--weights mxfp8`, bf16 attention | 38.2 s | 110–111 | **10.5 dB** | the stylised close-up (`plug-mx.grid.png`) |
+| `--weights mxfp8`, every block (`H3_MXFP8_ALL_BLOCKS=1`) | 37.5 s | 106 | 10.9 dB | stylised |
+| bf16 again | 42.9 s | 88 | **byte-identical** (the mp4s too) | the round-1 clip |
+
+The 8-bit attention keeps the scene within the usual band; the MXFP8
+weights alone flip it, with or without the bf16 edge blocks. The base and
+V2 take the same MXFP8 weights without changing scene, so the difference
+lies in the adapter.
+
+## The cause: a merged delta below the weights' rounding
+
+Measured on blocks 18–20 of the real base weights and the converted
+adapter (CPU, torch 2.12):
+
+| | ratio |
+|---|---|
+| ‖ΔW‖ / ‖W‖ (the adapter's delta against the weight) | 1–2·10⁻⁴ |
+| MXFP8 rounding of W, ‖Q(W) − W‖ / ‖W‖ | 2.7·10⁻² |
+| what an MXFP8 merge keeps of Δ: ‖Q(W+Δ) − Q(W) − Δ‖ / ‖Δ‖, cosine with Δ | 1.5–1.9, cosine 0.07–0.10 |
+| what a **bf16** merge keeps of Δ: ‖bf16(W+Δ) − W − Δ‖ / ‖Δ‖, cosine with Δ | 0.89–0.98, cosine 0.24–0.49 |
+| an unmerged branch with bf16 factors, ‖B·A − Δ‖ / ‖Δ‖ | 1.5–2.3·10⁻³ |
+
+The DMD student's per-element change is far below one bf16 step of the
+weight it is added to, so round-to-nearest mostly snaps it back: the
+bf16 "quality anchor" of round 1 ran a third of the adapter, the MXFP8 one
+a tenth. The release runs the LoRA as 312 fp32 branches and never merges;
+WebGPU's f16 weights lose it the same way, and only the CPU backend's f32
+weights merge exactly.
+
+So h3-rs now keeps LoRA pairs as an unmerged branch on the block and
+refiner linears (857cbe1): `y = W x + B (A x)` with the pair's factors in
+the device's native precision (fused QKV as one block-structured pair),
+through a new `Backend::linear_add` op (CUDA: the bf16 GEMM with beta = 1;
+CPU and WebGPU: linear into a scratch plus axpby). Dense deltas
+(`set_weight`, `diff`) still merge; a stored quantized file keeps its codes
+under a LoRA; `H3_LORA_MERGE=1` restores the merge. Checker (177 cases):
+`linear_add`, the tiny DiT with a rank-3 LoRA on every block and refiner
+linear, native and MXFP8, resident and streamed, against the CPU; and on
+the CPU, branch against merge at 1.4·10⁻⁷ with the adapter moving the
+output by 24 %. CPU and lavapipe green.
+
+## Round 3: the branch on the Server Edition
+
+_In progress: the checker in all four modes, the merge behind
+`H3_LORA_MERGE=1` against round 1's bf16 clip (byte-identity expected), the
+branch on bf16 / the fast recipe / MXFP8 alone, the samurai, FL2VA, a
+profile of the branch's cost, and Pika Flex's FL2VA LoRA with the branch
+against its old merge._

@@ -1,0 +1,263 @@
++ O=/root/out
++ mkdir -p /root/out
++ cd /root
++ FOX='A red fox trots through fresh snow at dawn in a quiet pine forest; snow crunches softly under its paws and a light wind moves through the branches.'
++ A=/workspace/h3-rs/assets
++ PLUG='--variant h3-plug4 --model-dir /w/h3-base --variant-dir /workspace/h3-rs/plug4'
++ FAST='--weights mxfp8 --decoder-weights mxfp8 --pv8'
++ nvidia-smi --query-gpu=name,driver_version,power.limit --format=csv,noheader
+NVIDIA RTX PRO 6000 Blackwell Server Edition, 595.91.07, 600.00 W
++ ls -la /workspace/h3-rs/plug4/
+total 2878766
+drwxrwxrwx 2 root root    3000273 Nov 14 23:55 .
+drwxrwxrwx 6 root root    3000489 Nov 14 23:37 ..
+-rw-rw-rw- 1 root root 2767268856 Nov 14 23:37 generator_lora.safetensors
+-rw-rw-rw- 1 root root   87288980 Nov 14 23:55 plug4-ref.tables
+-rw-rw-rw- 1 root root   87288980 Nov 14 23:37 plug4.tables
+-rw-rw-rw- 1 root root       7665 Nov 14 23:37 provenance.json
++ T='--tables /workspace/h3-rs/plug4/plug4.tables'
++ echo '== a. bf16 weights, INT8 Q·Kᵀ + FP8 P·V attention'
+== a. bf16 weights, INT8 Q·Kᵀ + FP8 P·V attention
++ run plug-pv8 1500 'A red fox trots through fresh snow at dawn in a quiet pine forest; snow crunches softly under its paws and a light wind moves through the branches.' 7 --variant h3-plug4 --model-dir /w/h3-base --variant-dir /workspace/h3-rs/plug4 --tables /workspace/h3-rs/plug4/plug4.tables --pv8
++ n=plug-pv8
++ t=1500
++ p='A red fox trots through fresh snow at dawn in a quiet pine forest; snow crunches softly under its paws and a light wind moves through the branches.'
++ sd=7
++ shift 4
++ echo '== plug-pv8: seed 7 --variant h3-plug4 --model-dir /w/h3-base --variant-dir /workspace/h3-rs/plug4 --tables /workspace/h3-rs/plug4/plug4.tables --pv8'
+== plug-pv8: seed 7 --variant h3-plug4 --model-dir /w/h3-base --variant-dir /workspace/h3-rs/plug4 --tables /workspace/h3-rs/plug4/plug4.tables --pv8
++ sp=8561
++ nvidia-smi --query-gpu=memory.used,clocks.sm,power.draw --format=csv,noheader,nounits -lms 500
++ rc=0
++ kill 8561
+++ cut -d, -f1 /root/out/plug-pv8.mem
+++ sort -n
+++ tail -1
+++ awk -F, '$3>300{print $2}' /root/out/plug-pv8.mem
+++ sort -n
+++ awk '{a[NR]=$1} END{print a[int(NR/2)+1]}'
++ echo 'peak VRAM MiB: 52349; median SM MHz under load: 2287; exit 0'
+peak VRAM MiB: 52349; median SM MHz under load: 2287; exit 0
++ grep -E '^cuda|^adapter|^load|prompt:|^run |rror|panick|warning|real|^mxfp8 n=' /root/out/plug-pv8.log
++ cut -c1-300
+adapter: /workspace/h3-rs/plug4/generator_lora.safetensors
+cuda NVIDIA RTX PRO 6000 Blackwell Server Edition (sm_120)
+load 107.4s
+prompt: 33 rows in 80.9s
+run 0: total 40.03s  prepare 0.03s  adaln 0.00s  denoise 31.20s (["7.76", "7.79", "7.81", "7.83"])  decode 8.52s  audio 0.19s
+real	4m1.157s
++ '[' -f /root/out/plug-pv8.y4m ']'
+++ stats /root/out/plug-pv8.y4m
+++ ffmpeg -v info -i /root/out/plug-pv8.y4m -frames:v 2 -vf signalstats,metadata=print:key=lavfi.signalstats.YAVG -f null -
+++ grep -o 'YAVG=[0-9.]*'
+++ head -2
+++ tr '\n' ' '
++ echo 'luma: YAVG=86.3925 YAVG=87.063 '
+luma: YAVG=86.3925 YAVG=87.063 
++ grid /root/out/plug-pv8.y4m /root/out/plug-pv8.grid.png
++ ffmpeg -loglevel error -y -i /root/out/plug-pv8.y4m -vf 'select='\''eq(n\,0)+eq(n\,40)+eq(n\,80)+eq(n\,120)'\'',scale=448:-1,tile=2x2' -vframes 1 /root/out/plug-pv8.grid.png
++ ffmpeg -loglevel error -y -i /root/out/plug-pv8.y4m -i /root/out/plug-pv8.wav -c:v libx264 -crf 18 -pix_fmt yuv420p -c:a aac -b:a 192k -shortest /root/out/plug-pv8.mp4
++ vs plug-pv8
+++ ffmpeg -loglevel info -i /root/out/plug-pv8.mp4 -i /root/out/plug-bf16.mp4 -lavfi psnr -f null -
+++ grep -oE 'PSNR.*'
++ echo '== plug-pv8 vs plug-bf16 (mp4): PSNR y:21.215071 u:31.887132 v:34.216970 average:22.831031 min:22.046093 max:23.209406'
+== plug-pv8 vs plug-bf16 (mp4): PSNR y:21.215071 u:31.887132 v:34.216970 average:22.831031 min:22.046093 max:23.209406
++ echo '== b. bf16 weights, INT8 Q·Kᵀ only'
+== b. bf16 weights, INT8 Q·Kᵀ only
++ run plug-qk8 1500 'A red fox trots through fresh snow at dawn in a quiet pine forest; snow crunches softly under its paws and a light wind moves through the branches.' 7 --variant h3-plug4 --model-dir /w/h3-base --variant-dir /workspace/h3-rs/plug4 --tables /workspace/h3-rs/plug4/plug4.tables --qk8
++ n=plug-qk8
++ t=1500
++ p='A red fox trots through fresh snow at dawn in a quiet pine forest; snow crunches softly under its paws and a light wind moves through the branches.'
++ sd=7
++ shift 4
++ echo '== plug-qk8: seed 7 --variant h3-plug4 --model-dir /w/h3-base --variant-dir /workspace/h3-rs/plug4 --tables /workspace/h3-rs/plug4/plug4.tables --qk8'
+== plug-qk8: seed 7 --variant h3-plug4 --model-dir /w/h3-base --variant-dir /workspace/h3-rs/plug4 --tables /workspace/h3-rs/plug4/plug4.tables --qk8
++ sp=17433
++ nvidia-smi --query-gpu=memory.used,clocks.sm,power.draw --format=csv,noheader,nounits -lms 500
++ rc=0
++ kill 17433
+++ cut -d, -f1 /root/out/plug-qk8.mem
+++ sort -n
+++ tail -1
+++ awk -F, '$3>300{print $2}' /root/out/plug-qk8.mem
+++ sort -n
+++ awk '{a[NR]=$1} END{print a[int(NR/2)+1]}'
++ echo 'peak VRAM MiB: 52093; median SM MHz under load: 2265; exit 0'
+peak VRAM MiB: 52093; median SM MHz under load: 2265; exit 0
++ grep -E '^cuda|^adapter|^load|prompt:|^run |rror|panick|warning|real|^mxfp8 n=' /root/out/plug-qk8.log
++ cut -c1-300
+adapter: /workspace/h3-rs/plug4/generator_lora.safetensors
+cuda NVIDIA RTX PRO 6000 Blackwell Server Edition (sm_120)
+load 112.5s
+prompt: 33 rows in 83.4s
+run 0: total 43.53s  prepare 0.03s  adaln 0.00s  denoise 34.76s (["8.65", "8.68", "8.71", "8.72"])  decode 8.46s  audio 0.19s
+real	4m7.577s
++ '[' -f /root/out/plug-qk8.y4m ']'
+++ stats /root/out/plug-qk8.y4m
+++ ffmpeg -v info -i /root/out/plug-qk8.y4m -frames:v 2 -vf signalstats,metadata=print:key=lavfi.signalstats.YAVG -f null -
+++ grep -o 'YAVG=[0-9.]*'
+++ head -2
+++ tr '\n' ' '
++ echo 'luma: YAVG=86.234 YAVG=86.9195 '
+luma: YAVG=86.234 YAVG=86.9195 
++ grid /root/out/plug-qk8.y4m /root/out/plug-qk8.grid.png
++ ffmpeg -loglevel error -y -i /root/out/plug-qk8.y4m -vf 'select='\''eq(n\,0)+eq(n\,40)+eq(n\,80)+eq(n\,120)'\'',scale=448:-1,tile=2x2' -vframes 1 /root/out/plug-qk8.grid.png
++ ffmpeg -loglevel error -y -i /root/out/plug-qk8.y4m -i /root/out/plug-qk8.wav -c:v libx264 -crf 18 -pix_fmt yuv420p -c:a aac -b:a 192k -shortest /root/out/plug-qk8.mp4
++ vs plug-qk8
+++ ffmpeg -loglevel info -i /root/out/plug-qk8.mp4 -i /root/out/plug-bf16.mp4 -lavfi psnr -f null -
+++ grep -oE 'PSNR.*'
++ echo '== plug-qk8 vs plug-bf16 (mp4): PSNR y:22.003848 u:33.693909 v:35.736517 average:23.646835 min:22.509042 max:24.292217'
+== plug-qk8 vs plug-bf16 (mp4): PSNR y:22.003848 u:33.693909 v:35.736517 average:23.646835 min:22.509042 max:24.292217
++ echo '== c. MXFP8 weights (quantized after the merge), bf16 attention, bf16 decoder'
+== c. MXFP8 weights (quantized after the merge), bf16 attention, bf16 decoder
++ run plug-mx 1500 'A red fox trots through fresh snow at dawn in a quiet pine forest; snow crunches softly under its paws and a light wind moves through the branches.' 7 --variant h3-plug4 --model-dir /w/h3-base --variant-dir /workspace/h3-rs/plug4 --tables /workspace/h3-rs/plug4/plug4.tables --weights mxfp8
++ n=plug-mx
++ t=1500
++ p='A red fox trots through fresh snow at dawn in a quiet pine forest; snow crunches softly under its paws and a light wind moves through the branches.'
++ sd=7
++ shift 4
++ echo '== plug-mx: seed 7 --variant h3-plug4 --model-dir /w/h3-base --variant-dir /workspace/h3-rs/plug4 --tables /workspace/h3-rs/plug4/plug4.tables --weights mxfp8'
+== plug-mx: seed 7 --variant h3-plug4 --model-dir /w/h3-base --variant-dir /workspace/h3-rs/plug4 --tables /workspace/h3-rs/plug4/plug4.tables --weights mxfp8
++ sp=26307
++ nvidia-smi --query-gpu=memory.used,clocks.sm,power.draw --format=csv,noheader,nounits -lms 500
++ rc=0
++ kill 26307
+++ cut -d, -f1 /root/out/plug-mx.mem
+++ sort -n
+++ tail -1
+++ awk -F, '$3>300{print $2}' /root/out/plug-mx.mem
+++ sort -n
+++ awk '{a[NR]=$1} END{print a[int(NR/2)+1]}'
++ echo 'peak VRAM MiB: 37710; median SM MHz under load: 2302; exit 0'
+peak VRAM MiB: 37710; median SM MHz under load: 2302; exit 0
++ grep -E '^cuda|^adapter|^load|prompt:|^run |rror|panick|warning|real|^mxfp8 n=' /root/out/plug-mx.log
++ cut -c1-300
+adapter: /workspace/h3-rs/plug4/generator_lora.safetensors
+cuda NVIDIA RTX PRO 6000 Blackwell Server Edition (sm_120)
+load 108.8s
+prompt: 33 rows in 80.6s
+run 0: total 47.14s  prepare 0.20s  adaln 0.00s  denoise 38.15s (["9.86", "9.41", "9.43", "9.46"])  decode 8.50s  audio 0.19s
+real	4m4.712s
++ '[' -f /root/out/plug-mx.y4m ']'
+++ stats /root/out/plug-mx.y4m
+++ ffmpeg -v info -i /root/out/plug-mx.y4m -frames:v 2 -vf signalstats,metadata=print:key=lavfi.signalstats.YAVG -f null -
+++ grep -o 'YAVG=[0-9.]*'
+++ head -2
+++ tr '\n' ' '
++ echo 'luma: YAVG=110.727 YAVG=110.033 '
+luma: YAVG=110.727 YAVG=110.033 
++ grid /root/out/plug-mx.y4m /root/out/plug-mx.grid.png
++ ffmpeg -loglevel error -y -i /root/out/plug-mx.y4m -vf 'select='\''eq(n\,0)+eq(n\,40)+eq(n\,80)+eq(n\,120)'\'',scale=448:-1,tile=2x2' -vframes 1 /root/out/plug-mx.grid.png
++ ffmpeg -loglevel error -y -i /root/out/plug-mx.y4m -i /root/out/plug-mx.wav -c:v libx264 -crf 18 -pix_fmt yuv420p -c:a aac -b:a 192k -shortest /root/out/plug-mx.mp4
++ vs plug-mx
+++ ffmpeg -loglevel info -i /root/out/plug-mx.mp4 -i /root/out/plug-bf16.mp4 -lavfi psnr -f null -
+++ grep -oE 'PSNR.*'
++ echo '== plug-mx vs plug-bf16 (mp4): PSNR y:10.544266 u:20.999628 v:22.258610 average:12.137528 min:11.985266 max:12.437595'
+== plug-mx vs plug-bf16 (mp4): PSNR y:10.544266 u:20.999628 v:22.258610 average:12.137528 min:11.985266 max:12.437595
++ echo '== d. MXFP8 weights on every block (no bf16 edges), bf16 attention'
+== d. MXFP8 weights on every block (no bf16 edges), bf16 attention
++ H3_MXFP8_ALL_BLOCKS=1
++ run plug-mx-all 1500 'A red fox trots through fresh snow at dawn in a quiet pine forest; snow crunches softly under its paws and a light wind moves through the branches.' 7 --variant h3-plug4 --model-dir /w/h3-base --variant-dir /workspace/h3-rs/plug4 --tables /workspace/h3-rs/plug4/plug4.tables --weights mxfp8
++ n=plug-mx-all
++ t=1500
++ p='A red fox trots through fresh snow at dawn in a quiet pine forest; snow crunches softly under its paws and a light wind moves through the branches.'
++ sd=7
++ shift 4
++ echo '== plug-mx-all: seed 7 --variant h3-plug4 --model-dir /w/h3-base --variant-dir /workspace/h3-rs/plug4 --tables /workspace/h3-rs/plug4/plug4.tables --weights mxfp8'
+== plug-mx-all: seed 7 --variant h3-plug4 --model-dir /w/h3-base --variant-dir /workspace/h3-rs/plug4 --tables /workspace/h3-rs/plug4/plug4.tables --weights mxfp8
++ sp=35181
++ nvidia-smi --query-gpu=memory.used,clocks.sm,power.draw --format=csv,noheader,nounits -lms 500
++ rc=0
++ kill 35181
+++ cut -d, -f1 /root/out/plug-mx-all.mem
+++ sort -n
+++ tail -1
+++ awk -F, '$3>300{print $2}' /root/out/plug-mx-all.mem
+++ sort -n
+++ awk '{a[NR]=$1} END{print a[int(NR/2)+1]}'
++ echo 'peak VRAM MiB: 35391; median SM MHz under load: 2302; exit 0'
+peak VRAM MiB: 35391; median SM MHz under load: 2302; exit 0
++ grep -E '^cuda|^adapter|^load|prompt:|^run |rror|panick|warning|real|^mxfp8 n=' /root/out/plug-mx-all.log
++ cut -c1-300
+adapter: /workspace/h3-rs/plug4/generator_lora.safetensors
+cuda NVIDIA RTX PRO 6000 Blackwell Server Edition (sm_120)
+load 100.4s
+prompt: 33 rows in 85.6s
+run 0: total 46.37s  prepare 0.03s  adaln 0.00s  denoise 37.54s (["9.69", "9.26", "9.29", "9.31"])  decode 8.52s  audio 0.19s
+real	4m0.364s
++ '[' -f /root/out/plug-mx-all.y4m ']'
+++ stats /root/out/plug-mx-all.y4m
+++ ffmpeg -v info -i /root/out/plug-mx-all.y4m -frames:v 2 -vf signalstats,metadata=print:key=lavfi.signalstats.YAVG -f null -
+++ grep -o 'YAVG=[0-9.]*'
+++ head -2
+++ tr '\n' ' '
++ echo 'luma: YAVG=106.578 YAVG=105.571 '
+luma: YAVG=106.578 YAVG=105.571 
++ grid /root/out/plug-mx-all.y4m /root/out/plug-mx-all.grid.png
++ ffmpeg -loglevel error -y -i /root/out/plug-mx-all.y4m -vf 'select='\''eq(n\,0)+eq(n\,40)+eq(n\,80)+eq(n\,120)'\'',scale=448:-1,tile=2x2' -vframes 1 /root/out/plug-mx-all.grid.png
++ ffmpeg -loglevel error -y -i /root/out/plug-mx-all.y4m -i /root/out/plug-mx-all.wav -c:v libx264 -crf 18 -pix_fmt yuv420p -c:a aac -b:a 192k -shortest /root/out/plug-mx-all.mp4
++ vs plug-mx-all
+++ ffmpeg -loglevel info -i /root/out/plug-mx-all.mp4 -i /root/out/plug-bf16.mp4 -lavfi psnr -f null -
+++ grep -oE 'PSNR.*'
++ echo '== plug-mx-all vs plug-bf16 (mp4): PSNR y:10.876552 u:20.878470 v:22.198114 average:12.452832 min:12.247181 max:12.594262'
+== plug-mx-all vs plug-bf16 (mp4): PSNR y:10.876552 u:20.878470 v:22.198114 average:12.452832 min:12.247181 max:12.594262
++ echo '== e. bf16 again: run-to-run determinism of the bf16 path'
+== e. bf16 again: run-to-run determinism of the bf16 path
++ run plug-bf16b 1500 'A red fox trots through fresh snow at dawn in a quiet pine forest; snow crunches softly under its paws and a light wind moves through the branches.' 7 --variant h3-plug4 --model-dir /w/h3-base --variant-dir /workspace/h3-rs/plug4 --tables /workspace/h3-rs/plug4/plug4.tables
++ n=plug-bf16b
++ t=1500
++ p='A red fox trots through fresh snow at dawn in a quiet pine forest; snow crunches softly under its paws and a light wind moves through the branches.'
++ sd=7
++ shift 4
++ echo '== plug-bf16b: seed 7 --variant h3-plug4 --model-dir /w/h3-base --variant-dir /workspace/h3-rs/plug4 --tables /workspace/h3-rs/plug4/plug4.tables'
+== plug-bf16b: seed 7 --variant h3-plug4 --model-dir /w/h3-base --variant-dir /workspace/h3-rs/plug4 --tables /workspace/h3-rs/plug4/plug4.tables
++ sp=44055
++ nvidia-smi --query-gpu=memory.used,clocks.sm,power.draw --format=csv,noheader,nounits -lms 500
++ rc=0
++ kill 44055
+++ cut -d, -f1 /root/out/plug-bf16b.mem
+++ sort -n
+++ tail -1
+++ awk -F, '$3>300{print $2}' /root/out/plug-bf16b.mem
+++ sort -n
+++ awk '{a[NR]=$1} END{print a[int(NR/2)+1]}'
++ echo 'peak VRAM MiB: 51581; median SM MHz under load: 2272; exit 0'
+peak VRAM MiB: 51581; median SM MHz under load: 2272; exit 0
++ grep -E '^cuda|^adapter|^load|prompt:|^run |rror|panick|warning|real|^mxfp8 n=' /root/out/plug-bf16b.log
++ cut -c1-300
+adapter: /workspace/h3-rs/plug4/generator_lora.safetensors
+cuda NVIDIA RTX PRO 6000 Blackwell Server Edition (sm_120)
+load 116.1s
+prompt: 33 rows in 80.5s
+run 0: total 51.59s  prepare 0.03s  adaln 0.00s  denoise 42.88s (["10.65", "10.71", "10.75", "10.78"])  decode 8.40s  audio 0.19s
+real	4m16.246s
++ '[' -f /root/out/plug-bf16b.y4m ']'
+++ stats /root/out/plug-bf16b.y4m
+++ ffmpeg -v info -i /root/out/plug-bf16b.y4m -frames:v 2 -vf signalstats,metadata=print:key=lavfi.signalstats.YAVG -f null -
+++ grep -o 'YAVG=[0-9.]*'
+++ head -2
+++ tr '\n' ' '
++ echo 'luma: YAVG=88.2698 YAVG=88.9313 '
+luma: YAVG=88.2698 YAVG=88.9313 
++ grid /root/out/plug-bf16b.y4m /root/out/plug-bf16b.grid.png
++ ffmpeg -loglevel error -y -i /root/out/plug-bf16b.y4m -vf 'select='\''eq(n\,0)+eq(n\,40)+eq(n\,80)+eq(n\,120)'\'',scale=448:-1,tile=2x2' -vframes 1 /root/out/plug-bf16b.grid.png
++ ffmpeg -loglevel error -y -i /root/out/plug-bf16b.y4m -i /root/out/plug-bf16b.wav -c:v libx264 -crf 18 -pix_fmt yuv420p -c:a aac -b:a 192k -shortest /root/out/plug-bf16b.mp4
++ vs plug-bf16b
+++ ffmpeg -loglevel info -i /root/out/plug-bf16b.mp4 -i /root/out/plug-bf16.mp4 -lavfi psnr -f null -
+++ grep -oE 'PSNR.*'
++ echo '== plug-bf16b vs plug-bf16 (mp4): PSNR y:inf u:inf v:inf average:inf min:inf max:inf'
+== plug-bf16b vs plug-bf16 (mp4): PSNR y:inf u:inf v:inf average:inf min:inf max:inf
++ tar czf /root/cmd1.tgz -C /root/out '--exclude=*.y4m' '--exclude=*.wav' '--exclude=*.mp4' .
+++ cd /root/out
+++ ls plug-bf16.mp4 plug-bf16b.mp4 plug-mx-all.mp4 plug-mx.mp4 plug-pv8.mp4 plug-qk8.mp4
+++ grep -v '^plug-bf16.mp4$'
++ tar czf /root/mp4.tgz -C /root/out plug-bf16b.mp4 plug-mx-all.mp4 plug-mx.mp4 plug-pv8.mp4 plug-qk8.mp4
+++ date -u
++ echo 'cmd1 done Sun Nov 15 00:39:20 UTC 2026'
+cmd1 done Sun Nov 15 00:39:20 UTC 2026
++ echo 'terminating pod'
+terminating pod
++ terminate
++ curl -sS -X DELETE -A h3-rs-pod/1 -H @/root/.rp-auth https://rest.runpod.io/v1/pods/m6l5v6113cjmuy
+exit 0
+
