@@ -117,10 +117,48 @@ linear, native and MXFP8, resident and streamed, against the CPU; and on
 the CPU, branch against merge at 1.4·10⁻⁷ with the adapter moving the
 output by 24 %. CPU and lavapipe green.
 
-## Round 3: the branch on the Server Edition
+## Round 3 (`round3/`): the branch on the Server Edition
 
-_In progress: the checker in all four modes, the merge behind
-`H3_LORA_MERGE=1` against round 1's bf16 clip (byte-identity expected), the
-branch on bf16 / the fast recipe / MXFP8 alone, the samurai, FL2VA, a
-profile of the branch's cost, and Pika Flex's FL2VA LoRA with the branch
-against its old merge._
+Third pod, binary 857cbe1, same card class and driver. `h3 check --backend
+cuda` **177 / 177** plain and under `H3_STALL=1`, `H3_PROFILE=1` and
+`H3_STREAM_STRESS=1` (the LoRA-branch cases at the CUDA tolerance).
+The fox at seed 7 unless said; "fast" as above:
+
+| run | denoise | decode | after load | peak | clip |
+|---|---|---|---|---|---|
+| `H3_LORA_MERGE=1`, bf16 (the old merge) | 42.9 s | 8.5 s | 51.7 s | 51.6 GB | **byte-identical** to round 1's bf16 clip |
+| **branch, bf16** | 44.8 s (4 × 11.1–11.3 s) | 8.6 s | 53.8 s | 53.5 GB | a natural fox walking at the camera through young pines (`plug-bf16-branch.grid.png`); 11.2 dB from the merged clip: the full adapter takes another trajectory |
+| **branch, fast** | **28.4 s** (4 × 7.0–7.4 s) | 6.1 s | **34.7 s** | 37.6 GB | the same scene as the bf16 branch (`plug-fast-branch.grid.png`): **17.3 dB** luma / 19.0 average, luma 90 against 89; no longer stylised |
+| branch, MXFP8 weights only | 40.1 s | 8.9 s | 49.2 s | 39.0 GB | the same scene, 16.4 dB |
+| branch, fast, `H3_PROFILE=1` | 28.9 s | 7.5 s | | | **byte-identical** to the fast clip |
+| branch, fast, the samurai (seed 1) | 29.0 s (4 × 7.1–7.6 s) | 6.0 s | 35.3 s | | photographic: the gesture, the push-in and the close-up the prompt asks for (`plug-samurai-branch.grid.png`) |
+| branch, fast, FL2VA (transfer) | 33.2 s | 5.7 s | 42.3 s | 40.0 GB | follows the keyframes (`plug-fl2va-branch.grid.png`) |
+| Pika Flex FL2VA, bf16, branch | 81.4 s (6 forwards) | 8.5 s | 93.3 s | 54.8 GB | |
+| Pika Flex FL2VA, bf16, `H3_LORA_MERGE=1` | 76.5 s | 8.5 s | 88.4 s | 52.9 GB | **28.6 dB** from the branch clip: Pika's adapter survives the merge far better, so its earlier clips were close |
+
+The branch's cost (`plug-fast-prof.log`, 4 forwards): the up-projections
+`gemm+acc` (rank-128 / 384 GEMMs with beta = 1) 1.63 s, the down-projections
+~0.3 s, about 0.6 s per forward (6.5 → 7.0 s, +8 %); the FFN-up branch is
+3.75 ms a call for a memory-bound read-modify-write of `[38k, 28672]`,
+which a GEMM over `[W | B]` and `[x ; A x]` would fold into the main one.
+Dense attention is half the plug's forward (71 ms a call: the base has no
+VSA gate), which is why its four forwards (28.4 s) cost three quarters of
+V2's eight (36.6 s).
+
+## Where the plug stands
+
+On the Server Edition, the four-step plug with the fast recipe and the
+branch makes a correct, photographic 1344×768×124 clip in **34.7 s after
+load** (denoise 28.4 s, decode 6.1 s), against FastH3-V2's best 43.3 s
+(36.6 s denoise) and the 49-step base's 380.8 s, and it transfers to FL2VA
+(42.3 s) and Ref2VA. It is the fastest clip h3-rs makes on this card.
+
+Open: a PSNR against the release's own fp32-branch PyTorch run at full
+size (needs the base weights in a PyTorch environment on a GPU); the
+LongLive-Plug CFG adapter (its README says not to combine it with the
+few-step one yet); folding the branch into the main GEMM; Regen-2K's
+rank-576 LoRA under the branch (unmeasured, now a ~20 % larger DiT cost
+there, `H3_LORA_MERGE=1` restores the old path).
+
+Cost: four Server Edition pods (47, 22, 43 min and the volume staging) at
+$2.69 / h, about $5.

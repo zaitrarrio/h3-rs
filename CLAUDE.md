@@ -306,11 +306,15 @@ State and invariants only; the reasoning is in `docs/design.md`.
   device weight's rounding: LongLive-Plug's |ΔW|/|W| ≈ 2·10⁻⁴ kept a third
   in bf16 and a tenth in MXFP8, and its MXFP8 clips turned stylised
   (`docs/runs/2026-11-15-runpod-6000s-longlive-plug`). `H3_LORA_MERGE=1`
-  merges as before. `h3-plug4` is the base with LongLive-Plug's four-step
+  merges as before; the branch costs ~0.6 s of a 7.0 s plug forward on the
+  Server Edition, and Pika's FL2VA clip moves 28.6 dB with it (its delta
+  survived the merge far better). `h3-plug4` is the base with LongLive-Plug's four-step
   adapter (convert `generator_lora.pt` with
   `scripts/reference/convert_longlive_plug.py`) on Pika's renoise rule over
   linspace(1, 0, 5) shifted 12 / 3, no CFG; a variant's missing adapter is
-  an error. Run with real weights on the
+  an error: on the Server Edition with `--weights mxfp8 --decoder-weights
+  mxfp8 --pv8` it makes a photographic clip in 34.7 s after load (4 × 7.0 s
+  dense forwards, decode 6.1 s; V2's best 43.3 s), FL2VA 42.3 s. Run with real weights on the
   600 W Server Edition (`docs/runs/2026-11-08-vast-pro6000-server-variants`):
   base T2VA (49 × 10.7 s), FL2VA (49 × 12.7 s), Ref2VA (49 × 18.3 s: the
   reference image is 7176 Qwen3-VL tokens at the contract's 2048 short

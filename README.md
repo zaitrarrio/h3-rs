@@ -200,6 +200,14 @@ python scripts/reference/convert_longlive_plug.py plug4      # writes plug4/gene
 h3 generate --variant h3-plug4 --model-dir h3 --variant-dir plug4 --prompt "…" --out clip.y4m
 ```
 
+On the 600 W Server Edition with `--weights mxfp8 --decoder-weights mxfp8
+--pv8` it makes a photographic 1344×768×124 clip in 34.7 s after load
+(denoise 28.4 s), the fastest clip h3-rs makes on that card (FastH3-V2's
+best: 43.3 s), and FL2VA / Ref2VA work through the same adapter. Its LoRA
+runs as an unmerged branch: merged, its delta (2·10⁻⁴ of the weights)
+rounds away in bf16 and MXFP8 and the clips change
+(`docs/runs/2026-11-15-runpod-6000s-longlive-plug`).
+
 The prompt is encoded by
 the native Qwen3-VL port on the chosen backend, streaming its layers from the
 mmapped checkpoint; `h3 encode` stores text-only prompts in a gallery so
