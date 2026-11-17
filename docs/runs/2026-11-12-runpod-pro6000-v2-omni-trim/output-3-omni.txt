@@ -1,0 +1,19 @@
++ T=/workspace/h3-rs/tables
++ A=/workspace/h3-rs/assets
++ O=/root/out
++ mkdir -p /root/out
++ echo '== Omni AdaLN tables'
+== Omni AdaLN tables
++ '[' -f /workspace/h3-rs/tables/omni.tables ']'
++ echo '== Omni Ref2VA, 124 frames, one image reference'
+== Omni Ref2VA, 124 frames, one image reference
++ grep -E '^run |^load|prompt:|rror|panick' /root/out/omni.log
+load 243.2s
+prompt: 7209 rows in 278.2s
+run 0: total 134.13s  prepare 0.23s  adaln 0.00s  denoise 114.39s (["14.12", "14.22", "14.28", "14.32", "14.35", "14.35", "14.37", "14.37"])  decode 8.14s  audio 0.19s
++ grid /root/out/omni.y4m /root/out/omni-grid.png
++ ffmpeg -loglevel error -y -i /root/out/omni.y4m -vf 'select='\''eq(n\,0)+eq(n\,40)+eq(n\,80)+eq(n\,120)'\'',scale=448:-1,tile=2x2' -vframes 1 /root/out/omni-grid.png
++ curl -s -X PUT --upload-file /root/out/omni.log 'https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/runpod-20261112-1632/results/omni.log?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261112%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261112T193755Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=52ac4d22a2b859e9caded4f032dc1238004e8497b7bd5bca3f6dbe8cff907333'
++ curl -s -X PUT --upload-file /root/out/omni-grid.png 'https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/runpod-20261112-1632/results/omni-grid.png?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261112%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261112T193755Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=4a08785723d1dc50c0ccd25bdd233f0a8c82ce6b79d40e726ad60561404ba15f'
+exit 0
+

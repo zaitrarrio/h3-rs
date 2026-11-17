@@ -1,0 +1,331 @@
++ O=/root/out
++ mkdir -p /root/out
++ cd /root
++ nvidia-smi --query-gpu=name,driver_version,power.limit,memory.total,pcie.link.gen.current,pcie.link.width.current --format=csv,noheader
+NVIDIA GeForce RTX 5090, 595.91.07, 575.00 W, 32607 MiB, 1, 8
++ df -h /
++ cat
+Filesystem      Size  Used Avail Use% Mounted on
+overlay         250G  159G   92G  64% /
++ free -g
++ head -2
+               total        used        free      shared  buff/cache   available
+Mem:             186          19          35           0         132         166
++ cat
++ PUT=(['v2-qk8.log']='https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/runpod-20261113-5090g/results/v2-qk8.log?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261113%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261113T173050Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=3d8cb8de39935cf3b6234596ce397213aee06cd2e097a023c1f3848a34ed8d96' ['v2-qk8.mem']='https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/runpod-20261113-5090g/results/v2-qk8.mem?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261113%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261113T173050Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=2599b62fd5238bd61115e5fd50d88657db3cf456584cb31943cdb6772d0b969d' ['v2-qk8.mp4']='https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/runpod-20261113-5090g/results/v2-qk8.mp4?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261113%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261113T173051Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=4c231980ef9c4891716ec80c8833dc1ba4674e9086dc761aed39360fe8db9584' ['v2-qk8.grid.png']='https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/runpod-20261113-5090g/results/v2-qk8.grid.png?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261113%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261113T173051Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=3fa36f9a3fb195720dc66536cea360c554bdee72e6d67cd0261dc409b4c7157b' ['v2-pv8.log']='https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/runpod-20261113-5090g/results/v2-pv8.log?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261113%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261113T173051Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=45bf7d0892e23d2118663a7f5ba5e23b15ee754f16e19560aade4cf338533f38' ['v2-pv8.mem']='https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/runpod-20261113-5090g/results/v2-pv8.mem?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261113%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261113T173052Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=047a277e5183f14d6e33d7c8f9bd6ad401a18d80f636c8bd86c6ff437a78358f' ['v2-pv8.mp4']='https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/runpod-20261113-5090g/results/v2-pv8.mp4?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261113%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261113T173052Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=ce77e865fd09f7346f0caa89c10694a2dd7c9a6ac9b04f5e1af8c2ddef98056e' ['v2-pv8.grid.png']='https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/runpod-20261113-5090g/results/v2-pv8.grid.png?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261113%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261113T173052Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=31446f52a751eb161c698439fd7a011de2e4411b01549f7461cb5543657ca843' ['v2-pv8-profile.log']='https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/runpod-20261113-5090g/results/v2-pv8-profile.log?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261113%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261113T173053Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=16429df345509639bb94b930cd1f102d885331ece393b7e5a364a7921993a4e6' ['v2-pv8-profile.mem']='https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/runpod-20261113-5090g/results/v2-pv8-profile.mem?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261113%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261113T173053Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=fa8af356a6ae340d5eec828d78ea3bf8d07851cccd539f1e2e2415117b08e468' ['check.log']='https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/runpod-20261113-5090g/results/check.log?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261113%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261113T173053Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=a13e8bb6fc4786dcbb959c9f7f0b22e7a4a239e42853af0b894208a2d4130f30' ['base2-pv8-profile.log']='https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/runpod-20261113-5090g/results/base2-pv8-profile.log?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261113%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261113T173054Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=14b914ec57e90eaaa2b835af6a1c95fb3e6785cfebed43c8be40f4dbc525001b' ['base2-pv8-profile.mem']='https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/runpod-20261113-5090g/results/base2-pv8-profile.mem?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261113%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261113T173054Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=7f0553ab2e62dc9ce8ad4bc9bf12dbfbd7fe64e956db633d57ebf96c5a7d2853' ['base2-qk8-profile.log']='https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/runpod-20261113-5090g/results/base2-qk8-profile.log?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261113%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261113T173054Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=272fda58c97e0daa14ad710742ba60c3240bf0a8bbc3facba1efa199333bd807' ['base2-qk8-profile.mem']='https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/runpod-20261113-5090g/results/base2-qk8-profile.mem?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261113%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261113T173055Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=3695b0a437fc1bbc72d13e02657a9a09bcacaaf6d88fb1382217b368fbeaf725' ['base25-pv8.log']='https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/runpod-20261113-5090g/results/base25-pv8.log?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261113%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261113T173055Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=68118443104621f66e184a2a867eec7574523570ddd6923b5a8683189dc11d8b' ['base25-pv8.mem']='https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/runpod-20261113-5090g/results/base25-pv8.mem?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261113%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261113T173055Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=940bb893553bdbe0947e9b3572c3f349f64b75866c250c437432ceb929c920f9' ['base25-pv8.mp4']='https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/runpod-20261113-5090g/results/base25-pv8.mp4?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261113%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261113T173056Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=a7ed2c68d6cfcc34bd591d0d5a19fd0d0fae0e3d4c7f8489394874b0b31d987a' ['base25-pv8.grid.png']='https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/runpod-20261113-5090g/results/base25-pv8.grid.png?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261113%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261113T173056Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=17b3c9be63945a5f946d4ac3d50d851000f3f6fac7ac35cbf0ed4a5445268b7a' ['base25-qk8.log']='https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/runpod-20261113-5090g/results/base25-qk8.log?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261113%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261113T173056Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=77aa8640b72fab1dd4f463ec736b96d70e89258dbcf23d9438294d0bf9718945' ['base25-qk8.mem']='https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/runpod-20261113-5090g/results/base25-qk8.mem?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261113%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261113T173057Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=f84c5bc16fc2a1b537bc4ffc4f8ba01e4559c2c2bf638fbdec0feeb1019b0339' ['base25-qk8.mp4']='https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/runpod-20261113-5090g/results/base25-qk8.mp4?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261113%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261113T173057Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=99d40ef7b34e8106ef1ece82ce2d0915ae349f84507b40b7941a5b11df0517ca' ['base25-qk8.grid.png']='https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/runpod-20261113-5090g/results/base25-qk8.grid.png?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261113%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261113T173057Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=9fe2dd6e35dfa313b6529d6cc4e418d2dcc0e7ae6a0e9429213395c29c24dd3b' ['base25-bf16.log']='https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/runpod-20261113-5090g/results/base25-bf16.log?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261113%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261113T173058Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=36f7cd2dbd4cc0836ce1c562114c83cbc295900c61d7c042b1ecb4b17929daf9' ['base25-bf16.mem']='https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/runpod-20261113-5090g/results/base25-bf16.mem?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261113%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261113T173058Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=bc4f016bd0aee77ff94ca445afbf43a9489981781219f08e602f36aa7f81510a' ['base25-bf16.mp4']='https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/runpod-20261113-5090g/results/base25-bf16.mp4?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261113%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261113T173058Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=ad43ecbdc835d873c938432d2bcd4ed874e8e07f28154c36b1bf9e63bf5f63df' ['base25-bf16.grid.png']='https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/runpod-20261113-5090g/results/base25-bf16.grid.png?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261113%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261113T173058Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=74c50daa338dba7b65ccdb44923c29b4001b09f3b14e32d76a5cde712aef2cb3' ['psnr.log']='https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/runpod-20261113-5090g/results/psnr.log?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261113%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261113T173059Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=107bae42e192fa39b35a8eac968104f5e9b0d900c00fc8683feec5724cabba7e' ['all.log']='https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/runpod-20261113-5090g/results/all.log?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261113%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261113T173059Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=d9c851ca7f6ed6b882fcd6e2a1f323cdd20e279f24fa71a4e4826f698d560528')
++ declare -A PUT
++ T=/workspace/h3-rs/tables
++ BASE='--variant h3 --model-dir /w/h3-base --weights mxfp8 --decoder-weights mxfp8 --attention dense --stream-blocks'
++ echo '== conformance'
+== conformance
++ grep -E 'checks pass|panick|FAIL|pv8' /root/out/check.log
++ tail -20
+dit tiny Dense { qk8: false, pv8: false } native     rel 5.89e-3  ok
+dit tiny Dense { qk8: false, pv8: false } native streamed rel 5.89e-3  ok
+dit tiny Vsa { sparsity: 0.5, tile: 64, ref_sparsity: 0.5, qk8: false, pv8: false } native rel 5.15e-3  ok
+dit tiny Vsa { sparsity: 0.5, tile: 64, ref_sparsity: 0.5, qk8: false, pv8: false } native streamed rel 5.15e-3  ok
+dit tiny Dense { qk8: false, pv8: false } int8       rel 5.41e-3  ok
+dit tiny Dense { qk8: false, pv8: false } int8 streamed rel 5.41e-3  ok
+dit tiny Vsa { sparsity: 0.5, tile: 64, ref_sparsity: 0.5, qk8: false, pv8: false } int8 rel 4.66e-3  ok
+dit tiny Vsa { sparsity: 0.5, tile: 64, ref_sparsity: 0.5, qk8: false, pv8: false } int8 streamed rel 4.66e-3  ok
+dit tiny Dense { qk8: false, pv8: false } int4-hqq-g32 rel 5.21e-3  ok
+dit tiny Dense { qk8: false, pv8: false } int4-hqq-g32 streamed rel 5.21e-3  ok
+dit tiny Vsa { sparsity: 0.5, tile: 64, ref_sparsity: 0.5, qk8: false, pv8: false } int4-hqq-g32 rel 5.60e-3  ok
+dit tiny Vsa { sparsity: 0.5, tile: 64, ref_sparsity: 0.5, qk8: false, pv8: false } int4-hqq-g32 streamed rel 5.60e-3  ok
+dit tiny Dense { qk8: true, pv8: false } native      rel 5.43e-3  ok
+dit tiny Dense { qk8: true, pv8: false } native streamed rel 5.43e-3  ok
+dit tiny Dense { qk8: true, pv8: true } native       rel 5.37e-3  ok
+dit tiny Dense { qk8: true, pv8: true } native streamed rel 5.37e-3  ok
+dit tiny Vsa { sparsity: 0.5, tile: 64, ref_sparsity: 0.5, qk8: true, pv8: false } native rel 5.78e-3  ok
+dit tiny Vsa { sparsity: 0.5, tile: 64, ref_sparsity: 0.5, qk8: true, pv8: false } native streamed rel 5.78e-3  ok
+dit tiny Vsa { sparsity: 0.5, tile: 64, ref_sparsity: 0.5, qk8: true, pv8: true } native rel 5.85e-3  ok
+dit tiny Vsa { sparsity: 0.5, tile: 64, ref_sparsity: 0.5, qk8: true, pv8: true } native streamed rel 5.85e-3  ok
++ curl -s -X PUT --upload-file /root/out/check.log 'https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/runpod-20261113-5090g/results/check.log?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261113%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261113T173053Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=a13e8bb6fc4786dcbb959c9f7f0b22e7a4a239e42853af0b894208a2d4130f30'
++ MX=/w/h3-8step-mxfp8/transformer.safetensors
++ V2='--variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --tables /workspace/h3-rs/tables/v2.tables --stream-blocks'
++ run v2-qk8 1500 --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --tables /workspace/h3-rs/tables/v2.tables --stream-blocks
++ n=v2-qk8
++ t=1500
++ shift 2
++ echo '== v2-qk8: --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --tables /workspace/h3-rs/tables/v2.tables --stream-blocks'
+== v2-qk8: --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --tables /workspace/h3-rs/tables/v2.tables --stream-blocks
++ sp=8931
++ nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits -lms 500
++ rc=0
++ kill 8931
+++ sort -n /root/out/v2-qk8.mem
+++ tail -1
++ echo 'peak VRAM MiB: 17952; exit 0'
+peak VRAM MiB: 17952; exit 0
++ grep -E '^cuda|^load|prompt:|^run |rror|panick|warning|real' /root/out/v2-qk8.log
+cuda NVIDIA GeForce RTX 5090 (sm_120)
+load 26.2s
+prompt: 462 rows in 67.2s
+run 0: total 58.12s  prepare 0.25s  adaln 0.00s  denoise 51.51s (["6.72", "6.39", "6.39", "6.39", "6.39", "6.41", "6.43", "6.40"])  decode 6.11s  audio 0.18s
+real	2m38.762s
++ '[' -f /root/out/v2-qk8.y4m ']'
++ '[' -n 'https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/runpod-20261113-5090g/results/v2-qk8.mp4?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261113%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261113T173051Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=4c231980ef9c4891716ec80c8833dc1ba4674e9086dc761aed39360fe8db9584' ']'
++ grid /root/out/v2-qk8.y4m /root/out/v2-qk8.grid.png
++ ffmpeg -loglevel error -y -i /root/out/v2-qk8.y4m -vf 'select='\''eq(n\,0)+eq(n\,40)+eq(n\,80)+eq(n\,120)'\'',scale=448:-1,tile=2x2' -vframes 1 /root/out/v2-qk8.grid.png
++ ffmpeg -loglevel error -y -i /root/out/v2-qk8.y4m -i /root/out/v2-qk8.wav -c:v libx264 -crf 18 -pix_fmt yuv420p -c:a aac -b:a 192k -shortest /root/out/v2-qk8.mp4
++ curl -s -X PUT --upload-file /root/out/v2-qk8.mp4 'https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/runpod-20261113-5090g/results/v2-qk8.mp4?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261113%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261113T173051Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=4c231980ef9c4891716ec80c8833dc1ba4674e9086dc761aed39360fe8db9584'
++ curl -s -X PUT --upload-file /root/out/v2-qk8.grid.png 'https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/runpod-20261113-5090g/results/v2-qk8.grid.png?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261113%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261113T173051Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=3fa36f9a3fb195720dc66536cea360c554bdee72e6d67cd0261dc409b4c7157b'
++ curl -s -X PUT --upload-file /root/out/v2-qk8.log 'https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/runpod-20261113-5090g/results/v2-qk8.log?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261113%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261113T173050Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=3d8cb8de39935cf3b6234596ce397213aee06cd2e097a023c1f3848a34ed8d96'
++ curl -s -X PUT --upload-file /root/out/v2-qk8.mem 'https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/runpod-20261113-5090g/results/v2-qk8.mem?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261113%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261113T173050Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=2599b62fd5238bd61115e5fd50d88657db3cf456584cb31943cdb6772d0b969d'
++ run v2-pv8 1500 --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --tables /workspace/h3-rs/tables/v2.tables --stream-blocks --pv8
++ n=v2-pv8
++ t=1500
++ shift 2
++ echo '== v2-pv8: --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --tables /workspace/h3-rs/tables/v2.tables --stream-blocks --pv8'
+== v2-pv8: --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --tables /workspace/h3-rs/tables/v2.tables --stream-blocks --pv8
++ sp=9233
++ nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits -lms 500
++ rc=0
++ kill 9233
+++ sort -n /root/out/v2-pv8.mem
+++ tail -1
++ echo 'peak VRAM MiB: 18592; exit 0'
+peak VRAM MiB: 18592; exit 0
++ grep -E '^cuda|^load|prompt:|^run |rror|panick|warning|real' /root/out/v2-pv8.log
+cuda NVIDIA GeForce RTX 5090 (sm_120)
+load 27.6s
+prompt: 462 rows in 72.7s
+run 0: total 55.74s  prepare 0.25s  adaln 0.00s  denoise 49.20s (["6.39", "6.11", "6.09", "6.12", "6.09", "6.11", "6.12", "6.17"])  decode 6.05s  audio 0.18s
+real	2m43.356s
++ '[' -f /root/out/v2-pv8.y4m ']'
++ '[' -n 'https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/runpod-20261113-5090g/results/v2-pv8.mp4?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261113%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261113T173052Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=ce77e865fd09f7346f0caa89c10694a2dd7c9a6ac9b04f5e1af8c2ddef98056e' ']'
++ grid /root/out/v2-pv8.y4m /root/out/v2-pv8.grid.png
++ ffmpeg -loglevel error -y -i /root/out/v2-pv8.y4m -vf 'select='\''eq(n\,0)+eq(n\,40)+eq(n\,80)+eq(n\,120)'\'',scale=448:-1,tile=2x2' -vframes 1 /root/out/v2-pv8.grid.png
++ ffmpeg -loglevel error -y -i /root/out/v2-pv8.y4m -i /root/out/v2-pv8.wav -c:v libx264 -crf 18 -pix_fmt yuv420p -c:a aac -b:a 192k -shortest /root/out/v2-pv8.mp4
++ curl -s -X PUT --upload-file /root/out/v2-pv8.mp4 'https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/runpod-20261113-5090g/results/v2-pv8.mp4?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261113%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261113T173052Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=ce77e865fd09f7346f0caa89c10694a2dd7c9a6ac9b04f5e1af8c2ddef98056e'
++ curl -s -X PUT --upload-file /root/out/v2-pv8.grid.png 'https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/runpod-20261113-5090g/results/v2-pv8.grid.png?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261113%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261113T173052Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=31446f52a751eb161c698439fd7a011de2e4411b01549f7461cb5543657ca843'
++ curl -s -X PUT --upload-file /root/out/v2-pv8.log 'https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/runpod-20261113-5090g/results/v2-pv8.log?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261113%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261113T173051Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=45bf7d0892e23d2118663a7f5ba5e23b15ee754f16e19560aade4cf338533f38'
++ curl -s -X PUT --upload-file /root/out/v2-pv8.mem 'https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/runpod-20261113-5090g/results/v2-pv8.mem?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261113%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261113T173052Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=047a277e5183f14d6e33d7c8f9bd6ad401a18d80f636c8bd86c6ff437a78358f'
++ echo '== per-kernel profile, V2 with FP8 P·V'
+== per-kernel profile, V2 with FP8 P·V
++ H3_PROFILE=1
++ run v2-pv8-profile 1500 --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --tables /workspace/h3-rs/tables/v2.tables --stream-blocks --pv8
++ n=v2-pv8-profile
++ t=1500
++ shift 2
++ echo '== v2-pv8-profile: --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --tables /workspace/h3-rs/tables/v2.tables --stream-blocks --pv8'
+== v2-pv8-profile: --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --tables /workspace/h3-rs/tables/v2.tables --stream-blocks --pv8
++ sp=9535
++ nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits -lms 500
++ rc=0
++ kill 9535
+++ sort -n /root/out/v2-pv8-profile.mem
+++ tail -1
++ echo 'peak VRAM MiB: 18592; exit 0'
+peak VRAM MiB: 18592; exit 0
++ grep -E '^cuda|^load|prompt:|^run |rror|panick|warning|real' /root/out/v2-pv8-profile.log
+cuda NVIDIA GeForce RTX 5090 (sm_120)
+load 27.5s
+prompt: 462 rows in 67.3s
+run 0: total 70.07s  prepare 0.24s  adaln 0.00s  denoise 62.28s (["8.02", "7.70", "7.72", "7.72", "7.78", "7.77", "7.79", "7.79"])  decode 7.28s  audio 0.20s
+real	2m52.120s
++ '[' -f /root/out/v2-pv8-profile.y4m ']'
++ '[' -n '' ']'
++ curl -s -X PUT --upload-file /root/out/v2-pv8-profile.log 'https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/runpod-20261113-5090g/results/v2-pv8-profile.log?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261113%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261113T173053Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=16429df345509639bb94b930cd1f102d885331ece393b7e5a364a7921993a4e6'
++ curl -s -X PUT --upload-file /root/out/v2-pv8-profile.mem 'https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/runpod-20261113-5090g/results/v2-pv8-profile.mem?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261113%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261113T173053Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=fa8af356a6ae340d5eec828d78ea3bf8d07851cccd539f1e2e2415117b08e468'
++ grep -E 'vsa fine|attention fp8|vsa int8' /root/out/v2-pv8-profile.log
++ head -8
+  vsa fine (3g int8 qk + fp8 pv, d128)       10934.0 ms  24.8%     400 calls    27.335 ms/call
+  vsa int8 q/k quant                           406.2 ms   0.9%     400 calls     1.015 ms/call
+  attention fp8 v quant                        389.5 ms   0.9%     400 calls     0.974 ms/call
+  attention fp8 v max                          133.7 ms   0.3%     400 calls     0.334 ms/call
++ rm -f /root/out/v2-pv8-profile.y4m /root/out/v2-pv8-profile.wav
++ echo '== per-kernel profile, raw H3 dense INT8 Q·Kᵀ + FP8 P·V, 2 euler steps'
+== per-kernel profile, raw H3 dense INT8 Q·Kᵀ + FP8 P·V, 2 euler steps
++ H3_PROFILE=1
++ run base2-pv8-profile 1500 --variant h3 --model-dir /w/h3-base --weights mxfp8 --decoder-weights mxfp8 --attention dense --stream-blocks --steps 2 --pv8
++ n=base2-pv8-profile
++ t=1500
++ shift 2
++ echo '== base2-pv8-profile: --variant h3 --model-dir /w/h3-base --weights mxfp8 --decoder-weights mxfp8 --attention dense --stream-blocks --steps 2 --pv8'
+== base2-pv8-profile: --variant h3 --model-dir /w/h3-base --weights mxfp8 --decoder-weights mxfp8 --attention dense --stream-blocks --steps 2 --pv8
++ sp=9603
++ nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits -lms 500
++ rc=0
++ kill 9603
+++ sort -n /root/out/base2-pv8-profile.mem
+++ tail -1
++ echo 'peak VRAM MiB: 16636; exit 0'
+peak VRAM MiB: 16636; exit 0
++ grep -E '^cuda|^load|prompt:|^run |rror|panick|warning|real' /root/out/base2-pv8-profile.log
+cuda NVIDIA GeForce RTX 5090 (sm_120)
+load 92.9s
+prompt: 462 rows in 209.1s
+run 0: total 66.46s  prepare 0.02s  adaln 38.93s  denoise 20.14s (["10.18", "9.96"])  decode 7.11s  audio 0.20s
+real	6m15.894s
++ '[' -f /root/out/base2-pv8-profile.y4m ']'
++ '[' -n '' ']'
++ curl -s -X PUT --upload-file /root/out/base2-pv8-profile.log 'https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/runpod-20261113-5090g/results/base2-pv8-profile.log?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261113%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261113T173054Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=14b914ec57e90eaaa2b835af6a1c95fb3e6785cfebed43c8be40f4dbc525001b'
++ curl -s -X PUT --upload-file /root/out/base2-pv8-profile.mem 'https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/runpod-20261113-5090g/results/base2-pv8-profile.mem?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261113%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261113T173054Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=7f0553ab2e62dc9ce8ad4bc9bf12dbfbd7fe64e956db633d57ebf96c5a7d2853'
++ grep -E 'attention \(|attention fp8|attention int8' /root/out/base2-pv8-profile.log
++ head -8
+  attention (mma2, d128)                         3.2 ms   1.9%      50 calls     0.064 ms/call
+  attention (mma2, d128)                         0.1 ms   0.5%       2 calls     0.059 ms/call
+  attention (int8 qk + fp8 pv, d128)          8158.9 ms  51.5%     100 calls    81.589 ms/call
+  attention int8 q/k quant                     102.2 ms   0.6%     200 calls     0.511 ms/call
+  attention fp8 v quant                         92.6 ms   0.6%     100 calls     0.926 ms/call
+  attention fp8 v max                           33.5 ms   0.2%     100 calls     0.335 ms/call
+  attention (mma2, d64)                        322.9 ms  20.2%    2016 calls     0.160 ms/call
+  attention (mma2, d64)                        163.9 ms  19.9%    1008 calls     0.163 ms/call
++ echo '== per-kernel profile, raw H3 dense INT8 Q·Kᵀ, 2 euler steps'
+== per-kernel profile, raw H3 dense INT8 Q·Kᵀ, 2 euler steps
++ H3_PROFILE=1
++ run base2-qk8-profile 1500 --variant h3 --model-dir /w/h3-base --weights mxfp8 --decoder-weights mxfp8 --attention dense --stream-blocks --steps 2 --qk8
++ n=base2-qk8-profile
++ t=1500
++ shift 2
++ echo '== base2-qk8-profile: --variant h3 --model-dir /w/h3-base --weights mxfp8 --decoder-weights mxfp8 --attention dense --stream-blocks --steps 2 --qk8'
+== base2-qk8-profile: --variant h3 --model-dir /w/h3-base --weights mxfp8 --decoder-weights mxfp8 --attention dense --stream-blocks --steps 2 --qk8
++ sp=9697
++ nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits -lms 500
++ rc=0
++ kill 9697
+++ sort -n /root/out/base2-qk8-profile.mem
+++ tail -1
++ echo 'peak VRAM MiB: 16380; exit 0'
+peak VRAM MiB: 16380; exit 0
++ grep -E '^cuda|^load|prompt:|^run |rror|panick|warning|real' /root/out/base2-qk8-profile.log
+cuda NVIDIA GeForce RTX 5090 (sm_120)
+load 93.6s
+prompt: 462 rows in 211.1s
+run 0: total 71.31s  prepare 0.02s  adaln 40.11s  denoise 23.76s (["12.00", "11.76"])  decode 7.15s  audio 0.20s
+real	6m23.585s
++ '[' -f /root/out/base2-qk8-profile.y4m ']'
++ '[' -n '' ']'
++ curl -s -X PUT --upload-file /root/out/base2-qk8-profile.log 'https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/runpod-20261113-5090g/results/base2-qk8-profile.log?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261113%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261113T173054Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=272fda58c97e0daa14ad710742ba60c3240bf0a8bbc3facba1efa199333bd807'
++ curl -s -X PUT --upload-file /root/out/base2-qk8-profile.mem 'https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/runpod-20261113-5090g/results/base2-qk8-profile.mem?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261113%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261113T173055Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=3695b0a437fc1bbc72d13e02657a9a09bcacaaf6d88fb1382217b368fbeaf725'
++ grep -E 'attention \(|attention int8' /root/out/base2-qk8-profile.log
++ head -6
+  attention (mma2, d128)                         3.2 ms   1.9%      50 calls     0.064 ms/call
+  attention (mma2, d128)                         0.1 ms   0.5%       2 calls     0.060 ms/call
+  attention (int8 qk, d128)                  11877.8 ms  61.1%     100 calls   118.778 ms/call
+  attention int8 q/k quant                     102.1 ms   0.5%     200 calls     0.511 ms/call
+  attention (mma2, d64)                        322.0 ms  20.2%    2016 calls     0.160 ms/call
+  attention (mma2, d64)                        161.1 ms  20.2%    1008 calls     0.160 ms/call
++ rm -f /root/out/base2-pv8-profile.y4m /root/out/base2-qk8-profile.y4m /root/out/base2-pv8-profile.wav /root/out/base2-qk8-profile.wav
++ run base25-pv8 2400 --variant h3 --model-dir /w/h3-base --weights mxfp8 --decoder-weights mxfp8 --attention dense --stream-blocks --steps 25 --pv8 --tables /workspace/h3-rs/tables/base25.tables
++ n=base25-pv8
++ t=2400
++ shift 2
++ echo '== base25-pv8: --variant h3 --model-dir /w/h3-base --weights mxfp8 --decoder-weights mxfp8 --attention dense --stream-blocks --steps 25 --pv8 --tables /workspace/h3-rs/tables/base25.tables'
+== base25-pv8: --variant h3 --model-dir /w/h3-base --weights mxfp8 --decoder-weights mxfp8 --attention dense --stream-blocks --steps 25 --pv8 --tables /workspace/h3-rs/tables/base25.tables
++ sp=9792
++ nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits -lms 500
++ rc=0
++ kill 9792
+++ sort -n /root/out/base25-pv8.mem
+++ tail -1
++ echo 'peak VRAM MiB: 16732; exit 0'
+peak VRAM MiB: 16732; exit 0
++ grep -E '^cuda|^load|prompt:|^run |rror|panick|warning|real' /root/out/base25-pv8.log
+cuda NVIDIA GeForce RTX 5090 (sm_120)
+load 94.3s
+prompt: 462 rows in 206.2s
+run 0: total 203.73s  prepare 0.03s  adaln 0.00s  denoise 197.49s (["8.20", "7.83", "7.85", "7.83", "7.84", "7.85", "7.87", "7.87", "7.90", "7.87", "7.87", "7.90", "7.92", "7.89", "7.91", "7.89", "7.91", "7.91", "7.90", "7.90", "7.91", "7.92", "7.91", "7.92", "7.91"])  decode 5.96s  audio 0.18s
+real	8m31.658s
++ '[' -f /root/out/base25-pv8.y4m ']'
++ '[' -n 'https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/runpod-20261113-5090g/results/base25-pv8.mp4?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261113%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261113T173056Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=a7ed2c68d6cfcc34bd591d0d5a19fd0d0fae0e3d4c7f8489394874b0b31d987a' ']'
++ grid /root/out/base25-pv8.y4m /root/out/base25-pv8.grid.png
++ ffmpeg -loglevel error -y -i /root/out/base25-pv8.y4m -vf 'select='\''eq(n\,0)+eq(n\,40)+eq(n\,80)+eq(n\,120)'\'',scale=448:-1,tile=2x2' -vframes 1 /root/out/base25-pv8.grid.png
++ ffmpeg -loglevel error -y -i /root/out/base25-pv8.y4m -i /root/out/base25-pv8.wav -c:v libx264 -crf 18 -pix_fmt yuv420p -c:a aac -b:a 192k -shortest /root/out/base25-pv8.mp4
++ curl -s -X PUT --upload-file /root/out/base25-pv8.mp4 'https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/runpod-20261113-5090g/results/base25-pv8.mp4?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261113%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261113T173056Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=a7ed2c68d6cfcc34bd591d0d5a19fd0d0fae0e3d4c7f8489394874b0b31d987a'
++ curl -s -X PUT --upload-file /root/out/base25-pv8.grid.png 'https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/runpod-20261113-5090g/results/base25-pv8.grid.png?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261113%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261113T173056Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=17b3c9be63945a5f946d4ac3d50d851000f3f6fac7ac35cbf0ed4a5445268b7a'
++ curl -s -X PUT --upload-file /root/out/base25-pv8.log 'https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/runpod-20261113-5090g/results/base25-pv8.log?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261113%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261113T173055Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=68118443104621f66e184a2a867eec7574523570ddd6923b5a8683189dc11d8b'
++ curl -s -X PUT --upload-file /root/out/base25-pv8.mem 'https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/runpod-20261113-5090g/results/base25-pv8.mem?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261113%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261113T173055Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=940bb893553bdbe0947e9b3572c3f349f64b75866c250c437432ceb929c920f9'
++ run base25-qk8 2400 --variant h3 --model-dir /w/h3-base --weights mxfp8 --decoder-weights mxfp8 --attention dense --stream-blocks --steps 25 --qk8 --tables /workspace/h3-rs/tables/base25.tables
++ n=base25-qk8
++ t=2400
++ shift 2
++ echo '== base25-qk8: --variant h3 --model-dir /w/h3-base --weights mxfp8 --decoder-weights mxfp8 --attention dense --stream-blocks --steps 25 --qk8 --tables /workspace/h3-rs/tables/base25.tables'
+== base25-qk8: --variant h3 --model-dir /w/h3-base --weights mxfp8 --decoder-weights mxfp8 --attention dense --stream-blocks --steps 25 --qk8 --tables /workspace/h3-rs/tables/base25.tables
++ sp=10145
++ nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits -lms 500
++ rc=0
++ kill 10145
+++ sort -n /root/out/base25-qk8.mem
+++ tail -1
++ echo 'peak VRAM MiB: 16444; exit 0'
+peak VRAM MiB: 16444; exit 0
++ grep -E '^cuda|^load|prompt:|^run |rror|panick|warning|real' /root/out/base25-qk8.log
+cuda NVIDIA GeForce RTX 5090 (sm_120)
+load 97.2s
+prompt: 462 rows in 206.5s
+run 0: total 244.01s  prepare 0.02s  adaln 0.00s  denoise 237.71s (["9.77", "9.46", "9.51", "9.49", "9.47", "9.51", "9.49", "9.52", "9.49", "9.50", "9.51", "9.55", "9.50", "9.51", "9.49", "9.49", "9.49", "9.48", "9.47", "9.48", "9.50", "9.49", "9.49", "9.52", "9.51"])  decode 6.02s  audio 0.18s
+real	9m15.196s
++ '[' -f /root/out/base25-qk8.y4m ']'
++ '[' -n 'https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/runpod-20261113-5090g/results/base25-qk8.mp4?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261113%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261113T173057Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=99d40ef7b34e8106ef1ece82ce2d0915ae349f84507b40b7941a5b11df0517ca' ']'
++ grid /root/out/base25-qk8.y4m /root/out/base25-qk8.grid.png
++ ffmpeg -loglevel error -y -i /root/out/base25-qk8.y4m -vf 'select='\''eq(n\,0)+eq(n\,40)+eq(n\,80)+eq(n\,120)'\'',scale=448:-1,tile=2x2' -vframes 1 /root/out/base25-qk8.grid.png
++ ffmpeg -loglevel error -y -i /root/out/base25-qk8.y4m -i /root/out/base25-qk8.wav -c:v libx264 -crf 18 -pix_fmt yuv420p -c:a aac -b:a 192k -shortest /root/out/base25-qk8.mp4
++ curl -s -X PUT --upload-file /root/out/base25-qk8.mp4 'https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/runpod-20261113-5090g/results/base25-qk8.mp4?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261113%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261113T173057Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=99d40ef7b34e8106ef1ece82ce2d0915ae349f84507b40b7941a5b11df0517ca'
++ curl -s -X PUT --upload-file /root/out/base25-qk8.grid.png 'https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/runpod-20261113-5090g/results/base25-qk8.grid.png?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261113%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261113T173057Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=9fe2dd6e35dfa313b6529d6cc4e418d2dcc0e7ae6a0e9429213395c29c24dd3b'
++ curl -s -X PUT --upload-file /root/out/base25-qk8.log 'https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/runpod-20261113-5090g/results/base25-qk8.log?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261113%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261113T173056Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=77aa8640b72fab1dd4f463ec736b96d70e89258dbcf23d9438294d0bf9718945'
++ curl -s -X PUT --upload-file /root/out/base25-qk8.mem 'https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/runpod-20261113-5090g/results/base25-qk8.mem?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261113%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261113T173057Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=f84c5bc16fc2a1b537bc4ffc4f8ba01e4559c2c2bf638fbdec0feeb1019b0339'
++ run base25-bf16 2400 --variant h3 --model-dir /w/h3-base --weights mxfp8 --decoder-weights mxfp8 --attention dense --stream-blocks --steps 25 --tables /workspace/h3-rs/tables/base25.tables
++ n=base25-bf16
++ t=2400
++ shift 2
++ echo '== base25-bf16: --variant h3 --model-dir /w/h3-base --weights mxfp8 --decoder-weights mxfp8 --attention dense --stream-blocks --steps 25 --tables /workspace/h3-rs/tables/base25.tables'
+== base25-bf16: --variant h3 --model-dir /w/h3-base --weights mxfp8 --decoder-weights mxfp8 --attention dense --stream-blocks --steps 25 --tables /workspace/h3-rs/tables/base25.tables
++ sp=10504
++ nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits -lms 500
++ rc=0
++ kill 10504
+++ sort -n /root/out/base25-bf16.mem
+++ tail -1
++ echo 'peak VRAM MiB: 15875; exit 0'
+peak VRAM MiB: 15875; exit 0
++ grep -E '^cuda|^load|prompt:|^run |rror|panick|warning|real' /root/out/base25-bf16.log
+cuda NVIDIA GeForce RTX 5090 (sm_120)
+load 92.8s
+prompt: 462 rows in 207.9s
+run 0: total 328.58s  prepare 0.02s  adaln 0.00s  denoise 322.30s (["13.20", "12.82", "12.82", "12.83", "12.87", "12.89", "12.89", "12.88", "12.89", "12.89", "12.89", "12.89", "12.89", "12.89", "12.89", "12.89", "12.89", "12.89", "12.89", "12.89", "12.89", "12.89", "12.89", "12.89", "12.90"])  decode 6.00s  audio 0.18s
+real	10m36.741s
++ '[' -f /root/out/base25-bf16.y4m ']'
++ '[' -n 'https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/runpod-20261113-5090g/results/base25-bf16.mp4?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261113%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261113T173058Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=ad43ecbdc835d873c938432d2bcd4ed874e8e07f28154c36b1bf9e63bf5f63df' ']'
++ grid /root/out/base25-bf16.y4m /root/out/base25-bf16.grid.png
++ ffmpeg -loglevel error -y -i /root/out/base25-bf16.y4m -vf 'select='\''eq(n\,0)+eq(n\,40)+eq(n\,80)+eq(n\,120)'\'',scale=448:-1,tile=2x2' -vframes 1 /root/out/base25-bf16.grid.png
++ ffmpeg -loglevel error -y -i /root/out/base25-bf16.y4m -i /root/out/base25-bf16.wav -c:v libx264 -crf 18 -pix_fmt yuv420p -c:a aac -b:a 192k -shortest /root/out/base25-bf16.mp4
++ curl -s -X PUT --upload-file /root/out/base25-bf16.mp4 'https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/runpod-20261113-5090g/results/base25-bf16.mp4?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261113%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261113T173058Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=ad43ecbdc835d873c938432d2bcd4ed874e8e07f28154c36b1bf9e63bf5f63df'
++ curl -s -X PUT --upload-file /root/out/base25-bf16.grid.png 'https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/runpod-20261113-5090g/results/base25-bf16.grid.png?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261113%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261113T173058Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=74c50daa338dba7b65ccdb44923c29b4001b09f3b14e32d76a5cde712aef2cb3'
++ curl -s -X PUT --upload-file /root/out/base25-bf16.log 'https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/runpod-20261113-5090g/results/base25-bf16.log?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261113%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261113T173058Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=36f7cd2dbd4cc0836ce1c562114c83cbc295900c61d7c042b1ecb4b17929daf9'
++ curl -s -X PUT --upload-file /root/out/base25-bf16.mem 'https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/runpod-20261113-5090g/results/base25-bf16.mem?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261113%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261113T173058Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=bc4f016bd0aee77ff94ca445afbf43a9489981781219f08e602f36aa7f81510a'
++ tee /root/out/psnr.log
++ psnr v2-pv8 v2-qk8
++ echo '== psnr v2-pv8 vs v2-qk8'
+== psnr v2-pv8 vs v2-qk8
++ ffmpeg -loglevel info -i /root/out/v2-pv8.y4m -i /root/out/v2-qk8.y4m -lavfi psnr -f null -
++ grep -E PSNR
+[Parsed_psnr_0 @ 0x5d85ce26a200] PSNR y:inf u:inf v:inf average:inf min:inf max:inf
++ psnr base25-pv8 base25-bf16
++ echo '== psnr base25-pv8 vs base25-bf16'
+== psnr base25-pv8 vs base25-bf16
++ ffmpeg -loglevel info -i /root/out/base25-pv8.y4m -i /root/out/base25-bf16.y4m -lavfi psnr -f null -
++ grep -E PSNR
+[Parsed_psnr_0 @ 0x60fef5da7340] PSNR y:inf u:inf v:inf average:inf min:inf max:inf
++ psnr base25-qk8 base25-bf16
++ echo '== psnr base25-qk8 vs base25-bf16'
+== psnr base25-qk8 vs base25-bf16
++ ffmpeg -loglevel info -i /root/out/base25-qk8.y4m -i /root/out/base25-bf16.y4m -lavfi psnr -f null -
++ grep -E PSNR
+[Parsed_psnr_0 @ 0x601f4a6d2340] PSNR y:inf u:inf v:inf average:inf min:inf max:inf
++ psnr base25-pv8 base25-qk8
++ echo '== psnr base25-pv8 vs base25-qk8'
+== psnr base25-pv8 vs base25-qk8
++ ffmpeg -loglevel info -i /root/out/base25-pv8.y4m -i /root/out/base25-qk8.y4m -lavfi psnr -f null -
++ grep -E PSNR
+[Parsed_psnr_0 @ 0x62f2f8ab9340] PSNR y:inf u:inf v:inf average:inf min:inf max:inf
++ curl -s -X PUT --upload-file /root/out/psnr.log 'https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/runpod-20261113-5090g/results/psnr.log?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261113%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261113T173059Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=107bae42e192fa39b35a8eac968104f5e9b0d900c00fc8683feec5724cabba7e'
++ cat /root/out/base2-pv8-profile.log /root/out/base2-qk8-profile.log /root/out/base25-bf16.log /root/out/base25-pv8.log /root/out/base25-qk8.log /root/out/check.log /root/out/psnr.log /root/out/v2-pv8-profile.log /root/out/v2-pv8.log /root/out/v2-qk8.log
++ curl -s -X PUT --upload-file /root/out/all.log 'https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/runpod-20261113-5090g/results/all.log?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261113%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261113T173059Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=d9c851ca7f6ed6b882fcd6e2a1f323cdd20e279f24fa71a4e4826f698d560528'
++ echo '5090g done; terminating pod cfgk81b4wo999q'
+5090g done; terminating pod cfgk81b4wo999q
++ terminate
++ '[' -n 'https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/runpod-20261113-5090g/out/1.log?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261113%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261113T173049Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=20c7b15a77fa4f02f6a1e39ac18c5dbb1a7d1974188cc7707c5a55a69aab0325' ']'
++ up /root/out.log 'https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/runpod-20261113-5090g/out/1.log?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261113%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261113T173049Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=20c7b15a77fa4f02f6a1e39ac18c5dbb1a7d1974188cc7707c5a55a69aab0325'
++ curl -s -X PUT --upload-file /root/out.log 'https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/runpod-20261113-5090g/out/1.log?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261113%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261113T173049Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=20c7b15a77fa4f02f6a1e39ac18c5dbb1a7d1974188cc7707c5a55a69aab0325'

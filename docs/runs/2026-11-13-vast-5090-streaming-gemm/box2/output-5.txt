@@ -1,0 +1,152 @@
++ cat
++ O=/w/out
++ mkdir -p /w/out
++ cd /w
++ T=/w/tables
++ BASE='--variant h3 --model-dir /w/h3-base --weights mxfp8 --decoder-weights mxfp8 --attention dense --stream-blocks --pv8'
++ V2='--variant fasth3-v2 --model-dir /w/h3-8step --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --pv8 --tables /w/tables/v2.tables --stream-blocks'
++ echo '== automatic per-shape split choice (bin7): must pick the split on this card and stay byte-identical'
+== automatic per-shape split choice (bin7): must pick the split on this card and stay byte-identical
++ chmod +x /w/h3-bin7
++ ls -la /w/h3-bin7
+-rwxr-xr-x 1 root root 20467480 Nov 14 04:14 /w/h3-bin7
++ export BIN=/w/h3-bin7
++ BIN=/w/h3-bin7
++ H3_STALL=1
++ H3_CUDA_LT_NTH=0
++ run v2-auto 1500 --variant fasth3-v2 --model-dir /w/h3-8step --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --pv8 --tables /w/tables/v2.tables --stream-blocks
++ n=v2-auto
++ t=1500
++ shift 2
++ echo '== v2-auto: --variant fasth3-v2 --model-dir /w/h3-8step --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --pv8 --tables /w/tables/v2.tables --stream-blocks'
+== v2-auto: --variant fasth3-v2 --model-dir /w/h3-8step --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --pv8 --tables /w/tables/v2.tables --stream-blocks
++ sp=15559
++ nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits -lms 500
++ rc=0
++ kill 15559
+++ sort -n /w/out/v2-auto.mem
+++ tail -1
++ echo 'peak VRAM MiB: 18584; exit 0'
+peak VRAM MiB: 18584; exit 0
++ grep -E '^cuda|^load|prompt:|^run |^prefetch|h2d probe|rror|panick|warning|real' /w/out/v2-auto.log
++ cut -c1-400
+h2d probe (256 MB): pageable 20.9 GB/s pinned 56.0 GB/s
+cuda NVIDIA GeForce RTX 5090 (sm_120)
+load 65.5s
+prompt: 462 rows in 92.3s
+prefetch: 400 blocks; compute stream waited 131 ms total, 0.3 ms/block, worst 18.7 ms; copies 12091 ms for 191.29 GB (15.8 GB/s while copying, 0.48 GB/block)
+run 0: total 49.69s  prepare 0.24s  adaln 0.00s  denoise 42.99s (["5.57", "5.31", "5.32", "5.33", "5.35", "5.36", "5.36", "5.38"])  decode 6.19s  audio 0.19s
+real	3m34.852s
++ '[' -f /w/out/v2-auto.y4m ']'
+++ stats /w/out/v2-auto.y4m
+++ ffmpeg -v info -i /w/out/v2-auto.y4m -frames:v 2 -vf signalstats,metadata=print:key=lavfi.signalstats.YAVG -f null -
+++ grep -o 'YAVG=[0-9.]*'
+++ head -2
+++ tr '\n' ' '
++ echo 'luma: YAVG=77.023 YAVG=77.1195 '
+luma: YAVG=77.023 YAVG=77.1195 
++ '[' -f /w/out/v2-auto.y4m ']'
++ grid /w/out/v2-auto.y4m /w/out/v2-auto.grid.png
++ ffmpeg -loglevel error -y -i /w/out/v2-auto.y4m -vf 'select='\''eq(n\,0)+eq(n\,40)+eq(n\,80)+eq(n\,120)'\'',scale=448:-1,tile=2x2' -vframes 1 /w/out/v2-auto.grid.png
++ ffmpeg -loglevel error -y -i /w/out/v2-auto.y4m -i /w/out/v2-auto.wav -c:v libx264 -crf 18 -pix_fmt yuv420p -c:a aac -b:a 192k -shortest /w/out/v2-auto.mp4
++ grep -E '^mxfp8 n=' /w/out/v2-auto.log
++ head -8
+mxfp8 n=21504 k=5376 rows=38172: whole 22.17 ms, ×2 12.48 ms → ×2
+mxfp8 n=28672 k=5376 rows=38172: whole 31.08 ms, ×2 17.67 ms → ×2
+mxfp8 n=16384 k=2048 rows=1797: whole 0.21 ms, ×2 0.20 ms → ×2
++ cmp /w/out/v2-ref.y4m /w/out/v2-auto.y4m
+/w/out/v2-ref.y4m /w/out/v2-auto.y4m differ: char 67, line 3
++ H3_STALL=1
++ H3_CUDA_LT_NTH=0
++ run base2-auto 1500 --variant h3 --model-dir /w/h3-base --weights mxfp8 --decoder-weights mxfp8 --attention dense --stream-blocks --pv8 --steps 2 --tables /w/tables/base2.tables
++ n=base2-auto
++ t=1500
++ shift 2
++ echo '== base2-auto: --variant h3 --model-dir /w/h3-base --weights mxfp8 --decoder-weights mxfp8 --attention dense --stream-blocks --pv8 --steps 2 --tables /w/tables/base2.tables'
+== base2-auto: --variant h3 --model-dir /w/h3-base --weights mxfp8 --decoder-weights mxfp8 --attention dense --stream-blocks --pv8 --steps 2 --tables /w/tables/base2.tables
++ sp=15888
++ nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits -lms 500
++ rc=0
++ kill 15888
+++ sort -n /w/out/base2-auto.mem
+++ tail -1
++ echo 'peak VRAM MiB: 16724; exit 0'
+peak VRAM MiB: 16724; exit 0
++ grep -E '^cuda|^load|prompt:|^run |^prefetch|h2d probe|rror|panick|warning|real' /w/out/base2-auto.log
++ cut -c1-400
+h2d probe (256 MB): pageable 21.4 GB/s pinned 56.3 GB/s
+cuda NVIDIA GeForce RTX 5090 (sm_120)
+load 60.4s
+prompt: 462 rows in 68.4s
+prefetch: 100 blocks; compute stream waited 23 ms total, 0.2 ms/block, worst 14.2 ms; copies 10228 ms for 43.47 GB (4.3 GB/s while copying, 0.43 GB/block)
+run 0: total 22.06s  prepare 0.02s  adaln 0.00s  denoise 15.65s (["7.94", "7.71"])  decode 6.12s  audio 0.20s
+real	2m38.352s
++ '[' -f /w/out/base2-auto.y4m ']'
+++ stats /w/out/base2-auto.y4m
+++ ffmpeg -v info -i /w/out/base2-auto.y4m -frames:v 2 -vf signalstats,metadata=print:key=lavfi.signalstats.YAVG -f null -
+++ grep -o 'YAVG=[0-9.]*'
+++ head -2
+++ tr '\n' ' '
++ echo 'luma: YAVG=67.9463 YAVG=69.9363 '
+luma: YAVG=67.9463 YAVG=69.9363 
++ '[' -f /w/out/base2-auto.y4m ']'
++ grid /w/out/base2-auto.y4m /w/out/base2-auto.grid.png
++ ffmpeg -loglevel error -y -i /w/out/base2-auto.y4m -vf 'select='\''eq(n\,0)+eq(n\,40)+eq(n\,80)+eq(n\,120)'\'',scale=448:-1,tile=2x2' -vframes 1 /w/out/base2-auto.grid.png
++ ffmpeg -loglevel error -y -i /w/out/base2-auto.y4m -i /w/out/base2-auto.wav -c:v libx264 -crf 18 -pix_fmt yuv420p -c:a aac -b:a 192k -shortest /w/out/base2-auto.mp4
++ grep -E '^mxfp8 n=' /w/out/base2-auto.log
++ head -8
+mxfp8 n=21504 k=5376 rows=38172: whole 22.20 ms, ×2 12.45 ms → ×2
+mxfp8 n=28672 k=5376 rows=38172: whole 31.02 ms, ×2 17.85 ms → ×2
+mxfp8 n=16384 k=2048 rows=1797: whole 0.20 ms, ×2 0.20 ms → ×2
++ cmp /w/out/base2-ref.y4m /w/out/base2-auto.y4m
+cmp: /w/out/base2-ref.y4m: No such file or directory
++ echo '== and without the candidate pin (the default configuration a user runs)'
+== and without the candidate pin (the default configuration a user runs)
++ H3_STALL=1
++ run v2-auto-default 1500 --variant fasth3-v2 --model-dir /w/h3-8step --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --pv8 --tables /w/tables/v2.tables --stream-blocks
++ n=v2-auto-default
++ t=1500
++ shift 2
++ echo '== v2-auto-default: --variant fasth3-v2 --model-dir /w/h3-8step --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --pv8 --tables /w/tables/v2.tables --stream-blocks'
+== v2-auto-default: --variant fasth3-v2 --model-dir /w/h3-8step --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --pv8 --tables /w/tables/v2.tables --stream-blocks
++ sp=16211
++ nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits -lms 500
++ rc=0
++ kill 16211
+++ sort -n /w/out/v2-auto-default.mem
+++ tail -1
++ echo 'peak VRAM MiB: 18744; exit 0'
+peak VRAM MiB: 18744; exit 0
++ grep -E '^cuda|^load|prompt:|^run |^prefetch|h2d probe|rror|panick|warning|real' /w/out/v2-auto-default.log
++ cut -c1-400
+h2d probe (256 MB): pageable 20.5 GB/s pinned 56.4 GB/s
+cuda NVIDIA GeForce RTX 5090 (sm_120)
+load 67.7s
+prompt: 462 rows in 71.8s
+prefetch: 400 blocks; compute stream waited 132 ms total, 0.3 ms/block, worst 17.6 ms; copies 12016 ms for 191.29 GB (15.9 GB/s while copying, 0.48 GB/block)
+run 0: total 50.23s  prepare 0.23s  adaln 0.00s  denoise 43.66s (["6.05", "5.33", "5.35", "5.37", "5.38", "5.39", "5.39", "5.40"])  decode 6.08s  audio 0.19s
+real	3m17.031s
++ '[' -f /w/out/v2-auto-default.y4m ']'
+++ stats /w/out/v2-auto-default.y4m
+++ ffmpeg -v info -i /w/out/v2-auto-default.y4m -frames:v 2 -vf signalstats,metadata=print:key=lavfi.signalstats.YAVG -f null -
+++ grep -o 'YAVG=[0-9.]*'
+++ head -2
+++ tr '\n' ' '
++ echo 'luma: YAVG=75.6579 YAVG=75.8272 '
+luma: YAVG=75.6579 YAVG=75.8272 
++ '[' -f /w/out/v2-auto-default.y4m ']'
++ grid /w/out/v2-auto-default.y4m /w/out/v2-auto-default.grid.png
++ ffmpeg -loglevel error -y -i /w/out/v2-auto-default.y4m -vf 'select='\''eq(n\,0)+eq(n\,40)+eq(n\,80)+eq(n\,120)'\'',scale=448:-1,tile=2x2' -vframes 1 /w/out/v2-auto-default.grid.png
++ ffmpeg -loglevel error -y -i /w/out/v2-auto-default.y4m -i /w/out/v2-auto-default.wav -c:v libx264 -crf 18 -pix_fmt yuv420p -c:a aac -b:a 192k -shortest /w/out/v2-auto-default.mp4
++ grep -E '^mxfp8 n=' /w/out/v2-auto-default.log
++ head -8
+mxfp8 n=21504 k=5376 rows=38172: whole 24.04 ms, ×2 13.81 ms → ×2
+mxfp8 n=28672 k=5376 rows=38172: whole 32.10 ms, ×2 18.70 ms → ×2
+mxfp8 n=16384 k=2048 rows=1797: whole 0.19 ms, ×2 0.20 ms → whole
++ rm -f /w/out/v2-auto-default.y4m /w/out/v2-auto.y4m /w/out/v2-auto-default.wav /w/out/v2-auto.wav /w/out/base2-auto.y4m /w/out/base2-auto.wav
++ tar czf /root/cmd5.tgz -C /w/out '--exclude=*.y4m' '--exclude=*.wav' '--exclude=*.mp4' .
+++ date -u
++ echo 'cmd5 done Sat Nov 14 04:24:01 UTC 2026'
+cmd5 done Sat Nov 14 04:24:01 UTC 2026
+exit 0
+

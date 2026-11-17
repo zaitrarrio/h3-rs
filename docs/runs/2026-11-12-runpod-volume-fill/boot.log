@@ -1,0 +1,50 @@
+== boot Thu Nov 12 17:39:31 UTC 2026 pod v0x3uauu2vkbny
+Thu Nov 12 17:39:31 2026       
++-----------------------------------------------------------------------------------------+
+| NVIDIA-SMI 595.91.07              Driver Version: 595.91.07      CUDA Version: 13.2     |
++-----------------------------------------+------------------------+----------------------+
+| GPU  Name                 Persistence-M | Bus-Id          Disp.A | Volatile Uncorr. ECC |
+| Fan  Temp   Perf          Pwr:Usage/Cap |           Memory-Usage | GPU-Util  Compute M. |
+|                                         |                        |               MIG M. |
+|=========================================+========================+======================|
+|   0  NVIDIA GeForce RTX 4090        On  |   00000000:01:00.0 Off |                  Off |
+|  0%   33C    P8             19W /  450W |       1MiB /  24564MiB |      0%      Default |
+|                                         |                        |                  N/A |
++-----------------------------------------+------------------------+----------------------+
+
++-----------------------------------------------------------------------------------------+
+| Processes:                                                                              |
+|  GPU   GI   CI              PID   Type   Process name                        GPU Memory |
+|        ID   ID                                                               Usage      |
+|=========================================================================================|
+|  No running processes found                                                             |
++-----------------------------------------------------------------------------------------+
+               total        used        free      shared  buff/cache   available
+Mem:             124          13          50           0          61         111
+Swap:              0           0           0
+32
+Filesystem                Size  Used Avail Use% Mounted on
+overlay                    40G   80M   40G   1% /
+mfs#euro.runpod.net:9421  2.3P  1.9P  407T  83% /workspace
+W: https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/InRelease: Key is stored in legacy trusted.gpg keyring (/etc/apt/trusted.gpg), see the DEPRECATION section in apt-key(8) for details.
+debconf: delaying package configuration, since apt-utils is not installed
+apt ok
+total 4
+drwxr-xr-x 2 root root 4096 Nov 12 17:39 .
+drwxr-xr-x 1 root root  124 Nov 12 17:39 ..
+lrwxrwxrwx 1 root root   48 Nov 12 17:39 FastH3-4-step-Preview-v1-LoRA -> /workspace/weights/FastH3-4-step-Preview-v1-LoRA
+lrwxrwxrwx 1 root root   28 Nov 12 17:39 auxiliary -> /workspace/weights/auxiliary
+lrwxrwxrwx 1 root root   26 Nov 12 17:39 h3-base -> /workspace/weights/h3-base
+lrwxrwxrwx 1 root root   28 Nov 12 17:39 h3-ref2va -> /workspace/weights/h3-ref2va
+lrwxrwxrwx 1 root root   28 Nov 12 17:39 h3-to-ltx -> /workspace/weights/h3-to-ltx
+lrwxrwxrwx 1 root root   24 Nov 12 17:39 ltx25 -> /workspace/weights/ltx25
+lrwxrwxrwx 1 root root   28 Nov 12 17:39 ltx25-dev -> /workspace/weights/ltx25-dev
+lrwxrwxrwx 1 root root   44 Nov 12 17:39 ltx25-ic-lora-ingredients -> /workspace/weights/ltx25-ic-lora-ingredients
+lrwxrwxrwx 1 root root   40 Nov 12 17:39 open-h3-regenerate-2k -> /workspace/weights/open-h3-regenerate-2k
+lrwxrwxrwx 1 root root   31 Nov 12 17:39 pika-h3-flex -> /workspace/weights/pika-h3-flex
+lrwxrwxrwx 1 root root   27 Nov 12 17:39 upscaler -> /workspace/weights/upscaler
+binary ok
+READY
+== cmd 1 Thu Nov 12 17:39:58 UTC 2026
+== cmd 2 Thu Nov 12 17:52:32 UTC 2026
+

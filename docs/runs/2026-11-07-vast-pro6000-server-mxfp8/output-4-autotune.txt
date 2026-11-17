@@ -1,0 +1,101 @@
+watchdog re-armed for 3600 s
+binary 2 ok
+== check (new binary, FP8 path)
+cuda NVIDIA RTX PRO 6000 Blackwell Server Edition (sm_120)
+all 107 checks pass (tolerance 3e-2)
+== bench V2 mxfp8, autotuned cuBLASLt candidates, full depth
+cuda NVIDIA RTX PRO 6000 Blackwell Server Edition (sm_120)  |  fasth3-v2 1344x768x124  37966 tokens  50 blocks  weights mxfp8
+forward 0: 5.848s (117.0 ms/block; ×50/50 blocks ≈ 5.85s)
+forward 1: 5.515s (110.3 ms/block; ×50/50 blocks ≈ 5.51s)
+forward 2: 5.528s (110.6 ms/block; ×50/50 blocks ≈ 5.53s)
+== bench V2 mxfp8 profile (autotuned)
+profile (CUDA, synced per op): 5537.3 ms in ops; GEMMs 3073.2 ms at 523.7 TFLOP/s
+  vsa fine (3d, d128)                         1742.2 ms  31.5%      50 calls    34.844 ms/call
+  gemm mxfp8 n=28672 k=5376                   1485.3 ms  26.8%      45 calls    33.006 ms/call
+  gemm mxfp8 n=21504 k=5376                    505.3 ms   9.1%      45 calls    11.228 ms/call
+  gemm mxfp8 n=5376 k=14336                    340.5 ms   6.1%      45 calls     7.567 ms/call
+  gemm mxfp8 n=5376 k=7168                     171.7 ms   3.1%      45 calls     3.815 ms/call
+  gemm mxfp8 n=7168 k=5376                     168.7 ms   3.0%      45 calls     3.750 ms/call
+  head_split (qk-norm + rope)                  153.5 ms   2.8%     200 calls     0.767 ms/call
+  gemm n=28672 k=5376                          140.6 ms   2.5%       5 calls    28.114 ms/call
+  mx quant (activations)                       131.2 ms   2.4%     225 calls     0.583 ms/call
+  swiglu                                       113.6 ms   2.1%      50 calls     2.273 ms/call
+  gemm n=21504 k=5376                          105.4 ms   1.9%       5 calls    21.086 ms/call
+  vsa coarse + top-k (4 query tiles)           103.0 ms   1.9%      50 calls     2.060 ms/call
+  rms_norm (+residual, modulation)             101.1 ms   1.8%     101 calls     1.001 ms/call
+  gemm n=5376 k=14336                           71.6 ms   1.3%       5 calls    14.325 ms/call
+  gate_residual                                 60.2 ms   1.1%      50 calls     1.205 ms/call
+  vsa pool                                      59.2 ms   1.1%      50 calls     1.183 ms/call
+  gemm n=5376 k=7168                            35.9 ms   0.6%       5 calls     7.176 ms/call
+  gemm n=7168 k=5376                            35.9 ms   0.6%       5 calls     7.173 ms/call
+  gemm+bias n=32 k=5376 (small)                 11.6 ms   0.2%       1 calls    11.626 ms/call
+  gemm+bias n=5376 k=96                          0.4 ms   0.0%       1 calls     0.375 ms/call
+  gemm+bias n=96 k=5376                          0.4 ms   0.0%       1 calls     0.351 ms/call
+  gemm+bias n=5376 k=32 (small)                  0.0 ms   0.0%       1 calls     0.044 ms/call
+  copy (dtod)                                    0.0 ms   0.0%       1 calls     0.024 ms/call
+== candidates for the n=28672 GEMM, 8 layers (H3_CUDA_LT_NTH)
+nth 0
+forward 0: 0.987s (123.4 ms/block; ×50/8 blocks ≈ 6.17s)
+  gemm mxfp8 n=28672 k=5376                     98.9 ms  10.2%       3 calls    32.952 ms/call
+  gemm mxfp8 n=21504 k=5376                     34.3 ms   3.6%       3 calls    11.434 ms/call
+nth 1
+forward 0: 0.991s (123.9 ms/block; ×50/8 blocks ≈ 6.19s)
+  gemm mxfp8 n=28672 k=5376                     98.8 ms  10.2%       3 calls    32.934 ms/call
+  gemm mxfp8 n=21504 k=5376                     35.7 ms   3.7%       3 calls    11.888 ms/call
+nth 2
+forward 0: 0.992s (124.0 ms/block; ×50/8 blocks ≈ 6.20s)
+  gemm mxfp8 n=28672 k=5376                     98.7 ms  10.2%       3 calls    32.887 ms/call
+  gemm mxfp8 n=21504 k=5376                     34.6 ms   3.6%       3 calls    11.530 ms/call
+nth 3
+forward 0: 0.995s (124.3 ms/block; ×50/8 blocks ≈ 6.22s)
+  gemm mxfp8 n=28672 k=5376                     99.1 ms  10.2%       3 calls    33.042 ms/call
+  gemm mxfp8 n=21504 k=5376                     36.0 ms   3.7%       3 calls    11.987 ms/call
+== bench V2 mxfp8 emulation path, 8 layers (sanity)
+forward 0: 1.015s (126.9 ms/block; ×50/8 blocks ≈ 6.35s)
+== generate V2 mxfp8 (autotuned), same seed
+++ clk /root/clocks-mxt.log
+++ echo 11561
+++ nvidia-smi --query-gpu=timestamp,clocks.sm,clocks.mem,power.draw,temperature.gpu,memory.used,clocks_throttle_reasons.active --format=csv,noheader -l 2
+load 289.4s
+step 1/8 5.85s
+step 2/8 5.55s
+step 3/8 5.57s
+step 4/8 5.58s
+step 5/8 5.59s
+step 6/8 5.60s
+step 7/8 5.61s
+step 8/8 5.62s
+run 0: total 54.50s  prepare 0.48s  adaln 0.00s  denoise 44.97s (["5.85", "5.55", "5.57", "5.58", "5.59", "5.60", "5.61", "5.62"])  decode 8.77s  audio 0.19s
+sm 2235 2332 2422 samples 28
+power 446.59 599.00 604.76
+== generate V2 mxfp8 (autotuned), H3_PROFILE=1
+run 0: total 55.62s  prepare 0.49s  adaln 0.00s  denoise 44.96s (["5.85", "5.55", "5.56", "5.58", "5.59", "5.60", "5.61", "5.62"])  decode 9.86s  audio 0.22s
+== profile: denoise
+profile (CUDA, synced per op): 44554.6 ms in ops; GEMMs 25157.5 ms at 508.8 TFLOP/s
+  vsa fine (3d, d128)                        13658.3 ms  30.7%     400 calls    34.146 ms/call
+  gemm mxfp8 n=28672 k=5376                  11795.2 ms  26.5%     360 calls    32.765 ms/call
+  gemm mxfp8 n=21504 k=5376                   4382.2 ms   9.8%     360 calls    12.173 ms/call
+  gemm mxfp8 n=5376 k=14336                   2909.3 ms   6.5%     360 calls     8.081 ms/call
+  gemm mxfp8 n=5376 k=7168                    1459.1 ms   3.3%     360 calls     4.053 ms/call
+  gemm mxfp8 n=7168 k=5376                    1446.7 ms   3.2%     360 calls     4.019 ms/call
+  head_split (qk-norm + rope)                 1220.4 ms   2.7%    1600 calls     0.763 ms/call
+  gemm n=28672 k=5376                         1141.3 ms   2.6%      40 calls    28.534 ms/call
+  mx quant (activations)                      1042.8 ms   2.3%    1800 calls     0.579 ms/call
+  swiglu                                       902.3 ms   2.0%     400 calls     2.256 ms/call
+  gemm n=21504 k=5376                          862.9 ms   1.9%      40 calls    21.572 ms/call
+  vsa coarse + top-k (4 query tiles)           816.6 ms   1.8%     400 calls     2.041 ms/call
+  rms_norm (+residual, modulation)             806.4 ms   1.8%     808 calls     0.998 ms/call
+  gemm n=5376 k=14336                          576.5 ms   1.3%      40 calls    14.412 ms/call
+  gate_residual                                478.8 ms   1.1%     400 calls     1.197 ms/call
+  vsa pool                                     471.1 ms   1.1%     400 calls     1.178 ms/call
+  gemm n=7168 k=5376                           289.7 ms   0.7%      40 calls     7.242 ms/call
+  gemm n=5376 k=7168                           288.5 ms   0.6%      40 calls     7.213 ms/call
+  gemm+bias n=96 k=5376                          2.9 ms   0.0%       8 calls     0.357 ms/call
+  gemm+bias n=5376 k=96                          2.7 ms   0.0%       8 calls     0.336 ms/call
+  gemm+bias n=32 k=5376 (small)                  0.3 ms   0.0%       8 calls     0.034 ms/call
+  flow_step                                      0.2 ms   0.0%      16 calls     0.015 ms/call
+/w/mxt.y4m /w/mx.y4m differ: char 64, line 3
+autotuned clip differs from the first mxfp8 clip (different algorithm rounding)
+[Parsed_psnr_0 @ 0x60736c97e200] PSNR y:12.058923 u:26.722445 v:28.838326 average:16.596942 min:15.502502 max:17.268359
+exit 0
+

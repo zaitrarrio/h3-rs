@@ -1,0 +1,26 @@
++ timeout 1500 /root/bins/fix generate --backend cuda --seed 1 --width 1344 --height 768 --frames 124 --prompt 'A red fox trots through fresh snow at dawn in a quiet pine forest; snow crunches softly under its paws and a light wind moves through the branches.' --out /root/out/best-stream.y4m --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --tables /root/v2.tables --pv8 --stream-blocks
+h2d probe (256 MB): pageable 38.4 GB/s pinned 57.9 GB/s
+cuda NVIDIA RTX PRO 6000 Blackwell Server Edition (sm_120)
+load 30.0s
+prompt: 33 rows in 72.7s
+mxfp8 n=21504 k=5376 rows=37743: whole 12.18 ms, ×2 12.44 ms → whole; plain fp8 (per-tensor scale) 11.46 ms
+mxfp8 n=28672 k=5376 rows=37743: whole 32.75 ms, ×2 15.42 ms → ×2; plain fp8 (per-tensor scale) 15.54 ms
+step 1/8 5.28s
+step 2/8 4.52s
+step 3/8 4.53s
+step 4/8 4.54s
+step 5/8 4.55s
+step 6/8 4.56s
+step 7/8 4.56s
+step 8/8 4.57s
+== profile: denoise
+prefetch: 400 blocks; compute stream waited 117 ms total, 0.3 ms/block, worst 15.1 ms; copies 11148 ms for 191.29 GB (17.2 GB/s while copying, 0.48 GB/block)
+
+mxfp8 n=16384 k=2048 rows=1797: whole 0.20 ms, ×2 0.22 ms → whole; plain fp8 (per-tensor scale) 0.18 ms
+run 0: total 43.59s  prepare 0.29s  adaln 0.00s  denoise 37.11s (["5.28", "4.52", "4.53", "4.54", "4.55", "4.56", "4.56", "4.57"])  decode 5.90s  audio 0.19s
+wrote /root/out/best-stream.y4m (124 frames 1344x768) and /root/out/best-stream.wav
+mux: ffmpeg -i /root/out/best-stream.y4m -i /root/out/best-stream.wav -c:v libx264 -pix_fmt yuv420p -c:a aac /root/out/best-stream.mp4
+
+real	2m34.870s
+user	1m48.235s
+sys	1m13.455s

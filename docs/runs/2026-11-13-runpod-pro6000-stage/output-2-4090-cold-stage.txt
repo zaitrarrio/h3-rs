@@ -1,0 +1,38 @@
+NVIDIA GeForce RTX 4090, 595.91.07, 450.00 W, 24564 MiB
+Filesystem                Size  Used Avail Use% Mounted on
+overlay                   250G  821M  250G   1% /
+mfs#euro.runpod.net:9421  2.3P  1.9P  404T  83% /workspace
+               total        used        free      shared  buff/cache   available
+Mem:             124          16          68           0          40         108
+mfs#euro.runpod.net:9421 on /workspace type fuse (rw,nosuid,nodev,relatime,user_id=0,group_id=0,allow_other)
+== 1. cold single-stream read of the volume: one untouched 5.3 GB V2 transformer shard
+single-stream cp: 5318721240 bytes in 7654 ms (694 MB/s)
+== 2. cold stage, 8 parallel streams (nothing of these trees read yet on this pod)
+staged h3-8step-mxfp8 [.complete .fv-revision .fv-source transformer.safetensors ]: 25599877462 bytes in 33 s (775 MB/s), 0 files wrong
+staged h3-8step [text_encoder tokenizer vae audio_vae]: 77757397506 bytes in 51 s (1524 MB/s), 0 files wrong
+total 8
+drwxr-xr-x 6 root root  181 Nov 13 02:52 .
+drwxr-xr-x 4 root root   56 Nov 13 02:51 ..
+lrwxrwxrwx 1 root root   37 Nov 13 02:51 .complete -> /workspace/weights/h3-8step/.complete
+lrwxrwxrwx 1 root root   40 Nov 13 02:51 .fv-revision -> /workspace/weights/h3-8step/.fv-revision
+lrwxrwxrwx 1 root root   38 Nov 13 02:51 .fv-source -> /workspace/weights/h3-8step/.fv-source
+drwxr-xr-x 2 root root   80 Nov 13 02:52 audio_vae
+drwxr-xr-x 2 root root 4096 Nov 13 02:52 text_encoder
+drwxr-xr-x 2 root root  113 Nov 13 02:52 tokenizer
+lrwxrwxrwx 1 root root   39 Nov 13 02:51 transformer -> /workspace/weights/h3-8step/transformer
+drwxr-xr-x 2 root root 4096 Nov 13 02:52 vae
+Filesystem      Size  Used Avail Use% Mounted on
+overlay         250G   98G  153G  39% /
+== 3. the V2 recipe from the staged copy (page cache holds what the copy just wrote)
+thread 'main' (8058) panicked at crates/h3-cuda/src/lib.rs:825:56:
+upload: DriverError(CUDA_ERROR_OUT_OF_MEMORY, "out of memory")
+== 4. again from the staged copy
+thread 'main' (8075) panicked at crates/h3-cuda/src/lib.rs:825:56:
+upload: DriverError(CUDA_ERROR_OUT_OF_MEMORY, "out of memory")
+== 5. the same from the volume, now that the volume's files are cached by nothing on this pod (read pattern test)
+thread 'main' (8091) panicked at crates/h3-cuda/src/lib.rs:825:56:
+upload: DriverError(CUDA_ERROR_OUT_OF_MEMORY, "out of memory")
+stage2 done; terminating pod xfngssig824fpl
+exit 0
+
+[exited with code 0]

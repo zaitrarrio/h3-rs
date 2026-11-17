@@ -1,0 +1,20 @@
++ timeout 5000 /w/h3-bin generate --backend cuda --variant fasth3-trim --model-dir /w/h3-base --transformer /w/fasth3-trim-8step-nvfp4/diffusion_models/fastvideo_fasth3_trim_8step_nvfp4.safetensors --width 1344 --height 768 --frames 124 --seed 7 --prompt 'A red fox trots through fresh snow at dawn in a quiet pine forest; snow crunches softly under its paws and a light wind moves through the branches.' --out /root/out/trim.y4m
+cuda NVIDIA RTX PRO 6000 Blackwell Server Edition (sm_120)
+/w/fasth3-trim-8step-nvfp4/diffusion_models/fastvideo_fasth3_trim_8step_nvfp4.safetensors: ComfyUI single-file layout
+load 119.2s
+prompt: 33 rows in 205.9s
+step 1/8 5.46s
+step 2/8 5.48s
+step 3/8 5.49s
+step 4/8 5.51s
+step 5/8 5.52s
+step 6/8 5.52s
+step 7/8 5.53s
+step 8/8 5.54s
+run 0: total 55.80s  prepare 0.34s  adaln 2.93s  denoise 44.05s (["5.46", "5.48", "5.49", "5.51", "5.52", "5.52", "5.53", "5.54"])  decode 8.19s  audio 0.19s
+wrote /root/out/trim.y4m (124 frames 1344x768) and /root/out/trim.wav
+mux: ffmpeg -i /root/out/trim.y4m -i /root/out/trim.wav -c:v libx264 -pix_fmt yuv420p -c:a aac /root/out/trim.mp4
+
+real	6m32.230s
+user	1m52.045s
+sys	1m16.544s

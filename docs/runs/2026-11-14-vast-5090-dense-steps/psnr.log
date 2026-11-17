@@ -1,0 +1,12 @@
++ psnr base25-vsa-d5 base25
++ echo '== psnr base25-vsa-d5 vs base25'
+== psnr base25-vsa-d5 vs base25
++ ffmpeg -loglevel info -i /w/out/base25-vsa-d5.y4m -i /w/out/base25.y4m -lavfi psnr -f null -
++ grep -E PSNR
+[Parsed_psnr_0 @ 0x614ba8b07800] PSNR y:21.821137 u:39.490988 v:39.282891 average:26.442774 min:24.854987 max:27.810989
++ psnr base25-vsa-d3 base25
++ echo '== psnr base25-vsa-d3 vs base25'
+== psnr base25-vsa-d3 vs base25
++ ffmpeg -loglevel info -i /w/out/base25-vsa-d3.y4m -i /w/out/base25.y4m -lavfi psnr -f null -
++ grep -E PSNR
+[Parsed_psnr_0 @ 0x603ecb7a5800] PSNR y:18.531142 u:36.828415 v:36.949039 average:23.177377 min:22.366076 max:23.869943

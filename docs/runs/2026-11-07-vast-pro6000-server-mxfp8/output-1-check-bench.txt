@@ -1,0 +1,122 @@
+watchdog armed
++ nvidia-smi --query-gpu=name,driver_version,power.limit,power.max_limit,memory.total,clocks.max.sm --format=csv
+name, driver_version, power.limit [W], power.max_limit [W], memory.total [MiB], clocks.max.sm [MHz]
+NVIDIA RTX PRO 6000 Blackwell Server Edition, 595.71.05, 600.00 W, 600.00 W, 97887 MiB, 2430 MHz
++ nproc
+16
++ free -g
++ head -2
+               total        used        free      shared  buff/cache   available
+Mem:             124           4          35           0          85         119
++ df -h /w
++ tail -1
+overlay         1.7T  360G  1.3T  22% /
++ echo '== check default kernels (FP8 GEMMs on sm_120)'
+== check default kernels (FP8 GEMMs on sm_120)
++ timeout 1500 /w/h3-bin check --backend cuda
++ grep -v ' ok$'
++ tail -3
+cuda NVIDIA RTX PRO 6000 Blackwell Server Edition (sm_120)
+all 107 checks pass (tolerance 3e-2)
++ echo '== check with the MXFP8 emulation path'
+== check with the MXFP8 emulation path
++ H3_CUDA_NO_FP8=1
++ timeout 1500 /w/h3-bin check --backend cuda
++ grep -v ' ok$'
++ tail -2
+cuda NVIDIA RTX PRO 6000 Blackwell Server Edition (sm_120)
+all 107 checks pass (tolerance 3e-2)
++ echo '== check tolerances of the mxfp8 cases'
+== check tolerances of the mxfp8 cases
++ timeout 1500 /w/h3-bin check --backend cuda
++ grep mxfp8
+linear mxfp8 130x96x200 GeluErf                      rel 3.85e-3  ok
+linear mxfp8 no-bias 130x96x200                      rel 2.79e-3  ok
+linear mxfp8 65x256x64 Silu                          rel 4.17e-3  ok
+linear mxfp8 no-bias 65x256x64                       rel 2.21e-3  ok
+linear mxfp8 300x96x260 None                         rel 2.90e-3  ok
+linear mxfp8 no-bias 300x96x260                      rel 2.76e-3  ok
+linear mxfp8 129x1536x130 None                       rel 4.27e-3  ok
+linear mxfp8 no-bias 129x1536x130                    rel 3.09e-3  ok
+linear mxfp8 1100x1536x200 GeluTanh                  rel 2.93e-3  ok
+linear mxfp8 no-bias 1100x1536x200                   rel 2.95e-3  ok
++ B='bench --backend cuda --variant fasth3-v2 --steps 3'
++ echo '== bench V2 full depth, bf16'
+== bench V2 full depth, bf16
++ timeout 1500 /w/h3-bin bench --backend cuda --variant fasth3-v2 --steps 3
++ grep -E 'weights|forward|adaln'
+cuda NVIDIA RTX PRO 6000 Blackwell Server Edition (sm_120)  |  fasth3-v2 1344x768x124  37966 tokens  50 blocks  weights native
+adaln tables 88.45s (96768 per block)
+forward 0: 6.289s (125.8 ms/block; ×50/50 blocks ≈ 6.29s)
+forward 1: 6.314s (126.3 ms/block; ×50/50 blocks ≈ 6.31s)
+forward 2: 6.336s (126.7 ms/block; ×50/50 blocks ≈ 6.34s)
++ echo '== bench V2 full depth, mxfp8'
+== bench V2 full depth, mxfp8
++ timeout 1500 /w/h3-bin bench --backend cuda --variant fasth3-v2 --steps 3 --weights mxfp8
++ grep -E 'weights|forward|adaln'
+cuda NVIDIA RTX PRO 6000 Blackwell Server Edition (sm_120)  |  fasth3-v2 1344x768x124  37966 tokens  50 blocks  weights mxfp8
+adaln tables 83.47s (96768 per block)
+forward 0: 5.674s (113.5 ms/block; ×50/50 blocks ≈ 5.67s)
+forward 1: 5.655s (113.1 ms/block; ×50/50 blocks ≈ 5.65s)
+forward 2: 5.667s (113.3 ms/block; ×50/50 blocks ≈ 5.67s)
++ echo '== bench V2 mxfp8 profile'
+== bench V2 mxfp8 profile
++ H3_PROFILE=1
++ timeout 1500 /w/h3-bin bench --backend cuda --variant fasth3-v2 --steps 1 --weights mxfp8
++ tail -22
+  gemm mxfp8 n=28672 k=5376                   1484.5 ms  26.1%      45 calls    32.989 ms/call
+  gemm mxfp8 n=21504 k=5376                    505.6 ms   8.9%      45 calls    11.235 ms/call
+  gemm mxfp8 n=5376 k=14336                    338.1 ms   5.9%      45 calls     7.513 ms/call
+  kernel                                       284.6 ms   5.0%     225 calls     1.265 ms/call
+  gemm mxfp8 n=5376 k=7168                     171.5 ms   3.0%      45 calls     3.810 ms/call
+  gemm mxfp8 n=7168 k=5376                     169.2 ms   3.0%      45 calls     3.760 ms/call
+  head_split (qk-norm + rope)                  153.8 ms   2.7%     200 calls     0.769 ms/call
+  gemm n=28672 k=5376                          140.0 ms   2.5%       5 calls    28.000 ms/call
+  swiglu                                       113.6 ms   2.0%      50 calls     2.272 ms/call
+  gemm n=21504 k=5376                          104.6 ms   1.8%       5 calls    20.930 ms/call
+  vsa coarse + top-k (4 query tiles)           103.4 ms   1.8%      50 calls     2.069 ms/call
+  rms_norm (+residual, modulation)             101.1 ms   1.8%     101 calls     1.001 ms/call
+  gemm n=5376 k=14336                           71.0 ms   1.2%       5 calls    14.194 ms/call
+  gate_residual                                 60.2 ms   1.1%      50 calls     1.204 ms/call
+  vsa pool                                      59.2 ms   1.0%      50 calls     1.183 ms/call
+  gemm n=5376 k=7168                            35.9 ms   0.6%       5 calls     7.171 ms/call
+  gemm n=7168 k=5376                            35.6 ms   0.6%       5 calls     7.119 ms/call
+  gemm+bias n=32 k=5376 (small)                 13.9 ms   0.2%       1 calls    13.919 ms/call
+  gemm+bias n=5376 k=96                          0.4 ms   0.0%       1 calls     0.374 ms/call
+  gemm+bias n=96 k=5376                          0.4 ms   0.0%       1 calls     0.351 ms/call
+  gemm+bias n=5376 k=32 (small)                  0.0 ms   0.0%       1 calls     0.034 ms/call
+  copy (dtod)                                    0.0 ms   0.0%       1 calls     0.024 ms/call
++ echo '== bench V2 bf16 profile'
+== bench V2 bf16 profile
++ H3_PROFILE=1
++ timeout 1500 /w/h3-bin bench --backend cuda --variant fasth3-v2 --steps 1
++ tail -22
+cuda NVIDIA RTX PRO 6000 Blackwell Server Edition (sm_120)  |  fasth3-v2 1344x768x124  37966 tokens  50 blocks  weights native
+load (synthetic) 140.08s
+adaln tables 83.39s (96768 per block)
+forward 0: 6.310s (126.2 ms/block; ×50/50 blocks ≈ 6.31s)
+profile (CUDA, synced per op): 6307.8 ms in ops; GEMMs 3945.6 ms at 407.9 TFLOP/s
+  vsa fine (3d, d128)                         1773.5 ms  28.1%      50 calls    35.470 ms/call
+  gemm n=28672 k=5376                         1421.4 ms  22.5%      50 calls    28.429 ms/call
+  gemm n=21504 k=5376                         1069.1 ms  16.9%      50 calls    21.383 ms/call
+  gemm n=5376 k=14336                          718.2 ms  11.4%      50 calls    14.363 ms/call
+  gemm n=7168 k=5376                           362.7 ms   5.8%      50 calls     7.254 ms/call
+  gemm n=5376 k=7168                           362.0 ms   5.7%      50 calls     7.241 ms/call
+  head_split (qk-norm + rope)                  152.0 ms   2.4%     200 calls     0.760 ms/call
+  swiglu                                       114.2 ms   1.8%      50 calls     2.284 ms/call
+  vsa coarse + top-k (4 query tiles)           103.1 ms   1.6%      50 calls     2.063 ms/call
+  rms_norm (+residual, modulation)             100.3 ms   1.6%     101 calls     0.993 ms/call
+  gate_residual                                 59.7 ms   0.9%      50 calls     1.193 ms/call
+  vsa pool                                      59.3 ms   0.9%      50 calls     1.186 ms/call
+  gemm+bias n=32 k=5376 (small)                 11.3 ms   0.2%       1 calls    11.341 ms/call
+  gemm+bias n=5376 k=96                          0.4 ms   0.0%       1 calls     0.372 ms/call
+  gemm+bias n=96 k=5376                          0.3 ms   0.0%       1 calls     0.348 ms/call
+  gemm+bias n=5376 k=32 (small)                  0.0 ms   0.0%       1 calls     0.033 ms/call
+  copy (dtod)                                    0.0 ms   0.0%       1 calls     0.023 ms/call
++ echo '== bench V2 mxfp8 with the emulation (sanity, slower)'
+== bench V2 mxfp8 with the emulation (sanity, slower)
++ H3_CUDA_NO_FP8=1
++ timeout 1500 /w/h3-bin bench --backend cuda --variant fasth3-v2 --steps 3 --weights mxfp8 --steps 1
++ grep -E forward
+exit 1
+

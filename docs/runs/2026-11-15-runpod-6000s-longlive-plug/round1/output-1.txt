@@ -1,0 +1,122 @@
++ O=/root/out
++ mkdir -p /root/out
++ cd /root
++ FOX='A red fox trots through fresh snow at dawn in a quiet pine forest; snow crunches softly under its paws and a light wind moves through the branches.'
++ A=/workspace/h3-rs/assets
++ PLUG='--variant h3-plug4 --model-dir /w/h3-base --variant-dir /root/plug4'
++ FAST='--weights mxfp8 --decoder-weights mxfp8 --pv8'
++ nvidia-smi --query-gpu=name,driver_version,power.limit,memory.total,clocks.max.sm --format=csv,noheader
+NVIDIA RTX PRO 6000 Blackwell Server Edition, 595.91.07, 600.00 W, 97887 MiB, 2430 MHz
++ lscpu
++ grep 'Model name'
+Model name:                              AMD EPYC 9555 64-Core Processor
++ free -g
++ head -2
+               total        used        free      shared  buff/cache   available
+Mem:             755         135          68           2         559         619
++ df -h /
++ cat
+Filesystem      Size  Used Avail Use% Mounted on
+overlay         400G  231G  170G  58% /
++ ls /w/h3-base/
+audio_vae
+model_index.json
+sha256.txt
+text_encoder
+text_encoder_fp8
+tokenizer
+transformer
+transformer_prequant_4step-vsa_mxfp8
+transformer_prequant_sol-h3_mxfp8
+vae
++ mkdir -p /root/plug4
++ ls -la /root/plug4
+total 2702420
+drwx------ 2 root root         75 Nov 14 23:33 .
+drwx------ 1 root root        186 Nov 14 23:32 ..
+-rw------- 1 root root 2767268856 Nov 14 23:33 generator_lora.safetensors
+-rw------- 1 root root       7665 Nov 14 23:33 provenance.json
++ sha256sum /root/plug4/generator_lora.safetensors
+4f8175d525f8ba261ce6259b60e58d2ed2fea4880ca3c3c9c09a52e2bb7f61f3  /root/plug4/generator_lora.safetensors
++ echo '== conformance: plain, H3_STALL=1, H3_PROFILE=1, H3_STREAM_STRESS=1'
+== conformance: plain, H3_STALL=1, H3_PROFILE=1, H3_STREAM_STRESS=1
++ for m in plain H3_STALL=1 H3_PROFILE=1 H3_STREAM_STRESS=1
++ echo '-- plain'
+-- plain
+++ '[' plain = plain ']'
++ env timeout 1200 /w/h3-bin check --backend cuda
++ grep -E 'checks|FAIL|panick' /root/out/check-plain.log
+all 170 checks pass (tolerance 3e-2)
++ for m in plain H3_STALL=1 H3_PROFILE=1 H3_STREAM_STRESS=1
++ echo '-- H3_STALL=1'
+-- H3_STALL=1
+++ '[' H3_STALL=1 = plain ']'
+++ echo H3_STALL=1
++ env H3_STALL=1 timeout 1200 /w/h3-bin check --backend cuda
++ grep -E 'checks|FAIL|panick' /root/out/check-H3_STALL=1.log
+all 170 checks pass (tolerance 3e-2)
++ for m in plain H3_STALL=1 H3_PROFILE=1 H3_STREAM_STRESS=1
++ echo '-- H3_PROFILE=1'
+-- H3_PROFILE=1
+++ '[' H3_PROFILE=1 = plain ']'
+++ echo H3_PROFILE=1
++ env H3_PROFILE=1 timeout 1200 /w/h3-bin check --backend cuda
++ grep -E 'checks|FAIL|panick' /root/out/check-H3_PROFILE=1.log
+all 170 checks pass (tolerance 3e-2)
++ for m in plain H3_STALL=1 H3_PROFILE=1 H3_STREAM_STRESS=1
++ echo '-- H3_STREAM_STRESS=1'
+-- H3_STREAM_STRESS=1
+++ '[' H3_STREAM_STRESS=1 = plain ']'
+++ echo H3_STREAM_STRESS=1
++ env H3_STREAM_STRESS=1 timeout 1200 /w/h3-bin check --backend cuda
++ grep -E 'checks|FAIL|panick' /root/out/check-H3_STREAM_STRESS=1.log
+all 170 checks pass (tolerance 3e-2)
++ echo '== AdaLN tables for the four-step ladder (transformer, and transformer_ref for Ref2VA)'
+== AdaLN tables for the four-step ladder (transformer, and transformer_ref for Ref2VA)
++ tail -4
+
+real	3m2.879s
+user	4m56.512s
+sys	1m30.502s
++ tail -4
+
+real	0m0.003s
+user	0m0.001s
+sys	0m0.002s
++ echo '== keep the converted adapter and tables on the volume (add-only)'
+== keep the converted adapter and tables on the volume (add-only)
++ mkdir -p /workspace/h3-rs/plug4
++ for f in /root/plug4/generator_lora.safetensors /root/plug4/provenance.json /root/plug4.tables /root/plug4-ref.tables
+++ basename /root/plug4/generator_lora.safetensors
++ b=generator_lora.safetensors
++ '[' -e /workspace/h3-rs/plug4/generator_lora.safetensors ']'
++ cp /root/plug4/generator_lora.safetensors /workspace/h3-rs/plug4/generator_lora.safetensors
++ for f in /root/plug4/generator_lora.safetensors /root/plug4/provenance.json /root/plug4.tables /root/plug4-ref.tables
+++ basename /root/plug4/provenance.json
++ b=provenance.json
++ '[' -e /workspace/h3-rs/plug4/provenance.json ']'
++ cp /root/plug4/provenance.json /workspace/h3-rs/plug4/provenance.json
++ for f in /root/plug4/generator_lora.safetensors /root/plug4/provenance.json /root/plug4.tables /root/plug4-ref.tables
+++ basename /root/plug4.tables
++ b=plug4.tables
++ '[' -e /workspace/h3-rs/plug4/plug4.tables ']'
++ cp /root/plug4.tables /workspace/h3-rs/plug4/plug4.tables
++ for f in /root/plug4/generator_lora.safetensors /root/plug4/provenance.json /root/plug4.tables /root/plug4-ref.tables
+++ basename /root/plug4-ref.tables
++ b=plug4-ref.tables
++ '[' -e /workspace/h3-rs/plug4/plug4-ref.tables ']'
++ cp /root/plug4-ref.tables /workspace/h3-rs/plug4/plug4-ref.tables
+cp: cannot stat '/root/plug4-ref.tables': No such file or directory
++ ls -la /workspace/h3-rs/plug4
+total 2793523
+drwxrwxrwx 2 root root    3000265 Nov 14 23:37 .
+drwxrwxrwx 6 root root    3000481 Nov 14 23:37 ..
+-rw-rw-rw- 1 root root 2767268856 Nov 14 23:37 generator_lora.safetensors
+-rw-rw-rw- 1 root root   87288980 Nov 14 23:37 plug4.tables
+-rw-rw-rw- 1 root root       7665 Nov 14 23:37 provenance.json
++ tar czf /root/cmd1.tgz -C /root/out .
+++ date -u
++ echo 'cmd1 done Sat Nov 14 23:37:12 UTC 2026'
+cmd1 done Sat Nov 14 23:37:12 UTC 2026
+exit 0
+

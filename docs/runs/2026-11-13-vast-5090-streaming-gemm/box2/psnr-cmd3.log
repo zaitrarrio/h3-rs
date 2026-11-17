@@ -1,0 +1,12 @@
++ psnr base25-fix-split base25-fix
++ echo '== psnr base25-fix-split vs base25-fix'
+== psnr base25-fix-split vs base25-fix
++ grep -E PSNR
++ ffmpeg -loglevel info -i /w/out/base25-fix-split.y4m -i /w/out/base25-fix.y4m -lavfi psnr -f null -
+[Parsed_psnr_0 @ 0x5d91800e7340] PSNR y:inf u:inf v:inf average:inf min:inf max:inf
++ psnr base25-fix-allblocks base25-fix
++ echo '== psnr base25-fix-allblocks vs base25-fix'
+== psnr base25-fix-allblocks vs base25-fix
++ ffmpeg -loglevel info -i /w/out/base25-fix-allblocks.y4m -i /w/out/base25-fix.y4m -lavfi psnr -f null -
++ grep -E PSNR
+[Parsed_psnr_0 @ 0x56b98055b340] PSNR y:24.640585 u:44.677036 v:43.705910 average:29.315939 min:25.956258 max:31.977975

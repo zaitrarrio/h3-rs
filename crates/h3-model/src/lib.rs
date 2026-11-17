@@ -6,6 +6,7 @@
 pub mod audio_vae;
 pub mod check;
 pub mod dit;
+pub mod esrgan;
 pub mod linear;
 pub mod pipeline;
 pub mod regen;

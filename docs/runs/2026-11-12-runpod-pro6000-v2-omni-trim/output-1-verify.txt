@@ -1,0 +1,297 @@
++ date -u
+Thu Nov 12 19:40:56 UTC 2026
++ df -h /workspace
++ cat
+Filesystem                Size  Used Avail Use% Mounted on
+mfs#euro.runpod.net:9421  2.3P  1.9P  406T  83% /workspace
++ nvidia-smi --query-gpu=name,driver_version,power.limit --format=csv,noheader
+NVIDIA RTX PRO 6000 Blackwell Server Edition, 595.91.07, 600.00 W
++ cat
++ n=0
++ read s d
++ '[' -f /workspace/weights/h3-8step/audio_vae/config.json ']'
++ '[' 2271 = 2271 ']'
++ read s d
++ '[' -f /workspace/weights/h3-8step/audio_vae/diffusion_pytorch_model.safetensors ']'
++ '[' 605429340 = 605429340 ']'
++ read s d
++ '[' -f /workspace/weights/h3-8step/text_encoder/chat_template.json ']'
++ '[' 5499 = 5499 ']'
++ read s d
++ '[' -f /workspace/weights/h3-8step/text_encoder/config.json ']'
++ '[' 1474 = 1474 ']'
++ read s d
++ '[' -f /workspace/weights/h3-8step/text_encoder/model-00001-of-00014.safetensors ']'
++ '[' 4932328944 = 4932328944 ']'
++ read s d
++ '[' -f /workspace/weights/h3-8step/text_encoder/model-00002-of-00014.safetensors ']'
++ '[' 4875990528 = 4875990528 ']'
++ read s d
++ '[' -f /workspace/weights/h3-8step/text_encoder/model-00003-of-00014.safetensors ']'
++ '[' 4875990552 = 4875990552 ']'
++ read s d
++ '[' -f /workspace/weights/h3-8step/text_encoder/model-00004-of-00014.safetensors ']'
++ '[' 4875990584 = 4875990584 ']'
++ read s d
++ '[' -f /workspace/weights/h3-8step/text_encoder/model-00005-of-00014.safetensors ']'
++ '[' 4875990584 = 4875990584 ']'
++ read s d
++ '[' -f /workspace/weights/h3-8step/text_encoder/model-00006-of-00014.safetensors ']'
++ '[' 4875990584 = 4875990584 ']'
++ read s d
++ '[' -f /workspace/weights/h3-8step/text_encoder/model-00007-of-00014.safetensors ']'
++ '[' 4875990584 = 4875990584 ']'
++ read s d
++ '[' -f /workspace/weights/h3-8step/text_encoder/model-00008-of-00014.safetensors ']'
++ '[' 4875990584 = 4875990584 ']'
++ read s d
++ '[' -f /workspace/weights/h3-8step/text_encoder/model-00009-of-00014.safetensors ']'
++ '[' 4875990584 = 4875990584 ']'
++ read s d
++ '[' -f /workspace/weights/h3-8step/text_encoder/model-00010-of-00014.safetensors ']'
++ '[' 4875990584 = 4875990584 ']'
++ read s d
++ '[' -f /workspace/weights/h3-8step/text_encoder/model-00011-of-00014.safetensors ']'
++ '[' 4875990584 = 4875990584 ']'
++ read s d
++ '[' -f /workspace/weights/h3-8step/text_encoder/model-00012-of-00014.safetensors ']'
++ '[' 4875990584 = 4875990584 ']'
++ read s d
++ '[' -f /workspace/weights/h3-8step/text_encoder/model-00013-of-00014.safetensors ']'
++ '[' 4875990584 = 4875990584 ']'
++ read s d
++ '[' -f /workspace/weights/h3-8step/text_encoder/model-00014-of-00014.safetensors ']'
++ '[' 3270697008 = 3270697008 ']'
++ read s d
++ '[' -f /workspace/weights/h3-8step/text_encoder/model.safetensors.index.json ']'
++ '[' 97831 = 97831 ']'
++ read s d
++ '[' -f /workspace/weights/h3-8step/text_encoder/preprocessor_config.json ']'
++ '[' 390 = 390 ']'
++ read s d
++ '[' -f /workspace/weights/h3-8step/text_encoder/tokenizer.json ']'
++ '[' 7032403 = 7032403 ']'
++ read s d
++ '[' -f /workspace/weights/h3-8step/text_encoder/tokenizer_config.json ']'
++ '[' 11003 = 11003 ']'
++ read s d
++ '[' -f /workspace/weights/h3-8step/text_encoder/video_preprocessor_config.json ']'
++ '[' 385 = 385 ']'
++ read s d
++ '[' -f /workspace/weights/h3-8step/text_encoder/vocab.json ']'
++ '[' 2776833 = 2776833 ']'
++ read s d
++ '[' -f /workspace/weights/h3-8step/tokenizer/merges.txt ']'
++ '[' 1671839 = 1671839 ']'
++ read s d
++ '[' -f /workspace/weights/h3-8step/tokenizer/tokenizer.json ']'
++ '[' 7032403 = 7032403 ']'
++ read s d
++ '[' -f /workspace/weights/h3-8step/tokenizer/tokenizer_config.json ']'
++ '[' 11003 = 11003 ']'
++ read s d
++ '[' -f /workspace/weights/h3-8step/tokenizer/vocab.json ']'
++ '[' 2776833 = 2776833 ']'
++ read s d
++ '[' -f /workspace/weights/h3-8step/transformer/config.json ']'
++ '[' 546 = 546 ']'
++ read s d
++ '[' -f /workspace/weights/h3-8step/transformer/diffusion_pytorch_model-00001-of-00014.safetensors ']'
++ '[' 5331008552 = 5331008552 ']'
++ read s d
++ '[' -f /workspace/weights/h3-8step/transformer/diffusion_pytorch_model-00002-of-00014.safetensors ']'
++ '[' 5318721256 = 5318721256 ']'
++ read s d
++ '[' -f /workspace/weights/h3-8step/transformer/diffusion_pytorch_model-00003-of-00014.safetensors ']'
++ '[' 5318721248 = 5318721248 ']'
++ read s d
++ '[' -f /workspace/weights/h3-8step/transformer/diffusion_pytorch_model-00004-of-00014.safetensors ']'
++ '[' 4875566048 = 4875566048 ']'
++ read s d
++ '[' -f /workspace/weights/h3-8step/transformer/diffusion_pytorch_model-00005-of-00014.safetensors ']'
++ '[' 5318505992 = 5318505992 ']'
++ read s d
++ '[' -f /workspace/weights/h3-8step/transformer/diffusion_pytorch_model-00006-of-00014.safetensors ']'
++ '[' 5164580688 = 5164580688 ']'
++ read s d
++ '[' -f /workspace/weights/h3-8step/transformer/diffusion_pytorch_model-00007-of-00014.safetensors ']'
++ '[' 5318721240 = 5318721240 ']'
++ read s d
++ '[' -f /workspace/weights/h3-8step/transformer/diffusion_pytorch_model-00008-of-00014.safetensors ']'
++ '[' 5318721248 = 5318721248 ']'
++ read s d
++ '[' -f /workspace/weights/h3-8step/transformer/diffusion_pytorch_model-00009-of-00014.safetensors ']'
++ '[' 4875566056 = 4875566056 ']'
++ read s d
++ '[' -f /workspace/weights/h3-8step/transformer/diffusion_pytorch_model-00010-of-00014.safetensors ']'
++ '[' 5318505984 = 5318505984 ']'
++ read s d
++ '[' -f /workspace/weights/h3-8step/transformer/diffusion_pytorch_model-00011-of-00014.safetensors ']'
++ '[' 5164580688 = 5164580688 ']'
++ read s d
++ '[' -f /workspace/weights/h3-8step/transformer/diffusion_pytorch_model-00012-of-00014.safetensors ']'
++ '[' 5318721256 = 5318721256 ']'
++ read s d
++ '[' -f /workspace/weights/h3-8step/transformer/diffusion_pytorch_model-00013-of-00014.safetensors ']'
++ '[' 5318721208 = 5318721208 ']'
++ read s d
++ '[' -f /workspace/weights/h3-8step/transformer/diffusion_pytorch_model-00014-of-00014.safetensors ']'
++ '[' 2138941296 = 2138941296 ']'
++ read s d
++ '[' -f /workspace/weights/h3-8step/transformer/diffusion_pytorch_model.safetensors.index.json ']'
++ '[' 70079 = 70079 ']'
++ read s d
++ '[' -f /workspace/weights/h3-8step/vae/config.json ']'
++ '[' 2011 = 2011 ']'
++ read s d
++ '[' -f /workspace/weights/h3-8step/vae/diffusion_pytorch_model-00001-of-00003.safetensors ']'
++ '[' 5061033024 = 5061033024 ']'
++ read s d
++ '[' -f /workspace/weights/h3-8step/vae/diffusion_pytorch_model-00002-of-00003.safetensors ']'
++ '[' 4955986528 = 4955986528 ']'
++ read s d
++ '[' -f /workspace/weights/h3-8step/vae/diffusion_pytorch_model-00003-of-00003.safetensors ']'
++ '[' 398539336 = 398539336 ']'
++ read s d
++ '[' -f /workspace/weights/h3-8step/vae/diffusion_pytorch_model.safetensors.index.json ']'
++ '[' 74228 = 74228 ']'
++ read s d
++ '[' -f /workspace/weights/fasth3-omni-8step-v1/.gitattributes ']'
++ '[' 1519 = 1519 ']'
++ read s d
++ '[' -f /workspace/weights/fasth3-omni-8step-v1/README.md ']'
++ '[' 5898 = 5898 ']'
++ read s d
++ '[' -f /workspace/weights/fasth3-omni-8step-v1/audio_scheduler/scheduler_config.json ']'
++ '[' 96 = 96 ']'
++ read s d
++ '[' -f /workspace/weights/fasth3-omni-8step-v1/checkpoint-identity.json ']'
++ '[' 3115 = 3115 ']'
++ read s d
++ '[' -f /workspace/weights/fasth3-omni-8step-v1/export_manifest.json ']'
++ '[' 776 = 776 ']'
++ read s d
++ '[' -f /workspace/weights/fasth3-omni-8step-v1/fastvideo_inference.json ']'
++ '[' 776 = 776 ']'
++ read s d
++ '[' -f /workspace/weights/fasth3-omni-8step-v1/metadata.json ']'
++ '[' 7672 = 7672 ']'
++ read s d
++ '[' -f /workspace/weights/fasth3-omni-8step-v1/modular_model_index.json ']'
++ '[' 2935 = 2935 ']'
++ read s d
++ '[' -f /workspace/weights/fasth3-omni-8step-v1/scheduler/scheduler_config.json ']'
++ '[' 97 = 97 ']'
++ read s d
++ '[' -f /workspace/weights/fasth3-omni-8step-v1/transformer_ref/config.json ']'
++ '[' 566 = 566 ']'
++ read s d
++ '[' -f /workspace/weights/fasth3-omni-8step-v1/transformer_ref/diffusion_pytorch_model-00001-of-00014.safetensors ']'
++ '[' 5296609992 = 5296609992 ']'
++ read s d
++ '[' -f /workspace/weights/fasth3-omni-8step-v1/transformer_ref/diffusion_pytorch_model-00002-of-00014.safetensors ']'
++ '[' 5318721248 = 5318721248 ']'
++ read s d
++ '[' -f /workspace/weights/fasth3-omni-8step-v1/transformer_ref/diffusion_pytorch_model-00003-of-00014.safetensors ']'
++ '[' 5318721240 = 5318721240 ']'
++ read s d
++ '[' -f /workspace/weights/fasth3-omni-8step-v1/transformer_ref/diffusion_pytorch_model-00004-of-00014.safetensors ']'
++ '[' 4952636512 = 4952636512 ']'
++ read s d
++ '[' -f /workspace/weights/fasth3-omni-8step-v1/transformer_ref/diffusion_pytorch_model-00005-of-00014.safetensors ']'
++ '[' 5318505992 = 5318505992 ']'
++ read s d
++ '[' -f /workspace/weights/fasth3-omni-8step-v1/transformer_ref/diffusion_pytorch_model-00006-of-00014.safetensors ']'
++ '[' 5164580688 = 5164580688 ']'
++ read s d
++ '[' -f /workspace/weights/fasth3-omni-8step-v1/transformer_ref/diffusion_pytorch_model-00007-of-00014.safetensors ']'
++ '[' 5318721240 = 5318721240 ']'
++ read s d
++ '[' -f /workspace/weights/fasth3-omni-8step-v1/transformer_ref/diffusion_pytorch_model-00008-of-00014.safetensors ']'
++ '[' 5318721248 = 5318721248 ']'
++ read s d
++ '[' -f /workspace/weights/fasth3-omni-8step-v1/transformer_ref/diffusion_pytorch_model-00009-of-00014.safetensors ']'
++ '[' 4875566056 = 4875566056 ']'
++ read s d
++ '[' -f /workspace/weights/fasth3-omni-8step-v1/transformer_ref/diffusion_pytorch_model-00010-of-00014.safetensors ']'
++ '[' 5318505984 = 5318505984 ']'
++ read s d
++ '[' -f /workspace/weights/fasth3-omni-8step-v1/transformer_ref/diffusion_pytorch_model-00011-of-00014.safetensors ']'
++ '[' 5164580688 = 5164580688 ']'
++ read s d
++ '[' -f /workspace/weights/fasth3-omni-8step-v1/transformer_ref/diffusion_pytorch_model-00012-of-00014.safetensors ']'
++ '[' 5318721256 = 5318721256 ']'
++ read s d
++ '[' -f /workspace/weights/fasth3-omni-8step-v1/transformer_ref/diffusion_pytorch_model-00013-of-00014.safetensors ']'
++ '[' 5318721208 = 5318721208 ']'
++ read s d
++ '[' -f /workspace/weights/fasth3-omni-8step-v1/transformer_ref/diffusion_pytorch_model-00014-of-00014.safetensors ']'
++ '[' 2138941296 = 2138941296 ']'
++ read s d
++ '[' -f /workspace/weights/fasth3-omni-8step-v1/transformer_ref/diffusion_pytorch_model.safetensors.index.json ']'
++ '[' 70079 = 70079 ']'
++ read s d
++ '[' -f /workspace/weights/fasth3-trim-8step-nvfp4/README.md ']'
++ '[' 2247 = 2247 ']'
++ read s d
++ '[' -f /workspace/weights/fasth3-trim-8step-nvfp4/diffusion_models/fastvideo_fasth3_trim_8step_nvfp4.safetensors ']'
++ '[' 11894623166 = 11894623166 ']'
++ read s d
++ echo 'missing: 0'
+missing: 0
++ mark h3-8step 3da2ddfe1954d9cda4c05b643dc0f26007a655c5 r2
++ d=/workspace/weights/h3-8step
++ '[' -f /workspace/weights/h3-8step/.complete ']'
++ ln -sfn /workspace/weights/h3-8step /w/h3-8step
++ du -sh /workspace/weights/h3-8step
+138G	/workspace/weights/h3-8step
++ mark fasth3-omni-8step-v1 main-20261112 hf
++ d=/workspace/weights/fasth3-omni-8step-v1
++ '[' -f /workspace/weights/fasth3-omni-8step-v1/.complete ']'
++ ln -sfn /workspace/weights/fasth3-omni-8step-v1 /w/fasth3-omni-8step-v1
++ du -sh /workspace/weights/fasth3-omni-8step-v1
+66G	/workspace/weights/fasth3-omni-8step-v1
++ mark fasth3-trim-8step-nvfp4 f66c13dc17391dd4da99242a407918b92bf7d5fc r2
++ d=/workspace/weights/fasth3-trim-8step-nvfp4
++ '[' -f /workspace/weights/fasth3-trim-8step-nvfp4/.complete ']'
++ ln -sfn /workspace/weights/fasth3-trim-8step-nvfp4 /w/fasth3-trim-8step-nvfp4
++ du -sh /workspace/weights/fasth3-trim-8step-nvfp4
+12G	/workspace/weights/fasth3-trim-8step-nvfp4
++ ls /w
+FastH3-4-step-Preview-v1-LoRA
+auxiliary
+fasth3-omni-8step-v1
+fasth3-trim-8step-nvfp4
+h3-8step
+h3-8step-mxfp8
+h3-base
+h3-bin
+h3-ref2va
+h3-to-ltx
+ltx25
+ltx25-dev
+ltx25-ic-lora-ingredients
+open-h3-regenerate-2k
+pika-h3-flex
+upscaler
++ sort -h
++ du -sh /workspace/weights/FastH3-4-step-Preview-v1-LoRA /workspace/weights/auxiliary /workspace/weights/fasth3-omni-8step-v1 /workspace/weights/fasth3-trim-8step-nvfp4 /workspace/weights/h3-8step /workspace/weights/h3-8step-mxfp8 /workspace/weights/h3-base /workspace/weights/h3-ref2va /workspace/weights/h3-to-ltx /workspace/weights/ltx25 /workspace/weights/ltx25-dev /workspace/weights/ltx25-ic-lora-ingredients /workspace/weights/open-h3-regenerate-2k /workspace/weights/pika-h3-flex /workspace/weights/upscaler
+362M	/workspace/weights/auxiliary
+374M	/workspace/weights/h3-to-ltx
+663M	/workspace/weights/upscaler
+1.3G	/workspace/weights/ltx25-ic-lora-ingredients
+5.2G	/workspace/weights/pika-h3-flex
+6.4G	/workspace/weights/FastH3-4-step-Preview-v1-LoRA
+12G	/workspace/weights/fasth3-trim-8step-nvfp4
+14G	/workspace/weights/open-h3-regenerate-2k
+24G	/workspace/weights/h3-8step-mxfp8
+36G	/workspace/weights/ltx25-dev
+65G	/workspace/weights/h3-ref2va
+66G	/workspace/weights/fasth3-omni-8step-v1
+117G	/workspace/weights/ltx25
+138G	/workspace/weights/h3-8step
+206G	/workspace/weights/h3-base
++ du -sh /workspace
+689G	/workspace
+exit 0
+

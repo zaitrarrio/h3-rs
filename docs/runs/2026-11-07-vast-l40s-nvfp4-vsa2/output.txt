@@ -1,0 +1,210 @@
+### cmd 1: conformance + kernel A/B
+watchdog armed
+name, driver_version, power.limit [W], memory.total [MiB]
+NVIDIA L40S, 595.91.07, 350.00 W, 46068 MiB
+== check cuda v2 kernels (default)
+cuda NVIDIA L40S (sm_89)
+all 95 checks pass (tolerance 3e-2)
+== check cuda v1 kernels
+cuda NVIDIA L40S (sm_89)
+all 95 checks pass (tolerance 3e-2)
+== bench cuda v2, VSA 4 layers 2 steps
+load (synthetic) 18.65s
+adaln tables 7.94s (96768 per block)
+forward 0: 1.092s (272.9 ms/block; ×50/4 blocks ≈ 13.65s)
+forward 1: 1.113s (278.2 ms/block; ×50/4 blocks ≈ 13.91s)
+== bench cuda v2 profile
+cuda NVIDIA L40S (sm_89)  |  fasth3-v2 1344x768x124  37966 tokens  4 blocks  weights native
+load (synthetic) 18.36s
+adaln tables 7.86s (96768 per block)
+forward 0: 1.095s (273.7 ms/block; ×50/4 blocks ≈ 13.68s)
+profile (CUDA, synced per op): 1093.9 ms in ops; GEMMs 566.5 ms at 227.4 TFLOP/s
+  vsa fine (mma2, d128)                        422.2 ms  38.6%       4 calls   105.539 ms/call
+  gemm n=28672 k=5376                          194.9 ms  17.8%       4 calls    48.730 ms/call
+  gemm n=21504 k=5376                          159.0 ms  14.5%       4 calls    39.742 ms/call
+  gemm n=5376 k=14336                          110.6 ms  10.1%       4 calls    27.643 ms/call
+  gemm n=7168 k=5376                            55.3 ms   5.1%       4 calls    13.831 ms/call
+  gemm n=5376 k=7168                            45.1 ms   4.1%       4 calls    11.283 ms/call
+  head_split (qk-norm + rope)                   25.5 ms   2.3%      16 calls     1.592 ms/call
+  vsa coarse + top-k                            25.1 ms   2.3%       4 calls     6.279 ms/call
+  swiglu                                        18.8 ms   1.7%       4 calls     4.704 ms/call
+  rms_norm (+residual, modulation)              17.4 ms   1.6%       9 calls     1.928 ms/call
+  vsa pool                                      11.2 ms   1.0%       4 calls     2.788 ms/call
+  gate_residual                                  7.3 ms   0.7%       4 calls     1.833 ms/call
+  gemm+bias n=96 k=5376                          0.8 ms   0.1%       1 calls     0.847 ms/call
+  gemm+bias n=5376 k=96                          0.5 ms   0.1%       1 calls     0.547 ms/call
+  gemm+bias n=32 k=5376 (small)                  0.1 ms   0.0%       1 calls     0.116 ms/call
+  gemm+bias n=5376 k=32 (small)                  0.1 ms   0.0%       1 calls     0.052 ms/call
+  copy (dtod)                                    0.0 ms   0.0%       1 calls     0.035 ms/call
+== bench cuda v1 profile
+cuda NVIDIA L40S (sm_89)  |  fasth3-v2 1344x768x124  37966 tokens  4 blocks  weights native
+load (synthetic) 18.72s
+adaln tables 7.89s (96768 per block)
+forward 0: 1.015s (253.8 ms/block; ×50/4 blocks ≈ 12.69s)
+profile (CUDA, synced per op): 1014.6 ms in ops; GEMMs 583.0 ms at 221.0 TFLOP/s
+  vsa fine (mma, d128)                         326.5 ms  32.2%       4 calls    81.628 ms/call
+  gemm n=28672 k=5376                          211.1 ms  20.8%       4 calls    52.787 ms/call
+  gemm n=21504 k=5376                          157.4 ms  15.5%       4 calls    39.362 ms/call
+  gemm n=5376 k=14336                          110.7 ms  10.9%       4 calls    27.665 ms/call
+  gemm n=7168 k=5376                            54.2 ms   5.3%       4 calls    13.551 ms/call
+  gemm n=5376 k=7168                            48.0 ms   4.7%       4 calls    11.989 ms/call
+  head_split (qk-norm + rope)                   25.4 ms   2.5%      16 calls     1.586 ms/call
+  vsa coarse + top-k                            25.0 ms   2.5%       4 calls     6.251 ms/call
+  swiglu                                        18.9 ms   1.9%       4 calls     4.720 ms/call
+  rms_norm (+residual, modulation)              17.3 ms   1.7%       9 calls     1.926 ms/call
+  vsa pool                                      11.2 ms   1.1%       4 calls     2.793 ms/call
+  gate_residual                                  7.3 ms   0.7%       4 calls     1.835 ms/call
+  gemm+bias n=96 k=5376                          0.9 ms   0.1%       1 calls     0.853 ms/call
+  gemm+bias n=5376 k=96                          0.5 ms   0.1%       1 calls     0.547 ms/call
+  gemm+bias n=32 k=5376 (small)                  0.1 ms   0.0%       1 calls     0.115 ms/call
+  gemm+bias n=5376 k=32 (small)                  0.0 ms   0.0%       1 calls     0.050 ms/call
+  copy (dtod)                                    0.0 ms   0.0%       1 calls     0.035 ms/call
+== bench cuda v2 dense
+adaln tables 7.72s (96768 per block)
+forward 0: 1.538s (384.6 ms/block; ×50/4 blocks ≈ 19.23s)
+forward 1: 1.576s (393.9 ms/block; ×50/4 blocks ≈ 19.70s)
+== bench cuda v1 dense
+adaln tables 7.58s (96768 per block)
+forward 0: 1.728s (432.0 ms/block; ×50/4 blocks ≈ 21.60s)
+forward 1: 1.784s (446.1 ms/block; ×50/4 blocks ≈ 22.30s)
+== bench cuda v2 omni (tile 128) 4 layers
+load (synthetic) 17.86s
+adaln tables 7.75s (96768 per block)
+forward 0: 0.896s (224.0 ms/block; ×50/4 blocks ≈ 11.20s)
+load (synthetic) 18.71s
+adaln tables 7.57s (96768 per block)
+forward 0: 0.899s (224.8 ms/block; ×50/4 blocks ≈ 11.24s)
+exit 0
+
+
+### run vast-20261107-0345, cmd 1: NVFP4 resident path, Trim clip from the ComfyUI file
+watchdog armed
+name, driver_version, power.limit [W], memory.total [MiB]
+NVIDIA L40S, 595.91.07, 350.00 W, 46068 MiB
+== check cuda (nvfp4 resident path)
+cuda NVIDIA L40S (sm_89)
+all 95 checks pass (tolerance 3e-2)
+0
+weights 90G in 264s
+fastvideo_inference.json
+vae
+== plan
+weights         nvfp4 (227 MiB per block)
+block weights      9550.4 MiB (resident)
+other weights      1564.1 MiB
+AdaLN tables        839.4 MiB (54 entries, resident)
+activations        8152.3 MiB (FFN chunk 37966)
+decode peak        6592.5 MiB
+largest buffer     2076.3 MiB
+peak              20106.2 MiB  fits: true
+== adaln tables (adaln_t_table)
+contract: /w/trimhf/fastvideo_inference.json
+/w/trim/diffusion_models/fastvideo_fasth3_trim_8step_nvfp4.safetensors: ComfyUI single-file layout
+18 timesteps [0.0001001358, 0.0003336072, 0.014211655, 0.032424748, 0.04585159, 0.056831896, 0.090909064, 0.10048044, 0.14285713, 0.16725987, 0.23076922, 0.25, 0.35714287, 0.41176468, 0.5, 0.7, 0.999, 1.0] → /w/trim.tables (146.7 MB) in 29.9s
+
+real	0m37.015s
+user	0m17.889s
+sys	0m19.138s
+== generate fasth3-trim NVFP4 (ComfyUI file), 4-bit resident, 1344x768x124 seed 7
+contract: /w/trimhf/fastvideo_inference.json
+cuda NVIDIA L40S (sm_89)
+/w/trim/diffusion_models/fastvideo_fasth3_trim_8step_nvfp4.safetensors: ComfyUI single-file layout
+load 48.8s
+prompt: 33 rows in 127.5s
+step 1/8 11.37s
+step 2/8 11.64s
+step 3/8 11.78s
+step 4/8 11.88s
+step 5/8 11.97s
+step 6/8 12.04s
+step 7/8 12.11s
+step 8/8 12.13s
+run 0: total 117.33s  prepare 0.36s  adaln 0.00s  denoise 94.91s (["11.37", "11.64", "11.78", "11.88", "11.97", "12.04", "12.11", "12.13"])  decode 21.69s  audio 0.23s
+wrote /w/trim.y4m (124 frames 1344x768) and /w/trim.wav
+mux: ffmpeg -i /w/trim.y4m -i /w/trim.wav -c:v libx264 -pix_fmt yuv420p -c:a aac /w/trim.mp4
+
+real	5m2.273s
+user	3m10.407s
+sys	1m51.951s
+peak device memory: 24261 MiB
+-rw------- 1 root root 146704008 Nov  7 03:42 /w/trim.tables
+-rw-r--r-- 1 root root    662444 Nov  7 03:47 /w/trim.wav
+-rw-r--r-- 1 root root 383976225 Nov  7 03:47 /w/trim.y4m
+uploaded
+exit 0
+
+
+### run vast-20261107-0330, cmd 2: first Trim NVFP4 attempt (bf16 expansion at load, out of memory)
+{
+  "attention_backend": "VIDEO_SPARSE_ATTN_H3",
+  "audio_scheduler_shift": 3.0,
+  "checkpoint_step": 300,
+  "dmd_denoising_steps": [999, 874, 749, 624, 500, 375, 250, 125],
+1
+weights 90G in 254s
+73G	/w/h3
+12G	/w/trim
+6.0G	/w/trimhf
+/w/trimhf:
+fastvideo_inference.json
+vae
+
+/w/trimhf/vae:
+config.json
+diffusion_pytorch_model.safetensors
+minimax_h3_video_vae_int8_convrot.safetensors
+== adaln tables fasth3-trim from the ComfyUI NVFP4 file (adaln_t_table)
+contract: /w/trimhf/fastvideo_inference.json
+/w/trim/diffusion_models/fastvideo_fasth3_trim_8step_nvfp4.safetensors: ComfyUI single-file layout
+18 timesteps [0.0001001358, 0.0003336072, 0.014211655, 0.032424748, 0.04585159, 0.056831896, 0.090909064, 0.10048044, 0.14285713, 0.16725987, 0.23076922, 0.25, 0.35714287, 0.41176468, 0.5, 0.7, 0.999, 1.0] → /w/trim.tables (146.7 MB) in 30.5s
+
+real	0m37.843s
+user	0m18.186s
+sys	0m19.668s
+-rw------- 1 root root 146704008 Nov  7 03:26 /w/trim.tables
+== generate fasth3-trim NVFP4 (ComfyUI file) 1344x768x124 seed 7, v2 kernels
+contract: /w/trimhf/fastvideo_inference.json
+cuda NVIDIA L40S (sm_89)
+/w/trim/diffusion_models/fastvideo_fasth3_trim_8step_nvfp4.safetensors: ComfyUI single-file layout
+load 50.3s
+prompt: 33 rows in 134.4s
+
+thread 'main' (9531) panicked at crates/h3-cuda/src/lib.rs:565:72:
+cuda alloc: DriverError(CUDA_ERROR_OUT_OF_MEMORY, "out of memory")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+real	3m13.148s
+user	1m20.688s
+sys	1m52.518s
+-rw------- 1 root root 146704008 Nov  7 03:26 /w/trim.tables
+[in#0 @ 0x61920d76d480] Error opening input: No such file or directory
+Error opening input file /w/trim.y4m.
+Error opening input files: No such file or directory
+[in#0 @ 0x6395f862f340] Error opening input: No such file or directory
+Error opening input file /w/trim.y4m.
+Error opening input files: No such file or directory
+uploaded
+== same clip with the v1 kernels (sample difference = kernel difference)
+contract: /w/trimhf/fastvideo_inference.json
+cuda NVIDIA L40S (sm_89)
+/w/trim/diffusion_models/fastvideo_fasth3_trim_8step_nvfp4.safetensors: ComfyUI single-file layout
+load 50.4s
+prompt: 33 rows in 133.7s
+
+thread 'main' (9570) panicked at crates/h3-cuda/src/lib.rs:565:72:
+cuda alloc: DriverError(CUDA_ERROR_OUT_OF_MEMORY, "out of memory")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+real	3m12.471s
+user	1m20.717s
+sys	1m51.811s
+[in#0 @ 0x5eb65029d480] Error opening input: No such file or directory
+Error opening input file /w/trim1.y4m.
+Error opening input files: No such file or directory
+[in#0 @ 0x63665471e340] Error opening input: No such file or directory
+Error opening input file /w/trim1.y4m.
+Error opening input files: No such file or directory
+Error opening input file /w/trim.y4m.
+Error opening input files: No such file or directory
+exit 0
+

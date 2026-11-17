@@ -1,0 +1,427 @@
++ O=/root/out
++ mkdir -p /root/out
++ cd /root
++ nvidia-smi --query-gpu=name,driver_version,power.limit,memory.total,pcie.link.gen.max,pcie.link.width.max,clocks.max.sm --format=csv,noheader
+NVIDIA RTX PRO 6000 Blackwell Server Edition, 595.91.07, 600.00 W, 97887 MiB, 5, 16, 2430 MHz
++ lscpu
++ grep 'Model name'
+Model name:                              AMD EPYC 9555 64-Core Processor
++ free -g
++ head -2
+               total        used        free      shared  buff/cache   available
+Mem:             755         165         219           0         374         589
++ df -h /
++ cat
+Filesystem      Size  Used Avail Use% Mounted on
+overlay         250G   98G  153G  39% /
++ ls -la /w/
+total 20028
+drwx------ 2 root root     4096 Nov 14 17:54 .
+drwxr-xr-x 1 root root      164 Nov 14 17:53 ..
+lrwxrwxrwx 1 root root       48 Nov 14 17:53 FastH3-4-step-Preview-v1-LoRA -> /workspace/weights/FastH3-4-step-Preview-v1-LoRA
+lrwxrwxrwx 1 root root       28 Nov 14 17:53 auxiliary -> /workspace/weights/auxiliary
+lrwxrwxrwx 1 root root       39 Nov 14 17:53 fasth3-omni-8step-v1 -> /workspace/weights/fasth3-omni-8step-v1
+lrwxrwxrwx 1 root root       42 Nov 14 17:53 fasth3-trim-8step-nvfp4 -> /workspace/weights/fasth3-trim-8step-nvfp4
+lrwxrwxrwx 1 root root       16 Nov 14 17:54 h3-8step -> /root/w/h3-8step
+lrwxrwxrwx 1 root root       22 Nov 14 17:53 h3-8step-mxfp8 -> /root/w/h3-8step-mxfp8
+lrwxrwxrwx 1 root root       26 Nov 14 17:53 h3-base -> /workspace/weights/h3-base
+-rwx------ 1 root root 20503656 Nov 14 17:53 h3-bin
+lrwxrwxrwx 1 root root       28 Nov 14 17:53 h3-ref2va -> /workspace/weights/h3-ref2va
+lrwxrwxrwx 1 root root       28 Nov 14 17:53 h3-to-ltx -> /workspace/weights/h3-to-ltx
+lrwxrwxrwx 1 root root       24 Nov 14 17:53 ltx25 -> /workspace/weights/ltx25
+lrwxrwxrwx 1 root root       28 Nov 14 17:53 ltx25-dev -> /workspace/weights/ltx25-dev
+lrwxrwxrwx 1 root root       44 Nov 14 17:53 ltx25-ic-lora-ingredients -> /workspace/weights/ltx25-ic-lora-ingredients
+lrwxrwxrwx 1 root root       40 Nov 14 17:53 open-h3-regenerate-2k -> /workspace/weights/open-h3-regenerate-2k
+lrwxrwxrwx 1 root root       31 Nov 14 17:53 pika-h3-flex -> /workspace/weights/pika-h3-flex
+lrwxrwxrwx 1 root root       27 Nov 14 17:53 upscaler -> /workspace/weights/upscaler
++ PROMPT='A red fox trots through fresh snow at dawn in a quiet pine forest; snow crunches softly under its paws and a light wind moves through the branches.'
++ cp /workspace/h3-rs/tables/v2.tables /root/v2.tables
++ V2='--variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --pv8 --tables /root/v2.tables'
++ echo '== conformance'
+== conformance
++ timeout 1800 /w/h3-bin check --backend cuda
++ grep -E 'checks|FAIL|panick' /root/out/check.log
+all 168 checks pass (tolerance 3e-2)
++ echo '== conformance, H3_STREAM_STRESS=1'
+== conformance, H3_STREAM_STRESS=1
++ H3_STREAM_STRESS=1
++ timeout 1800 /w/h3-bin check --backend cuda
++ grep -E 'checks|FAIL|panick' /root/out/check-stress.log
+all 168 checks pass (tolerance 3e-2)
++ echo '== V2 best recipe, resident, stored MXFP8 (the 2026-11-12 record: denoise 37.9 s / decode 5.8 s with --vsa-qk8 alone)'
+== V2 best recipe, resident, stored MXFP8 (the 2026-11-12 record: denoise 37.9 s / decode 5.8 s with --vsa-qk8 alone)
++ H3_STALL=1
++ run v2-best 1500 --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --pv8 --tables /root/v2.tables
++ n=v2-best
++ t=1500
++ shift 2
++ echo '== v2-best: --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --pv8 --tables /root/v2.tables'
+== v2-best: --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --pv8 --tables /root/v2.tables
++ sp=11587
++ nvidia-smi --query-gpu=memory.used,clocks.sm,power.draw --format=csv,noheader,nounits -lms 500
++ rc=0
++ kill 11587
+++ cut -d, -f1 /root/out/v2-best.mem
+++ sort -n
+++ tail -1
+++ awk -F, '$3>300{print $2}' /root/out/v2-best.mem
+++ sort -n
+++ awk '{a[NR]=$1} END{print a[int(NR/2)+1]}'
++ echo 'peak VRAM MiB: 39551; median SM MHz under load: 2280; exit 0'
+peak VRAM MiB: 39551; median SM MHz under load: 2280; exit 0
++ grep -E '^cuda|^load|prompt:|^run |^prefetch|h2d probe|rror|panick|warning|real' /root/out/v2-best.log
++ cut -c1-400
+h2d probe (256 MB): pageable 40.4 GB/s pinned 57.9 GB/s
+cuda NVIDIA RTX PRO 6000 Blackwell Server Edition (sm_120)
+load 31.1s
+prompt: 33 rows in 74.9s
+run 0: total 43.24s  prepare 0.29s  adaln 0.00s  denoise 36.74s (["5.16", "4.47", "4.49", "4.51", "4.51", "4.53", "4.53", "4.53"])  decode 5.93s  audio 0.19s
+real	2m37.027s
++ '[' -f /root/out/v2-best.y4m ']'
+++ stats /root/out/v2-best.y4m
+++ ffmpeg -v info -i /root/out/v2-best.y4m -frames:v 2 -vf signalstats,metadata=print:key=lavfi.signalstats.YAVG -f null -
+++ grep -o 'YAVG=[0-9.]*'
+++ head -2
+++ tr '\n' ' '
++ echo 'luma: YAVG=27.0679 YAVG=58.2973 '
+luma: YAVG=27.0679 YAVG=58.2973 
++ '[' -f /root/out/v2-best.y4m ']'
++ grid /root/out/v2-best.y4m /root/out/v2-best.grid.png
++ ffmpeg -loglevel error -y -i /root/out/v2-best.y4m -vf 'select='\''eq(n\,0)+eq(n\,40)+eq(n\,80)+eq(n\,120)'\'',scale=448:-1,tile=2x2' -vframes 1 /root/out/v2-best.grid.png
++ ffmpeg -loglevel error -y -i /root/out/v2-best.y4m -i /root/out/v2-best.wav -c:v libx264 -crf 18 -pix_fmt yuv420p -c:a aac -b:a 192k -shortest /root/out/v2-best.mp4
++ grep -E '^mxfp8 n=' /root/out/v2-best.log
++ head -8
+mxfp8 n=21504 k=5376 rows=37743: whole 12.46 ms, ×2 12.44 ms → whole; plain fp8 (per-tensor scale) 11.65 ms
+mxfp8 n=28672 k=5376 rows=37743: whole 32.62 ms, ×2 15.20 ms → ×2; plain fp8 (per-tensor scale) 15.60 ms
+mxfp8 n=16384 k=2048 rows=1797: whole 0.20 ms, ×2 0.22 ms → whole; plain fp8 (per-tensor scale) 0.18 ms
++ echo '== without FP8 P.V, for the delta on this box'
+== without FP8 P.V, for the delta on this box
++ H3_STALL=1
++ run v2-qk8 1500 --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --tables /root/v2.tables
++ n=v2-qk8
++ t=1500
++ shift 2
++ echo '== v2-qk8: --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --tables /root/v2.tables'
+== v2-qk8: --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --tables /root/v2.tables
++ sp=11956
++ nvidia-smi --query-gpu=memory.used,clocks.sm,power.draw --format=csv,noheader,nounits -lms 500
++ rc=0
++ kill 11956
+++ cut -d, -f1 /root/out/v2-qk8.mem
+++ tail -1
+++ sort -n
+++ awk -F, '$3>300{print $2}' /root/out/v2-qk8.mem
+++ sort -n
+++ awk '{a[NR]=$1} END{print a[int(NR/2)+1]}'
++ echo 'peak VRAM MiB: 38943; median SM MHz under load: 2257; exit 0'
+peak VRAM MiB: 38943; median SM MHz under load: 2257; exit 0
++ grep -E '^cuda|^load|prompt:|^run |^prefetch|h2d probe|rror|panick|warning|real' /root/out/v2-qk8.log
++ cut -c1-400
+h2d probe (256 MB): pageable 39.9 GB/s pinned 57.9 GB/s
+cuda NVIDIA RTX PRO 6000 Blackwell Server Edition (sm_120)
+load 29.8s
+prompt: 33 rows in 69.6s
+run 0: total 44.37s  prepare 0.28s  adaln 0.00s  denoise 38.03s (["5.31", "4.63", "4.66", "4.67", "4.68", "4.69", "4.70", "4.70"])  decode 5.77s  audio 0.19s
+real	2m31.394s
++ '[' -f /root/out/v2-qk8.y4m ']'
+++ stats /root/out/v2-qk8.y4m
+++ ffmpeg -v info -i /root/out/v2-qk8.y4m -frames:v 2 -vf signalstats,metadata=print:key=lavfi.signalstats.YAVG -f null -
+++ grep -o 'YAVG=[0-9.]*'
+++ head -2
+++ tr '\n' ' '
++ echo 'luma: YAVG=25.4903 YAVG=56.6775 '
+luma: YAVG=25.4903 YAVG=56.6775 
++ '[' -f /root/out/v2-qk8.y4m ']'
++ grid /root/out/v2-qk8.y4m /root/out/v2-qk8.grid.png
++ ffmpeg -loglevel error -y -i /root/out/v2-qk8.y4m -vf 'select='\''eq(n\,0)+eq(n\,40)+eq(n\,80)+eq(n\,120)'\'',scale=448:-1,tile=2x2' -vframes 1 /root/out/v2-qk8.grid.png
++ ffmpeg -loglevel error -y -i /root/out/v2-qk8.y4m -i /root/out/v2-qk8.wav -c:v libx264 -crf 18 -pix_fmt yuv420p -c:a aac -b:a 192k -shortest /root/out/v2-qk8.mp4
++ psnr v2-best v2-qk8
++ echo '== psnr v2-best vs v2-qk8'
+== psnr v2-best vs v2-qk8
++ ffmpeg -loglevel info -i /root/out/v2-best.y4m -i /root/out/v2-qk8.y4m -lavfi psnr -f null -
++ grep -E PSNR
+[Parsed_psnr_0 @ 0x59e83e463240] PSNR y:20.838444 u:24.368720 v:22.022059 average:22.175521 min:17.392230 max:36.530588
++ echo '== best recipe streamed (the streaming fixes on this card class)'
+== best recipe streamed (the streaming fixes on this card class)
++ H3_STALL=1
++ run v2-best-stream 1500 --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --pv8 --tables /root/v2.tables --stream-blocks
++ n=v2-best-stream
++ t=1500
++ shift 2
++ echo '== v2-best-stream: --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --pv8 --tables /root/v2.tables --stream-blocks'
+== v2-best-stream: --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --pv8 --tables /root/v2.tables --stream-blocks
++ sp=12342
++ nvidia-smi --query-gpu=memory.used,clocks.sm,power.draw --format=csv,noheader,nounits -lms 500
++ rc=0
++ kill 12342
+++ cut -d, -f1 /root/out/v2-best-stream.mem
+++ sort -n
+++ tail -1
+++ awk -F, '$3>300{print $2}' /root/out/v2-best-stream.mem
+++ sort -n
+++ awk '{a[NR]=$1} END{print a[int(NR/2)+1]}'
++ echo 'peak VRAM MiB: 18667; median SM MHz under load: 2287; exit 0'
+peak VRAM MiB: 18667; median SM MHz under load: 2287; exit 0
++ grep -E '^cuda|^load|prompt:|^run |^prefetch|h2d probe|rror|panick|warning|real' /root/out/v2-best-stream.log
++ cut -c1-400
+h2d probe (256 MB): pageable 37.3 GB/s pinned 57.9 GB/s
+cuda NVIDIA RTX PRO 6000 Blackwell Server Edition (sm_120)
+load 30.7s
+prompt: 33 rows in 72.2s
+prefetch: 400 blocks; compute stream waited 118 ms total, 0.3 ms/block, worst 15.1 ms; copies 11127 ms for 191.29 GB (17.2 GB/s while copying, 0.48 GB/block)
+run 0: total 43.50s  prepare 0.29s  adaln 0.00s  denoise 37.09s (["5.24", "4.51", "4.53", "4.54", "4.56", "4.57", "4.57", "4.57"])  decode 5.84s  audio 0.19s
+real	2m35.047s
++ '[' -f /root/out/v2-best-stream.y4m ']'
+++ stats /root/out/v2-best-stream.y4m
+++ ffmpeg -v info -i /root/out/v2-best-stream.y4m -frames:v 2 -vf signalstats,metadata=print:key=lavfi.signalstats.YAVG -f null -
+++ grep -o 'YAVG=[0-9.]*'
+++ head -2
+++ tr '\n' ' '
++ echo 'luma: YAVG=25.1799 YAVG=55.8992 '
+luma: YAVG=25.1799 YAVG=55.8992 
++ '[' -f /root/out/v2-best-stream.y4m ']'
++ grid /root/out/v2-best-stream.y4m /root/out/v2-best-stream.grid.png
++ ffmpeg -loglevel error -y -i /root/out/v2-best-stream.y4m -vf 'select='\''eq(n\,0)+eq(n\,40)+eq(n\,80)+eq(n\,120)'\'',scale=448:-1,tile=2x2' -vframes 1 /root/out/v2-best-stream.grid.png
++ ffmpeg -loglevel error -y -i /root/out/v2-best-stream.y4m -i /root/out/v2-best-stream.wav -c:v libx264 -crf 18 -pix_fmt yuv420p -c:a aac -b:a 192k -shortest /root/out/v2-best-stream.mp4
++ echo '== at ComfyUI'\''s attention budget (keep 10 %, first 2 dense through the dense kernel)'
+== at ComfyUI's attention budget (keep 10 %, first 2 dense through the dense kernel)
++ H3_STALL=1
++ run v2-budget 1500 --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --pv8 --tables /root/v2.tables --vsa-sparsity 0.9 --dense-first-steps 2
++ n=v2-budget
++ t=1500
++ shift 2
++ echo '== v2-budget: --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --pv8 --tables /root/v2.tables --vsa-sparsity 0.9 --dense-first-steps 2'
+== v2-budget: --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --pv8 --tables /root/v2.tables --vsa-sparsity 0.9 --dense-first-steps 2
++ sp=12709
++ nvidia-smi --query-gpu=memory.used,clocks.sm,power.draw --format=csv,noheader,nounits -lms 500
++ rc=0
++ kill 12709
+++ cut -d, -f1 /root/out/v2-budget.mem
+++ sort -n
+++ tail -1
+++ awk -F, '$3>300{print $2}' /root/out/v2-budget.mem
+++ awk '{a[NR]=$1} END{print a[int(NR/2)+1]}'
+++ sort -n
++ echo 'peak VRAM MiB: 40319; median SM MHz under load: 2280; exit 0'
+peak VRAM MiB: 40319; median SM MHz under load: 2280; exit 0
++ grep -E '^cuda|^load|prompt:|^run |^prefetch|h2d probe|rror|panick|warning|real' /root/out/v2-budget.log
++ cut -c1-400
+h2d probe (256 MB): pageable 38.0 GB/s pinned 57.9 GB/s
+cuda NVIDIA RTX PRO 6000 Blackwell Server Edition (sm_120)
+load 31.8s
+prompt: 33 rows in 66.9s
+run 0: total 44.99s  prepare 0.26s  adaln 0.00s  denoise 38.68s (["7.67", "6.99", "3.99", "3.99", "4.01", "4.01", "4.01", "4.01"])  decode 5.78s  audio 0.19s
+real	2m31.506s
++ '[' -f /root/out/v2-budget.y4m ']'
+++ stats /root/out/v2-budget.y4m
+++ grep -o 'YAVG=[0-9.]*'
+++ ffmpeg -v info -i /root/out/v2-budget.y4m -frames:v 2 -vf signalstats,metadata=print:key=lavfi.signalstats.YAVG -f null -
+++ head -2
+++ tr '\n' ' '
++ echo 'luma: YAVG=42.3645 YAVG=67.5529 '
+luma: YAVG=42.3645 YAVG=67.5529 
++ '[' -f /root/out/v2-budget.y4m ']'
++ grid /root/out/v2-budget.y4m /root/out/v2-budget.grid.png
++ ffmpeg -loglevel error -y -i /root/out/v2-budget.y4m -vf 'select='\''eq(n\,0)+eq(n\,40)+eq(n\,80)+eq(n\,120)'\'',scale=448:-1,tile=2x2' -vframes 1 /root/out/v2-budget.grid.png
++ ffmpeg -loglevel error -y -i /root/out/v2-budget.y4m -i /root/out/v2-budget.wav -c:v libx264 -crf 18 -pix_fmt yuv420p -c:a aac -b:a 192k -shortest /root/out/v2-budget.mp4
++ psnr v2-budget v2-best
++ echo '== psnr v2-budget vs v2-best'
+== psnr v2-budget vs v2-best
++ ffmpeg -loglevel info -i /root/out/v2-budget.y4m -i /root/out/v2-best.y4m -lavfi psnr -f null -
++ grep -E PSNR
+[Parsed_psnr_0 @ 0x56f488ec5240] PSNR y:16.616612 u:20.200118 v:18.318312 average:18.136784 min:13.479170 max:27.180342
++ echo '== per-kernel profile of the best recipe'
+== per-kernel profile of the best recipe
++ H3_PROFILE=1
++ run v2-best-prof 1500 --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --pv8 --tables /root/v2.tables
++ n=v2-best-prof
++ t=1500
++ shift 2
++ echo '== v2-best-prof: --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --pv8 --tables /root/v2.tables'
+== v2-best-prof: --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --pv8 --tables /root/v2.tables
++ sp=13095
++ nvidia-smi --query-gpu=memory.used,clocks.sm,power.draw --format=csv,noheader,nounits -lms 500
++ rc=0
++ kill 13095
+++ cut -d, -f1 /root/out/v2-best-prof.mem
+++ sort -n
+++ tail -1
+++ awk -F, '$3>300{print $2}' /root/out/v2-best-prof.mem
+++ sort -n
+++ awk '{a[NR]=$1} END{print a[int(NR/2)+1]}'
++ echo 'peak VRAM MiB: 39551; median SM MHz under load: 2280; exit 0'
+peak VRAM MiB: 39551; median SM MHz under load: 2280; exit 0
++ grep -E '^cuda|^load|prompt:|^run |^prefetch|h2d probe|rror|panick|warning|real' /root/out/v2-best-prof.log
++ cut -c1-400
+cuda NVIDIA RTX PRO 6000 Blackwell Server Edition (sm_120)
+load 28.3s
+prompt: 33 rows in 64.2s
+run 0: total 44.56s  prepare 0.27s  adaln 0.00s  denoise 36.82s (["5.18", "4.48", "4.50", "4.51", "4.53", "4.54", "4.54", "4.54"])  decode 7.16s  audio 0.22s
+real	2m24.765s
++ '[' -f /root/out/v2-best-prof.y4m ']'
+++ stats /root/out/v2-best-prof.y4m
+++ ffmpeg -v info -i /root/out/v2-best-prof.y4m -frames:v 2 -vf signalstats,metadata=print:key=lavfi.signalstats.YAVG -f null -
+++ grep -o 'YAVG=[0-9.]*'
+++ head -2
+++ tr '\n' ' '
++ echo 'luma: YAVG=27.0679 YAVG=58.2973 '
+luma: YAVG=27.0679 YAVG=58.2973 
++ '[' -f /root/out/v2-best-prof.y4m ']'
++ grid /root/out/v2-best-prof.y4m /root/out/v2-best-prof.grid.png
++ ffmpeg -loglevel error -y -i /root/out/v2-best-prof.y4m -vf 'select='\''eq(n\,0)+eq(n\,40)+eq(n\,80)+eq(n\,120)'\'',scale=448:-1,tile=2x2' -vframes 1 /root/out/v2-best-prof.grid.png
++ ffmpeg -loglevel error -y -i /root/out/v2-best-prof.y4m -i /root/out/v2-best-prof.wav -c:v libx264 -crf 18 -pix_fmt yuv420p -c:a aac -b:a 192k -shortest /root/out/v2-best-prof.mp4
++ grep -A32 'profile (CUDA' /root/out/v2-best-prof.log
++ head -140
+profile (CUDA, synced per op): 112.2 ms in ops; GEMMs 104.5 ms at 15.4 TFLOP/s
+  gemm n=10240 k=5120 (small)                   58.3 ms  52.0%      50 calls     1.165 ms/call
+  gemm n=51200 k=5120 (small)                   22.8 ms  20.3%      50 calls     0.456 ms/call
+  gemm n=5120 k=8192 (small)                    12.0 ms  10.7%      50 calls     0.240 ms/call
+  gemm n=5120 k=25600 (small)                   11.5 ms  10.2%      50 calls     0.230 ms/call
+  rms_norm (+residual, modulation)               3.9 ms   3.5%     100 calls     0.039 ms/call
+  head_split (qk-norm + rope)                    1.7 ms   1.5%     150 calls     0.011 ms/call
+  attention (mma2, d128)                         0.8 ms   0.7%      50 calls     0.017 ms/call
+  swiglu                                         0.6 ms   0.6%      50 calls     0.013 ms/call
+  gate_residual                                  0.5 ms   0.5%      50 calls     0.011 ms/call
+
+== profile: prepare (latent encode, AdaLN tables)
+profile (CUDA, synced per op): 1.8 ms in ops; GEMMs 1.6 ms at 33.0 TFLOP/s
+  gemm n=28672 k=5376 (small)                    0.6 ms  31.9%       2 calls     0.293 ms/call
+  gemm n=21504 k=5376 (small)                    0.5 ms  27.2%       2 calls     0.251 ms/call
+  gemm n=5376 k=14336 (small)                    0.3 ms  15.1%       2 calls     0.139 ms/call
+  gemm n=5376 k=7168 (small)                     0.1 ms   8.1%       2 calls     0.074 ms/call
+  rms_norm (+residual, modulation)               0.1 ms   5.9%       5 calls     0.022 ms/call
+  gemm+bias n=5376 k=5120 (small)                0.1 ms   4.4%       1 calls     0.080 ms/call
+  head_split (qk-norm + rope)                    0.1 ms   3.9%       6 calls     0.012 ms/call
+  attention (mma2, d128)                         0.0 ms   1.5%       2 calls     0.014 ms/call
+  swiglu                                         0.0 ms   1.1%       2 calls     0.010 ms/call
+  gate_residual                                  0.0 ms   0.9%       2 calls     0.008 ms/call
+
+mxfp8 n=21504 k=5376 rows=37743: whole 12.43 ms, ×2 12.42 ms → whole; plain fp8 (per-tensor scale) 11.70 ms
+mxfp8 n=28672 k=5376 rows=37743: whole 32.68 ms, ×2 15.21 ms → ×2; plain fp8 (per-tensor scale) 15.56 ms
+step 1/8 5.18s
+step 2/8 4.48s
+step 3/8 4.50s
+step 4/8 4.51s
+step 5/8 4.53s
+step 6/8 4.54s
+step 7/8 4.54s
+step 8/8 4.54s
+== profile: denoise
+profile (CUDA, synced per op): 35992.3 ms in ops; GEMMs 19270.4 ms at 664.2 TFLOP/s
+  vsa fine (3g int8 qk + fp8 pv, d128)        9636.2 ms  26.8%     400 calls    24.091 ms/call
+  gemm mxfp8 n=28672 k=5376 (×2)              5805.7 ms  16.1%     359 calls    16.172 ms/call
+  gemm mxfp8 n=21504 k=5376                   4419.0 ms  12.3%     360 calls    12.275 ms/call
+  gemm mxfp8 n=5376 k=14336                   2934.0 ms   8.2%     360 calls     8.150 ms/call
+  gemm mxfp8 n=5376 k=7168                    1459.4 ms   4.1%     360 calls     4.054 ms/call
+  gemm mxfp8 n=7168 k=5376                    1457.3 ms   4.0%     360 calls     4.048 ms/call
+  head_split (qk-norm + rope)                 1215.2 ms   3.4%    1600 calls     0.759 ms/call
+  gemm n=28672 k=5376                         1139.5 ms   3.2%      40 calls    28.489 ms/call
+  mx quant (activations)                      1040.4 ms   2.9%    1800 calls     0.578 ms/call
+  swiglu                                       909.5 ms   2.5%     400 calls     2.274 ms/call
+  gemm n=21504 k=5376                          863.1 ms   2.4%      40 calls    21.578 ms/call
+  vsa coarse + top-k (4 query tiles)           819.6 ms   2.3%     400 calls     2.049 ms/call
+  rms_norm (+residual, modulation)             804.9 ms   2.2%     808 calls     0.996 ms/call
+  gemm n=5376 k=14336                          575.6 ms   1.6%      40 calls    14.390 ms/call
+  gate_residual                                475.6 ms   1.3%     400 calls     1.189 ms/call
+  vsa pool                                     469.5 ms   1.3%     400 calls     1.174 ms/call
+  attention fp8 v quant                        433.5 ms   1.2%     400 calls     1.084 ms/call
+  vsa int8 q/k quant                           431.3 ms   1.2%     400 calls     1.078 ms/call
+  vsa k mean                                   329.5 ms   0.9%     800 calls     0.412 ms/call
+  gemm n=7168 k=5376                           289.7 ms   0.8%      40 calls     7.243 ms/call
+  gemm n=5376 k=7168                           288.3 ms   0.8%      40 calls     7.207 ms/call
+  attention fp8 v max                          144.5 ms   0.4%     400 calls     0.361 ms/call
+  gemm mxfp8 n=28672 k=5376                     32.8 ms   0.1%       1 calls    32.750 ms/call
+  vsa k mean (fold)                             11.8 ms   0.0%     800 calls     0.015 ms/call
+  gemm+bias n=96 k=5376                          2.8 ms   0.0%       8 calls     0.351 ms/call
+  gemm+bias n=5376 k=96                          2.6 ms   0.0%       8 calls     0.325 ms/call
+  gemm+bias n=32 k=5376 (small)                  0.4 ms   0.0%       8 calls     0.046 ms/call
+  flow_step                                      0.2 ms   0.0%      16 calls     0.014 ms/call
+  copy (dtod)                                    0.2 ms   0.0%       8 calls     0.026 ms/call
+  gemm+bias n=5376 k=32 (small)                  0.2 ms   0.0%       8 calls     0.024 ms/call
+
+mxfp8 n=16384 k=2048 rows=1797: whole 0.20 ms, ×2 0.22 ms → whole; plain fp8 (per-tensor scale) 0.19 ms
+--
+profile (CUDA, synced per op): 1638.8 ms in ops; GEMMs 925.1 ms at 527.0 TFLOP/s
+  gemm mxfp8 n=16384 k=2048                    423.1 ms  25.8%    2016 calls     0.210 ms/call
+  attention (mma2, d64)                        284.2 ms  17.3%    2016 calls     0.141 ms/call
+  gemm mxfp8 n=2048 k=8192                     229.7 ms  14.0%    2016 calls     0.114 ms/call
+  gemm mxfp8 n=6144 k=2048                     173.1 ms  10.6%    2016 calls     0.086 ms/call
+  mx quant (activations)                       115.4 ms   7.0%    8064 calls     0.014 ms/call
+  head_split (qk-norm + rope)                   95.2 ms   5.8%    6048 calls     0.016 ms/call
+  gemm mxfp8 n=2048 k=2048                      93.6 ms   5.7%    2016 calls     0.046 ms/call
+  rms_norm (+residual, modulation)              83.8 ms   5.1%    4032 calls     0.021 ms/call
+  swiglu                                        80.2 ms   4.9%    2016 calls     0.040 ms/call
+  gate_residual                                 44.4 ms   2.7%    2016 calls     0.022 ms/call
+  gemm+bias n=3072 k=2048                        4.6 ms   0.3%      56 calls     0.083 ms/call
+  layer_norm                                     4.3 ms   0.3%      56 calls     0.077 ms/call
+  patchify / unpatchify                          3.1 ms   0.2%     112 calls     0.028 ms/call
+  conv3d (mma)                                   2.6 ms   0.2%      56 calls     0.046 ms/call
+  gemm+bias n=2048 k=24                          1.0 ms   0.1%      56 calls     0.018 ms/call
+  copy (dtod)                                    0.6 ms   0.0%      56 calls     0.010 ms/call
+
+== profile: video decode
+profile (CUDA, synced per op): 819.7 ms in ops; GEMMs 462.6 ms at 526.9 TFLOP/s
+  gemm mxfp8 n=16384 k=2048                    211.7 ms  25.8%    1008 calls     0.210 ms/call
+  attention (mma2, d64)                        142.1 ms  17.3%    1008 calls     0.141 ms/call
+  gemm mxfp8 n=2048 k=8192                     114.7 ms  14.0%    1008 calls     0.114 ms/call
+  gemm mxfp8 n=6144 k=2048                      86.6 ms  10.6%    1008 calls     0.086 ms/call
+  mx quant (activations)                        57.9 ms   7.1%    4032 calls     0.014 ms/call
+  head_split (qk-norm + rope)                   47.7 ms   5.8%    3024 calls     0.016 ms/call
+  gemm mxfp8 n=2048 k=2048                      46.8 ms   5.7%    1008 calls     0.046 ms/call
+  rms_norm (+residual, modulation)              41.9 ms   5.1%    2016 calls     0.021 ms/call
+  swiglu                                        40.1 ms   4.9%    1008 calls     0.040 ms/call
+  gate_residual                                 22.2 ms   2.7%    1008 calls     0.022 ms/call
+  gemm+bias n=3072 k=2048                        2.3 ms   0.3%      28 calls     0.081 ms/call
+  layer_norm                                     2.1 ms   0.3%      28 calls     0.077 ms/call
+  patchify / unpatchify                          1.5 ms   0.2%      56 calls     0.027 ms/call
+  conv3d (mma)                                   1.3 ms   0.2%      28 calls     0.046 ms/call
+  gemm+bias n=2048 k=24                          0.5 ms   0.1%      28 calls     0.018 ms/call
+  copy (dtod)                                    0.3 ms   0.0%      28 calls     0.010 ms/call
+
+== profile: video decode
+profile (CUDA, synced per op): 819.1 ms in ops; GEMMs 462.3 ms at 527.3 TFLOP/s
+  gemm mxfp8 n=16384 k=2048                    211.5 ms  25.8%    1008 calls     0.210 ms/call
+  attention (mma2, d64)                        142.0 ms  17.3%    1008 calls     0.141 ms/call
+  gemm mxfp8 n=2048 k=8192                     114.8 ms  14.0%    1008 calls     0.114 ms/call
+  gemm mxfp8 n=6144 k=2048                      86.5 ms  10.6%    1008 calls     0.086 ms/call
+  mx quant (activations)                        57.7 ms   7.0%    4032 calls     0.014 ms/call
+  head_split (qk-norm + rope)                   47.6 ms   5.8%    3024 calls     0.016 ms/call
+  gemm mxfp8 n=2048 k=2048                      46.8 ms   5.7%    1008 calls     0.046 ms/call
+  rms_norm (+residual, modulation)              41.9 ms   5.1%    2016 calls     0.021 ms/call
+  swiglu                                        40.1 ms   4.9%    1008 calls     0.040 ms/call
+  gate_residual                                 22.2 ms   2.7%    1008 calls     0.022 ms/call
+  gemm+bias n=3072 k=2048                        2.3 ms   0.3%      28 calls     0.081 ms/call
+  layer_norm                                     2.1 ms   0.3%      28 calls     0.077 ms/call
+  patchify / unpatchify                          1.5 ms   0.2%      56 calls     0.027 ms/call
+  conv3d (mma)                                   1.3 ms   0.2%      28 calls     0.046 ms/call
+  gemm+bias n=2048 k=24                          0.5 ms   0.1%      28 calls     0.017 ms/call
+  copy (dtod)                                    0.3 ms   0.0%      28 calls     0.010 ms/call
+
+== profile: video decode
+profile (CUDA, synced per op): 819.3 ms in ops; GEMMs 462.5 ms at 527.1 TFLOP/s
+  gemm mxfp8 n=16384 k=2048                    211.2 ms  25.8%    1008 calls     0.210 ms/call
+  attention (mma2, d64)                        142.0 ms  17.3%    1008 calls     0.141 ms/call
+  gemm mxfp8 n=2048 k=8192                     115.3 ms  14.1%    1008 calls     0.114 ms/call
+  gemm mxfp8 n=6144 k=2048                      86.4 ms  10.6%    1008 calls     0.086 ms/call
+  mx quant (activations)                        57.8 ms   7.0%    4032 calls     0.014 ms/call
+  head_split (qk-norm + rope)                   47.7 ms   5.8%    3024 calls     0.016 ms/call
+  gemm mxfp8 n=2048 k=2048                      46.7 ms   5.7%    1008 calls     0.046 ms/call
+  rms_norm (+residual, modulation)              41.9 ms   5.1%    2016 calls     0.021 ms/call
+  swiglu                                        40.1 ms   4.9%    1008 calls     0.040 ms/call
+  gate_residual                                 22.1 ms   2.7%    1008 calls     0.022 ms/call
+  gemm+bias n=3072 k=2048                        2.3 ms   0.3%      28 calls     0.081 ms/call
+  layer_norm                                     2.1 ms   0.3%      28 calls     0.077 ms/call
+  patchify / unpatchify                          1.5 ms   0.2%      56 calls     0.028 ms/call
++ tar czf /root/cmd1.tgz -C /root/out '--exclude=*.y4m' '--exclude=*.wav' '--exclude=*.mp4' .
+++ cd /root/out
+++ ls v2-best-prof.mp4 v2-best-stream.mp4 v2-best.mp4 v2-budget.mp4 v2-qk8.mp4
++ tar czf /root/mp4.tgz -C /root/out v2-best-prof.mp4 v2-best-stream.mp4 v2-best.mp4 v2-budget.mp4 v2-qk8.mp4
+++ date -u
++ echo 'cmd1 done Sat Nov 14 18:07:38 UTC 2026'
+cmd1 done Sat Nov 14 18:07:38 UTC 2026
++ echo 'terminating pod'
+terminating pod
++ terminate
++ curl -sS -X DELETE -A h3-rs-pod/1 -H @/root/.rp-auth https://rest.runpod.io/v1/pods/0tvagot1aj6hni
+exit 0
+

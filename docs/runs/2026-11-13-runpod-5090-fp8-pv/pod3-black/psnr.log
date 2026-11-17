@@ -1,0 +1,24 @@
++ psnr v2-pv8 v2-qk8
++ echo '== psnr v2-pv8 vs v2-qk8'
+== psnr v2-pv8 vs v2-qk8
++ ffmpeg -loglevel info -i /root/out/v2-pv8.y4m -i /root/out/v2-qk8.y4m -lavfi psnr -f null -
++ grep -E PSNR
+[Parsed_psnr_0 @ 0x5d85ce26a200] PSNR y:inf u:inf v:inf average:inf min:inf max:inf
++ psnr base25-pv8 base25-bf16
++ echo '== psnr base25-pv8 vs base25-bf16'
+== psnr base25-pv8 vs base25-bf16
++ ffmpeg -loglevel info -i /root/out/base25-pv8.y4m -i /root/out/base25-bf16.y4m -lavfi psnr -f null -
++ grep -E PSNR
+[Parsed_psnr_0 @ 0x60fef5da7340] PSNR y:inf u:inf v:inf average:inf min:inf max:inf
++ psnr base25-qk8 base25-bf16
++ echo '== psnr base25-qk8 vs base25-bf16'
+== psnr base25-qk8 vs base25-bf16
++ ffmpeg -loglevel info -i /root/out/base25-qk8.y4m -i /root/out/base25-bf16.y4m -lavfi psnr -f null -
++ grep -E PSNR
+[Parsed_psnr_0 @ 0x601f4a6d2340] PSNR y:inf u:inf v:inf average:inf min:inf max:inf
++ psnr base25-pv8 base25-qk8
++ echo '== psnr base25-pv8 vs base25-qk8'
+== psnr base25-pv8 vs base25-qk8
++ ffmpeg -loglevel info -i /root/out/base25-pv8.y4m -i /root/out/base25-qk8.y4m -lavfi psnr -f null -
++ grep -E PSNR
+[Parsed_psnr_0 @ 0x62f2f8ab9340] PSNR y:inf u:inf v:inf average:inf min:inf max:inf

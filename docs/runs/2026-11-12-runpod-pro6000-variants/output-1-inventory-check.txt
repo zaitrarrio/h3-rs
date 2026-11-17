@@ -1,0 +1,80 @@
+Thu Nov 12 01:27:19 UTC 2026
+name, driver_version, power.limit [W], memory.total [MiB], clocks.max.sm [MHz]
+NVIDIA RTX PRO 6000 Blackwell Server Edition, 595.91.07, 600.00 W, 97887 MiB, 2430 MHz
+128
+               total        used        free      shared  buff/cache   available
+Mem:            2267         254         611          17        1434        2012
+Filesystem                Size  Used Avail Use% Mounted on
+mfs#euro.runpod.net:9421  2.3P  1.9P  397T  83% /workspace
+overlay                    60G  821M   60G   2% /
+== trees on the volume
+/workspace/weights/FastH3-4-step-Preview-v1-LoRA/ 6.4G  complete=y rev=f509e629374c
+/workspace/weights/auxiliary/                    362M  complete=n rev=
+/workspace/weights/h3-base/                      206G  complete=y rev=42ed227ee7df
+/workspace/weights/h3-ref2va/                    65G  complete=y rev=eu-20261011
+/workspace/weights/h3-to-ltx/                    374M  complete=y rev=1792c42689a0
+/workspace/weights/ltx25-dev/                    36G  complete=y rev=426936f8b22d
+/workspace/weights/ltx25-ic-lora-ingredients/    1.3G  complete=y rev=12040e4091ac
+/workspace/weights/ltx25/                        117G  complete=y rev=426936f8b22d
+/workspace/weights/upscaler/                     663M  complete=y rev=3f941d5d1820
+/workspace/weights/h3-base:
+total 27660
+drwxrwxrwx 10 root root 3020555 Oct 13 08:47 .
+drwxrwxrwx 11 root root 3043069 Oct 13 08:47 ..
+-rw-rw-rw-  1 root root      30 Oct 13 08:47 .complete
+-rw-rw-rw-  1 root root  166625 Oct 13 08:47 .fv-manifest.json
+-rw-rw-rw-  1 root root      40 Oct 13 08:47 .fv-revision
+-rw-rw-rw-  1 root root       3 Oct 13 08:47 .fv-source
+drwxrwxrwx  2 root root 2057738 Oct 13 08:39 audio_vae
+-rw-rw-rw-  1 root root    2936 Oct 13 08:45 model_index.json
+-rw-rw-rw-  1 root root    5593 Oct 13 08:47 sha256.txt
+drwxrwxrwx  2 root root 3006214 Oct 13 08:39 text_encoder
+drwxrwxrwx  2 root root 3002416 Oct 13 08:47 text_encoder_fp8
+drwxrwxrwx  2 root root 2001095 Oct 13 08:39 tokenizer
+drwxrwxrwx  2 root root 3006172 Oct 13 08:39 transformer
+drwxrwxrwx  2 root root 3002541 Oct 13 08:47 transformer_prequant_4step-vsa_mxfp8
+drwxrwxrwx  2 root root 3002182 Oct 13 08:47 transformer_prequant_sol-h3_mxfp8
+drwxrwxrwx  2 root root 3000970 Oct 13 08:39 vae
+
+/workspace/weights/h3-ref2va:
+total 13877
+drwxrwxrwx  5 root root 3006431 Oct 13 08:43 .
+drwxrwxrwx 11 root root 3043069 Oct 13 08:47 ..
+-rw-rw-rw-  1 root root      30 Oct 13 08:43 .complete
+-rw-rw-rw-  1 root root   81948 Oct 13 08:43 .fv-manifest.json
+-rw-rw-rw-  1 root root      11 Oct 13 08:43 .fv-revision
+-rw-rw-rw-  1 root root    3505 Oct 13 08:43 .fv-sha256.txt
+-rw-rw-rw-  1 root root       3 Oct 13 08:43 .fv-source
+-rw-rw-rw-  1 root root   17604 Oct 13 08:42 LICENSE
+drwxrwxrwx  2 root root 3000257 Oct 13 08:39 Minimax-h3-Turbo
+-rw-rw-rw-  1 root root   38406 Oct 13 08:42 README.md
+-rw-rw-rw-  1 root root     208 Oct 13 08:42 SOURCE.json
+-rw-rw-rw-  1 root root    2936 Oct 13 08:42 model_index.json
+drwxrwxrwx  2 root root 2001096 Oct 13 08:39 processor
+-rw-rw-rw-  1 root root    3875 Oct 13 08:42 sha256.txt
+drwxrwxrwx  2 root root 3006172 Oct 13 08:39 transformer_ref
+config.json
+diffusion_pytorch_model-00001-of-00014.safetensors
+diffusion_pytorch_model-00002-of-00014.safetensors
+total 6012
+drwxrwxrwx  6 root root 3043069 Nov 12 01:27 .
+drwxr-xr-x  1 root root     164 Nov 12 01:27 ..
+drwxrwxrwx  2 root root   23500 Oct 28 22:02 fv-libs
+drwxrwxrwx  3 root root   45100 Oct 24 01:06 gpucheck-out
+drwxrwxrwx  2 root root       1 Nov 12 01:27 h3-rs
+drwxrwxrwx 11 root root 3043069 Oct 13 08:47 weights
+FastH3-4-step-Preview-v1-LoRA
+auxiliary
+h3-base
+h3-bin
+h3-ref2va
+h3-to-ltx
+ltx25
+ltx25-dev
+ltx25-ic-lora-ingredients
+upscaler
+== check
+cuda NVIDIA RTX PRO 6000 Blackwell Server Edition (sm_120)
+all 115 checks pass (tolerance 3e-2)
+exit 0
+

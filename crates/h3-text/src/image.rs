@@ -37,7 +37,13 @@ fn kernel(f: Filter, x: f32) -> f32 {
         Filter::Lanczos => {
             let x = x.abs();
             if x < 3.0 {
-                let sinc = |v: f32| if v == 0.0 { 1.0 } else { (std::f32::consts::PI * v).sin() / (std::f32::consts::PI * v) };
+                let sinc = |v: f32| {
+                    if v == 0.0 {
+                        1.0
+                    } else {
+                        (std::f32::consts::PI * v).sin() / (std::f32::consts::PI * v)
+                    }
+                };
                 sinc(x) * sinc(x / 3.0)
             } else {
                 0.0
@@ -64,7 +70,9 @@ fn coefficients(f: Filter, in_size: usize, out_size: usize) -> Vec<(usize, Vec<f
             let center = (xx as f32 + 0.5) * scale;
             let xmin = ((center - sup + 0.5).floor().max(0.0)) as usize;
             let xmax = ((center + sup + 0.5).floor() as usize).min(in_size);
-            let mut w: Vec<f32> = (xmin..xmax).map(|x| kernel(f, (x as f32 - center + 0.5) / filter_scale)).collect();
+            let mut w: Vec<f32> = (xmin..xmax)
+                .map(|x| kernel(f, (x as f32 - center + 0.5) / filter_scale))
+                .collect();
             let s: f32 = w.iter().sum();
             if s != 0.0 {
                 w.iter_mut().for_each(|v| *v /= s);
@@ -112,13 +120,19 @@ impl Image {
                 }
             }
         }
-        Image { width, height, rgb: out }
+        Image {
+            width,
+            height,
+            rgb: out,
+        }
     }
 
     pub fn crop(&self, left: usize, top: usize, width: usize, height: usize) -> Image {
         let mut rgb = Vec::with_capacity(width * height * 3);
         for y in top..top + height {
-            rgb.extend_from_slice(&self.rgb[(y * self.width + left) * 3..(y * self.width + left + width) * 3]);
+            rgb.extend_from_slice(
+                &self.rgb[(y * self.width + left) * 3..(y * self.width + left + width) * 3],
+            );
         }
         Image { width, height, rgb }
     }
@@ -137,7 +151,8 @@ impl Image {
         let rh = height.max((self.height as f64 * scale).round() as usize);
         let left = (rw - width) / 2;
         let top = (rh - height) / 2;
-        self.resize(rw, rh, Filter::Lanczos).crop(left, top, width, height)
+        self.resize(rw, rh, Filter::Lanczos)
+            .crop(left, top, width, height)
     }
 
     /// `[3, 1, H, W]` in `[0, 1]`.
@@ -193,7 +208,11 @@ impl Image {
         let (w, h): (usize, usize) = (fields[1].parse().ok()?, fields[2].parse().ok()?);
         i += 1;
         let rgb = bytes.get(i..i + w * h * 3)?.to_vec();
-        Some(Image { width: w, height: h, rgb })
+        Some(Image {
+            width: w,
+            height: h,
+            rgb,
+        })
     }
 }
 

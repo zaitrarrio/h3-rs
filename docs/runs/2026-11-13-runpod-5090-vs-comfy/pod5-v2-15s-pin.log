@@ -1,0 +1,24 @@
+++ cat /root/p15.txt
++ timeout 3000 /w/h3-bin generate --backend cuda --seed 1 --width 1344 --height 768 --frames 362 --prompt 'integrated_multimodal_description: [Shot 1] Live-action, cinematic, a handheld medium-wide shot pushes through a crowded night market alley in the rain-slicked dark, where red paper lanterns and a buzzing blue neon sign reading "24H" light steam rising off a row of food stalls. At a noodle stall a stocky cook in his fifties, bald, in a grease-spotted white vest and a folded towel around his neck, tosses noodles in a blackened wok over a gas ring; a column of orange flame roars up from the wok and lights every face in the queue. The camera trucks right with small amplitude at slow speed past the queue as the cook with a loud, gravelly, carrying voice (S1) shouts over the noise: <d>[English] Two minutes! Sit down!</d> [Shot 2] At 00:03.800, the shot cuts to a low close shot along the stall counter, where a small brown macaque drops from the awning onto the wet steel, snatches a fried dumpling from a stacked bamboo steamer, and bolts left; steam curls in its wake and a woman'\''s hand grabs at empty air where the dumpling was. [Shot 3] At 00:07.600, the camera cuts to a fast tracking shot following the macaque at knee height through the forest of legs, umbrellas and plastic stools, splashing through puddles that reflect the lanterns overhead, the cook'\''s towel flying as he gives chase two steps behind with the wok still in one hand. [Shot 4] At 00:11.400, the shot cuts to a static shot on a rain-beaded corrugated roof where the macaque sits eating the dumpling with both hands, looking straight down into the lens. The camera pushes in with large amplitude at slow speed to a tight close-up of its wet face and the crumbs on its chin, while from below the cook, out of breath, with a low, gravelly voice (S1) says: <d>[English] Keep it. You paid nothing, you learn nothing.</d>
+
+overall_soundscape: Heavy rain drums on awnings and corrugated roofing over the roar of gas burners and the clatter of a steel wok on its ring. A dense crowd talks and laughs in layered voices, plastic stools scrape on wet concrete, and quick bare feet splash through standing water. A steamer lid rattles and falls, and the monkey chitters sharply at the end.
+
+non_diegetic_music: Rapid plucked strings over a fast hand-drum pattern, accelerating through the chase and cutting off abruptly on the final close-up.' --out /root/out/v2-15s-pin.y4m --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --tables /workspace/h3-rs/tables/v2.tables --stream-blocks --ffn-chunk 16384
+cuda NVIDIA GeForce RTX 5090 (sm_120)
+load 28.3s
+prompt: 569 rows in 71.5s
+step 1/8 24.39s
+step 2/8 23.63s
+step 3/8 23.71s
+step 4/8 23.78s
+step 5/8 23.81s
+step 6/8 23.81s
+step 7/8 23.80s
+step 8/8 23.82s
+run 0: total 210.84s  prepare 1.25s  adaln 0.00s  denoise 190.75s (["24.39", "23.63", "23.71", "23.78", "23.81", "23.81", "23.80", "23.82"])  decode 18.11s  audio 0.52s
+wrote /root/out/v2-15s-pin.y4m (362 frames 1344x768) and /root/out/v2-15s-pin.wav
+mux: ffmpeg -i /root/out/v2-15s-pin.y4m -i /root/out/v2-15s-pin.wav -c:v libx264 -pix_fmt yuv420p -c:a aac /root/out/v2-15s-pin.mp4
+
+real	5m19.943s
+user	3m28.557s
+sys	2m26.380s

@@ -7,12 +7,21 @@
 //! ```text
 //! GET  /                         the demo page (web/demo.html)
 //! GET  /api/info                 backend, model, limits, ready / error
-//! POST /api/generate             {prompt, width, height, frames, seed?} → {id}
+//! POST /api/generate             {prompt, width, height, frames, seed?, upscale?} → {id}
 //! GET  /api/jobs/<id>            status, per-stage timings, frames decoded so far
 //! GET  /api/jobs/<id>/frames?from=N
 //!                                binary: u32 LE width, height, first, count; then RGB8
 //! GET  /api/jobs/<id>/audio      WAV (16-bit stereo, 32 kHz) once the clip is done
+//! GET  /api/jobs/<id>/hd?frame=N one upscaled frame (JPEG), once upscaled
 //! ```
+//!
+//! A size off the 32-pixel grid (480×272) renders on the next canvas up
+//! (480×288) and the frames are centre-cropped as they decode. With
+//! `--upscale realesr-animevideov3.safetensors`, a request's `upscale`
+//! (`true` for the default factor, or 2 / 3 / 4) runs Real-ESRGAN on the
+//! finished clip: the low-resolution frames stream as usual, then the job
+//! enters `upscaling` and its frames become available one by one as JPEGs
+//! (`up_frames`), which keeps a clip of 1080p frames to tens of MB.
 //!
 //! It binds 127.0.0.1 by default and sends no CORS headers, so other web
 //! pages cannot queue jobs on your GPU. `--allow-origin <url>` opens the API
@@ -20,7 +29,7 @@
 //! non-JSON bodies and foreign `Origin`s (a cross-site form POST skips the
 //! preflight).
 
-use crate::{AttnArgs, Resolved, media, open_conditioner, open_transformer, sampler_plan};
+use crate::{AttnArgs, Resolved, finish, media, open_conditioner, open_transformer, sampler_plan};
 use anyhow::{Context, Result, anyhow};
 use h3_core::{
     Backend,
@@ -34,6 +43,7 @@ use h3_core::{
 use h3_model::{
     audio_vae::AudioVae,
     dit::{AdalnTables, H3Dit, LoadOptions},
+    esrgan::{Esrgan, EsrganConfig},
     pipeline::{Event, Pipeline, Prompt, Request, SamplerPlan},
     taeh3::TaeH3,
     vae::{Tiling, VideoVae},
@@ -59,6 +69,29 @@ pub struct Settings {
     pub attn: AttnArgs,
     pub tiling: Option<Tiling>,
     pub preview: bool,
+    /// Real-ESRGAN weights (any value with `synthetic`: a tiny random net).
+    pub upscale: Option<PathBuf>,
+}
+
+/// What a job asked of the upscaler.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Upscale {
+    Off,
+    /// [`finish::serve_factor`].
+    Auto,
+    Factor(usize),
+}
+
+/// A parsed `/api/generate` body.
+#[derive(Debug)]
+struct Parsed {
+    prompt: String,
+    /// The canvas the model renders.
+    geometry: Geometry,
+    /// The size the client gets (the canvas, or a centre crop of it).
+    out: (usize, usize),
+    seed: u64,
+    upscale: Upscale,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -68,6 +101,7 @@ enum Stage {
     Preparing,
     Denoising,
     Decoding,
+    Upscaling,
     Done,
     Failed,
 }
@@ -80,6 +114,7 @@ impl Stage {
             Stage::Preparing => "preparing",
             Stage::Denoising => "denoising",
             Stage::Decoding => "decoding",
+            Stage::Upscaling => "upscaling",
             Stage::Done => "done",
             Stage::Failed => "failed",
         }
@@ -90,7 +125,9 @@ struct Job {
     id: u64,
     prompt: String,
     geometry: Geometry,
+    out: (usize, usize),
     seed: u64,
+    upscale: Upscale,
     stage: Stage,
     tokens: usize,
     encode_s: f64,
@@ -106,17 +143,55 @@ struct Job {
     rgb: Vec<u8>,
     audio: Option<Vec<u8>>,
     error: Option<String>,
+    up_factor: Option<usize>,
+    /// Upscaled frames, JPEG.
+    hd: Vec<Vec<u8>>,
+    up_s: f64,
+    up_error: Option<String>,
 }
 
 impl Job {
+    fn new(id: u64, p: Parsed, total_steps: usize) -> Self {
+        Job {
+            id,
+            prompt: p.prompt,
+            geometry: p.geometry,
+            out: p.out,
+            seed: p.seed,
+            upscale: p.upscale,
+            stage: Stage::Queued,
+            tokens: 0,
+            encode_s: 0.0,
+            prepare_s: 0.0,
+            steps: Vec::new(),
+            total_steps,
+            decode_s: 0.0,
+            started: None,
+            total_s: 0.0,
+            width: 0,
+            height: 0,
+            frames: 0,
+            rgb: Vec::new(),
+            audio: None,
+            error: None,
+            up_factor: None,
+            hd: Vec::new(),
+            up_s: 0.0,
+            up_error: None,
+        }
+    }
+
     fn status(&self) -> Value {
         json!({
             "id": self.id, "prompt": self.prompt, "stage": self.stage.name(), "seed": self.seed,
-            "width": self.geometry.width, "height": self.geometry.height, "total_frames": self.geometry.frames,
+            "width": self.out.0, "height": self.out.1, "total_frames": self.geometry.frames,
+            "canvas_width": self.geometry.width, "canvas_height": self.geometry.height,
             "tokens": self.tokens, "encode_s": self.encode_s, "prepare_s": self.prepare_s,
             "steps": self.steps, "total_steps": self.total_steps, "decode_s": self.decode_s,
             "elapsed_s": self.started.map(|t| t.elapsed().as_secs_f64()).unwrap_or(0.0),
             "total_s": self.total_s, "frames": self.frames, "audio": self.audio.is_some(), "error": self.error,
+            "upscale": self.up_factor, "up_frames": self.hd.len(), "up_s": self.up_s, "up_error": self.up_error,
+            "up_width": self.up_factor.map(|k| self.out.0 * k), "up_height": self.up_factor.map(|k| self.out.1 * k),
         })
     }
 }
@@ -129,12 +204,20 @@ pub struct Shared {
 
 impl Shared {
     fn with<R>(&self, id: u64, f: impl FnOnce(&mut Job) -> R) -> Option<R> {
-        self.jobs.lock().unwrap().iter_mut().find(|j| j.id == id).map(f)
+        self.jobs
+            .lock()
+            .unwrap()
+            .iter_mut()
+            .find(|j| j.id == id)
+            .map(f)
     }
 }
 
 enum Text<B: Backend> {
-    Synthetic { dim: usize, only: Option<crate::gallery::Gallery> },
+    Synthetic {
+        dim: usize,
+        only: Option<crate::gallery::Gallery>,
+    },
     Qwen(Box<h3_text::Conditioner<B>>),
     Gallery(crate::gallery::Gallery, usize),
 }
@@ -145,10 +228,15 @@ impl<B: Backend> Text<B> {
             Text::Synthetic { dim, only } => {
                 if let Some(g) = only {
                     if g.find(prompt).is_none() {
-                        return Err(anyhow!("This engine has no text encoder: pick one of its {} gallery prompts.", g.entries.len()));
+                        return Err(anyhow!(
+                            "This engine has no text encoder: pick one of its {} gallery prompts.",
+                            g.entries.len()
+                        ));
                     }
                 }
-                let seed = prompt.bytes().fold(0xcbf2_9ce4_8422_2325u64, |h, b| (h ^ b as u64).wrapping_mul(0x100_0000_01b3));
+                let seed = prompt.bytes().fold(0xcbf2_9ce4_8422_2325u64, |h, b| {
+                    (h ^ b as u64).wrapping_mul(0x100_0000_01b3)
+                });
                 let n = prompt.split_whitespace().count().max(1);
                 Ok((Prompt::text_only(Rng::new(seed).normal(n * dim), *dim), n))
             }
@@ -158,7 +246,12 @@ impl<B: Backend> Text<B> {
                 Ok((p, n))
             }
             Text::Gallery(g, dim) => {
-                let e = g.find(prompt).ok_or_else(|| anyhow!("This engine has no text encoder: pick one of its {} gallery prompts.", g.entries.len()))?;
+                let e = g.find(prompt).ok_or_else(|| {
+                    anyhow!(
+                        "This engine has no text encoder: pick one of its {} gallery prompts.",
+                        g.entries.len()
+                    )
+                })?;
                 Ok((g.prompt(e, *dim)?, e.tokens))
             }
         }
@@ -166,7 +259,12 @@ impl<B: Backend> Text<B> {
 }
 
 /// Loads everything, then runs jobs forever. Runs on the engine thread.
-pub fn engine<B: Backend>(be: B, s: &Settings, shared: Arc<Shared>, rx: mpsc::Receiver<u64>) -> Result<()> {
+pub fn engine<B: Backend>(
+    be: B,
+    s: &Settings,
+    shared: Arc<Shared>,
+    rx: mpsc::Receiver<u64>,
+) -> Result<()> {
     let t0 = Instant::now();
     let stage = |what: &str| {
         eprintln!("engine: {what} ({:.1}s)", t0.elapsed().as_secs_f64());
@@ -175,8 +273,18 @@ pub fn engine<B: Backend>(be: B, s: &Settings, shared: Arc<Shared>, rx: mpsc::Re
         info["loading_s"] = json!(t0.elapsed().as_secs_f64());
     };
     stage(&format!("starting on {}", be.name()));
-    let gallery_list = |g: &crate::gallery::Gallery| json!(g.entries.iter().map(|e| &e.prompt).collect::<Vec<_>>());
-    let (pipe, text, model, variant, src, adapters, tables): (Pipeline<B>, Text<B>, String, Variant, Box<dyn h3_core::weights::WeightSource>, &[h3_core::lora::Adapter], Option<AdalnTables>) = if s.synthetic {
+    let gallery_list = |g: &crate::gallery::Gallery| {
+        json!(g.entries.iter().map(|e| &e.prompt).collect::<Vec<_>>())
+    };
+    let (pipe, text, model, variant, src, adapters, tables): (
+        Pipeline<B>,
+        Text<B>,
+        String,
+        Variant,
+        Box<dyn h3_core::weights::WeightSource>,
+        &[h3_core::lora::Adapter],
+        Option<AdalnTables>,
+    ) = if s.synthetic {
         let cfg = H3Config::tiny_vsa();
         let src = Synthetic { seed: 1 };
         let only = match &s.gallery {
@@ -187,20 +295,58 @@ pub fn engine<B: Backend>(be: B, s: &Settings, shared: Arc<Shared>, rx: mpsc::Re
             }
             None => None,
         };
-        let text = Text::Synthetic { dim: cfg.text_dim, only };
+        let text = Text::Synthetic {
+            dim: cfg.text_dim,
+            only,
+        };
         let mut variant = Variant::by_name("fasth3-v2")?;
         variant.config = cfg.clone();
         let pipe = Pipeline {
-            dit: H3Dit::load(&be, cfg, &src, &LoadOptions { quant: s.attn.weights, stream_blocks: false }, &[])?,
-            vae: Some(VideoVae::load(&be, VideoVaeConfig::tiny(), &src, false, true)?),
-            audio_vae: Some(AudioVae::load(&be, AudioVaeConfig::tiny(), &src, false, true)?),
+            dit: H3Dit::load(
+                &be,
+                cfg,
+                &src,
+                &LoadOptions {
+                    quant: s.attn.weights,
+                    stream_blocks: false,
+                },
+                &[],
+            )?,
+            vae: Some(VideoVae::load(
+                &be,
+                VideoVaeConfig::tiny(),
+                &src,
+                false,
+                true,
+            )?),
+            audio_vae: Some(AudioVae::load(
+                &be,
+                AudioVaeConfig::tiny(),
+                &src,
+                false,
+                true,
+            )?),
             tae: Some(TaeH3::load(&be, TaeH3Config::tiny(), &src)?),
         };
-        (pipe, text, "synthetic tiny model (random weights: output is noise)".to_string(), variant, Box::new(src), &[][..], None)
+        (
+            pipe,
+            text,
+            "synthetic tiny model (random weights: output is noise)".to_string(),
+            variant,
+            Box::new(src),
+            &[][..],
+            None,
+        )
     } else {
-        let r = s.model.as_ref().expect("a resolved model when not synthetic");
+        let r = s
+            .model
+            .as_ref()
+            .expect("a resolved model when not synthetic");
         let cfg = r.variant.config.clone();
-        let model_dir = r.model_dir.as_ref().ok_or_else(|| anyhow!("--model-dir is needed"))?;
+        let model_dir = r
+            .model_dir
+            .as_ref()
+            .ok_or_else(|| anyhow!("--model-dir is needed"))?;
         stage("checking the checkpoint");
         let (src, _) = open_transformer(r)?;
         let text = match &s.gallery {
@@ -219,39 +365,118 @@ pub fn engine<B: Backend>(be: B, s: &Settings, shared: Arc<Shared>, rx: mpsc::Re
             Some(p) => Some(AdalnTables::load(p, &cfg)?),
             None => None,
         };
-        stage(&format!("loading the transformer onto the device ({} blocks, {})", cfg.layers, s.attn.weights));
-        let dit = H3Dit::load(&be, cfg.clone(), &src, &LoadOptions { quant: s.attn.weights, stream_blocks: s.attn.stream_blocks }, &r.adapters)?;
+        stage(&format!(
+            "loading the transformer onto the device ({} blocks, {})",
+            cfg.layers, s.attn.weights
+        ));
+        let dit = H3Dit::load(
+            &be,
+            cfg.clone(),
+            src.as_ref(),
+            &LoadOptions {
+                quant: s.attn.weights,
+                stream_blocks: s.attn.stream_blocks,
+            },
+            &r.adapters,
+        )?;
         stage("loading the decoders");
         let vae_dir = model_dir.join("vae");
-        let vae = VideoVae::load(&be, VideoVaeConfig::h3(), &SafetensorsDir::open(&vae_dir)?, false, !s.preview)?;
-        let audio_vae = AudioVae::load(&be, AudioVaeConfig::h3(), &SafetensorsDir::open(&model_dir.join("audio_vae"))?, false, true)?;
+        let vae = VideoVae::load_with(
+            &be,
+            VideoVaeConfig::h3(),
+            &SafetensorsDir::open(&vae_dir)?,
+            false,
+            !s.preview,
+            s.attn.decoder_weights,
+        )?;
+        let audio_vae = AudioVae::load(
+            &be,
+            AudioVaeConfig::h3(),
+            &SafetensorsDir::open(&model_dir.join("audio_vae"))?,
+            false,
+            true,
+        )?;
         let tae = match (&r.tae, s.preview) {
-            (Some(p), true) => Some(TaeH3::load(&be, TaeH3Config::taeh3(), &SafetensorsDir::open(p)?)?),
+            (Some(p), true) => Some(TaeH3::load(
+                &be,
+                TaeH3Config::taeh3(),
+                &SafetensorsDir::open(p)?,
+            )?),
             (None, true) => return Err(anyhow!("--preview needs --tae")),
             _ => None,
         };
-        let pipe = Pipeline { dit, vae: Some(vae), audio_vae: Some(audio_vae), tae };
+        let pipe = Pipeline {
+            dit,
+            vae: Some(vae),
+            audio_vae: Some(audio_vae),
+            tae,
+        };
         let model = format!(
             "{} · {} forwards · {}{}{}",
-            r.variant.summary.split(':').next().unwrap_or(&r.variant.name),
+            r.variant
+                .summary
+                .split(':')
+                .next()
+                .unwrap_or(&r.variant.name),
             r.variant.forwards(),
-            if s.preview { "TAEH3 preview" } else { "VAE decoder" },
-            if matches!(text, Text::Gallery(..)) { " · prompt gallery" } else { "" },
-            if s.attn.weights != h3_core::quant::WeightQuant::Native { format!(" · {}", s.attn.weights) } else { String::new() }
+            if s.preview {
+                "TAEH3 preview"
+            } else {
+                "VAE decoder"
+            },
+            if matches!(text, Text::Gallery(..)) {
+                " · prompt gallery"
+            } else {
+                ""
+            },
+            if s.attn.weights != h3_core::quant::WeightQuant::Native {
+                format!(" · {}", s.attn.weights)
+            } else {
+                String::new()
+            }
         );
-        (pipe, text, model, r.variant.clone(), Box::new(src), &r.adapters[..], tables)
+        (
+            pipe,
+            text,
+            model,
+            r.variant.clone(),
+            src,
+            &r.adapters[..],
+            tables,
+        )
+    };
+    let upscaler = match &s.upscale {
+        None => None,
+        Some(p) => {
+            stage("loading the upscaler");
+            Some(if s.synthetic {
+                Esrgan::load(&be, EsrganConfig::tiny(), &Synthetic { seed: 5 })?
+            } else {
+                Esrgan::load(
+                    &be,
+                    EsrganConfig::anime_video_v3(),
+                    &SafetensorsDir::open(p)?,
+                )?
+            })
+        }
     };
     stage("waiting for the device");
     be.sync();
     {
         let mut info = shared.info.lock().unwrap();
         info["ready"] = json!(true);
+        info["upscale"] = json!(upscaler.as_ref().map(|u| u.cfg.scale));
+        info["upscale_max_pixels"] = json!(finish::SERVE_MAX_OUT_PIXELS);
         info["model"] = json!(model);
         info["backend"] = json!(be.name());
         info["load_s"] = json!(t0.elapsed().as_secs_f64());
         info["steps"] = json!(variant.forwards());
     }
-    eprintln!("engine ready on {} in {:.1}s", be.name(), t0.elapsed().as_secs_f64());
+    eprintln!(
+        "engine ready on {} in {:.1}s",
+        be.name(),
+        t0.elapsed().as_secs_f64()
+    );
     let sampler = match sampler_plan(&variant) {
         Ok(p) => p,
         Err(e) => return Err(anyhow!("{e}")),
@@ -259,10 +484,10 @@ pub fn engine<B: Backend>(be: B, s: &Settings, shared: Arc<Shared>, rx: mpsc::Re
     let _ = Schedule::uniform;
 
     for id in rx {
-        let Some((prompt, geometry, seed)) = shared.with(id, |j| {
+        let Some((prompt, geometry, out, seed, upscale)) = shared.with(id, |j| {
             j.started = Some(Instant::now());
             j.stage = Stage::Encoding;
-            (j.prompt.clone(), j.geometry, j.seed)
+            (j.prompt.clone(), j.geometry, j.out, j.seed, j.upscale)
         }) else {
             continue;
         };
@@ -282,7 +507,10 @@ pub fn engine<B: Backend>(be: B, s: &Settings, shared: Arc<Shared>, rx: mpsc::Re
                 references: vec![],
                 continuation: None,
                 sampler: match &sampler {
-                    SamplerPlan::Schedules { video, audio } => SamplerPlan::Schedules { video: video.clone(), audio: audio.clone() },
+                    SamplerPlan::Schedules { video, audio } => SamplerPlan::Schedules {
+                        video: video.clone(),
+                        audio: audio.clone(),
+                    },
                     SamplerPlan::Pdd(p) => SamplerPlan::Pdd(p.clone()),
                 },
                 attention: s.attn.attention(&variant),
@@ -291,42 +519,68 @@ pub fn engine<B: Backend>(be: B, s: &Settings, shared: Arc<Shared>, rx: mpsc::Re
                 tiling: s.tiling,
                 preview: s.synthetic || s.preview,
             };
-            let generation = pipe.generate(&be, src.as_ref(), adapters, tables.as_ref(), &req, &mut |ev| match ev {
-                Event::Prepared { secs, .. } => {
-                    shared.with(id, |j| {
-                        j.prepare_s = secs;
-                        j.total_steps = variant.forwards();
-                        j.stage = Stage::Denoising;
-                    });
-                }
-                Event::Step { index, total, secs } => {
-                    shared.with(id, |j| {
-                        j.steps.push(secs);
-                        if index + 1 == total {
-                            j.stage = Stage::Decoding;
-                        }
-                    });
-                }
-                Event::Frames { count, width, height, rgb, .. } => {
-                    shared.with(id, |j| {
-                        j.width = width;
-                        j.height = height;
-                        j.rgb.extend_from_slice(rgb);
-                        j.frames += count;
-                        j.decode_s = j.started.unwrap().elapsed().as_secs_f64() - j.encode_s - j.prepare_s - j.steps.iter().sum::<f64>();
-                    });
-                }
-                Event::Audio { sample_rate, stereo } => {
-                    let mut buf = Vec::new();
-                    let tmp = std::env::temp_dir().join(format!("h3-serve-{}-{id}.wav", std::process::id()));
-                    if media::write_wav(&tmp, stereo, sample_rate as u32).is_ok() {
-                        buf = std::fs::read(&tmp).unwrap_or_default();
-                        let _ = std::fs::remove_file(&tmp);
+            let generation = pipe.generate(
+                &be,
+                src.as_ref(),
+                adapters,
+                tables.as_ref(),
+                &req,
+                &mut |ev| match ev {
+                    Event::Prepared { secs, .. } => {
+                        shared.with(id, |j| {
+                            j.prepare_s = secs;
+                            j.total_steps = variant.forwards();
+                            j.stage = Stage::Denoising;
+                        });
                     }
-                    shared.with(id, |j| j.audio = Some(buf));
-                }
-            })?;
+                    Event::Step { index, total, secs } => {
+                        shared.with(id, |j| {
+                            j.steps.push(secs);
+                            if index + 1 == total {
+                                j.stage = Stage::Decoding;
+                            }
+                        });
+                    }
+                    Event::Frames {
+                        count,
+                        width,
+                        height,
+                        rgb,
+                        ..
+                    } => {
+                        let (ow, oh) = (out.0.min(width), out.1.min(height));
+                        let cropped = finish::crop(rgb, count, width, height, ow, oh);
+                        shared.with(id, |j| {
+                            j.width = ow;
+                            j.height = oh;
+                            j.rgb.extend_from_slice(&cropped);
+                            j.frames += count;
+                            j.decode_s = j.started.unwrap().elapsed().as_secs_f64()
+                                - j.encode_s
+                                - j.prepare_s
+                                - j.steps.iter().sum::<f64>();
+                        });
+                    }
+                    Event::Audio {
+                        sample_rate,
+                        stereo,
+                    } => {
+                        let mut buf = Vec::new();
+                        let tmp = std::env::temp_dir()
+                            .join(format!("h3-serve-{}-{id}.wav", std::process::id()));
+                        if media::write_wav(&tmp, stereo, sample_rate as u32).is_ok() {
+                            buf = std::fs::read(&tmp).unwrap_or_default();
+                            let _ = std::fs::remove_file(&tmp);
+                        }
+                        shared.with(id, |j| j.audio = Some(buf));
+                    }
+                },
+            )?;
             let _ = generation;
+            if upscale != Upscale::Off {
+                let res = upscale_job(&be, upscaler.as_ref(), &shared, id, upscale);
+                shared.with(id, |j| j.up_error = res.err().map(|e| format!("{e:#}")));
+            }
             Ok(())
         };
         let res = run();
@@ -344,11 +598,69 @@ pub fn engine<B: Backend>(be: B, s: &Settings, shared: Arc<Shared>, rx: mpsc::Re
     Ok(())
 }
 
+/// Upscale a finished job's frames and keep them as JPEGs, frame by frame.
+fn upscale_job<B: Backend>(
+    be: &B,
+    up: Option<&Esrgan<B>>,
+    shared: &Shared,
+    id: u64,
+    upscale: Upscale,
+) -> Result<()> {
+    let up = up.ok_or_else(|| anyhow!("this engine has no upscaler (start it with --upscale)"))?;
+    let (rgb, frames, w, h) = shared
+        .with(id, |j| (j.rgb.clone(), j.frames, j.width, j.height))
+        .ok_or_else(|| anyhow!("no such job"))?;
+    let factor = match upscale {
+        Upscale::Factor(k) => k,
+        _ => finish::serve_factor(w, h, up.cfg.scale),
+    };
+    shared.with(id, |j| {
+        j.stage = Stage::Upscaling;
+        j.up_factor = Some(factor);
+    });
+    let t = Instant::now();
+    let (tw, th) = (w * factor, h * factor);
+    finish::upscale(be, up, &rgb, frames, w, h, factor, &mut |_, n, x| {
+        let mut jpegs = vec![Vec::new(); n];
+        std::thread::scope(|sc| -> Result<()> {
+            let hs: Vec<_> = x
+                .chunks(tw * th * 3)
+                .map(|fr| sc.spawn(move || jpeg(fr, tw, th)))
+                .collect();
+            for (o, hnd) in jpegs.iter_mut().zip(hs) {
+                *o = hnd.join().map_err(|_| anyhow!("JPEG encoder panicked"))??;
+            }
+            Ok(())
+        })?;
+        shared.with(id, |j| {
+            j.hd.extend(jpegs);
+            j.up_s = t.elapsed().as_secs_f64();
+        });
+        Ok(())
+    })?;
+    Ok(())
+}
+
+fn jpeg(rgb: &[u8], w: usize, h: usize) -> Result<Vec<u8>> {
+    let mut buf = Vec::new();
+    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut buf, 92).encode(
+        rgb,
+        w as u32,
+        h as u32,
+        image::ExtendedColorType::Rgb8,
+    )?;
+    Ok(buf)
+}
+
 fn hdr(k: &str, v: &str) -> tiny_http::Header {
     tiny_http::Header::from_bytes(k, v).expect("valid header")
 }
 
-fn send<R: std::io::Read>(req: tiny_http::Request, resp: tiny_http::Response<R>, cors: &[tiny_http::Header]) {
+fn send<R: std::io::Read>(
+    req: tiny_http::Request,
+    resp: tiny_http::Response<R>,
+    cors: &[tiny_http::Header],
+) {
     let mut resp = resp;
     for h in cors {
         resp = resp.with_header(h.clone());
@@ -357,13 +669,19 @@ fn send<R: std::io::Read>(req: tiny_http::Request, resp: tiny_http::Response<R>,
 }
 
 fn respond_json(req: tiny_http::Request, code: u16, v: &Value, cors: &[tiny_http::Header]) {
-    let r = tiny_http::Response::from_string(v.to_string()).with_status_code(code).with_header(hdr("Content-Type", "application/json"));
+    let r = tiny_http::Response::from_string(v.to_string())
+        .with_status_code(code)
+        .with_header(hdr("Content-Type", "application/json"));
     send(req, r, cors);
 }
 
 /// CORS headers when the request's `Origin` is the one allowed origin.
 fn cors_for(req: &tiny_http::Request, allow: Option<&str>) -> Vec<tiny_http::Header> {
-    let origin = req.headers().iter().find(|h| h.field.equiv("Origin")).map(|h| h.value.as_str().to_string());
+    let origin = req
+        .headers()
+        .iter()
+        .find(|h| h.field.equiv("Origin"))
+        .map(|h| h.value.as_str().to_string());
     match (origin, allow) {
         (Some(o), Some(a)) if o.trim_end_matches('/') == a.trim_end_matches('/') => vec![
             hdr("Access-Control-Allow-Origin", &o),
@@ -377,7 +695,7 @@ fn cors_for(req: &tiny_http::Request, allow: Option<&str>) -> Vec<tiny_http::Hea
     }
 }
 
-fn parse_request(body: &str, s: &Settings, pika: bool) -> Result<(String, Geometry, u64), String> {
+fn parse_request(body: &str, s: &Settings, pika: bool) -> Result<Parsed, String> {
     let v: Value = serde_json::from_str(body).map_err(|e| format!("body is not JSON: {e}"))?;
     let prompt = v["prompt"].as_str().unwrap_or("").trim().to_string();
     if prompt.is_empty() {
@@ -387,23 +705,87 @@ fn parse_request(body: &str, s: &Settings, pika: bool) -> Result<(String, Geomet
         return Err("Prompts are limited to 2000 characters.".into());
     }
     let num = |k: &str, d: u64| v[k].as_u64().unwrap_or(d) as usize;
-    let frames = if pika { packing::pika::resolve_frames(num("frames", 124)) } else { packing::resolve_num_frames(num("frames", 124)) }.map_err(|e| e.to_string())?;
-    let g = Geometry { width: num("width", 1344), height: num("height", 768), frames };
-    g.validate(16).map_err(|e| e.to_string())?;
+    let frames = if pika {
+        packing::pika::resolve_frames(num("frames", 124))
+    } else {
+        packing::resolve_num_frames(num("frames", 124))
+    }
+    .map_err(|e| e.to_string())?;
+    let out = (num("width", 1344), num("height", 768));
+    // Off the 32-pixel grid: render the next canvas up and crop back (not
+    // for Pika's bucketed canvases).
+    let crop = !pika && out.0 % 16 == 0 && out.1 % 16 == 0;
+    let g = Geometry {
+        width: if crop {
+            finish::canvas_edge(out.0)
+        } else {
+            out.0
+        },
+        height: if crop {
+            finish::canvas_edge(out.1)
+        } else {
+            out.1
+        },
+        frames,
+    };
+    g.validate(16).map_err(|e| {
+        if pika {
+            e.to_string()
+        } else {
+            format!(
+                "{}×{}: width and height must be positive multiples of 16.",
+                out.0, out.1
+            )
+        }
+    })?;
     if g.width * g.height > s.max_pixels {
-        return Err(format!("{}×{} is above this engine's limit of {} pixels per frame.", g.width, g.height, s.max_pixels));
+        return Err(format!(
+            "{}×{} is above this engine's limit of {} pixels per frame.",
+            g.width, g.height, s.max_pixels
+        ));
     }
     if g.frames > s.max_frames {
-        return Err(format!("{} frames is above this engine's limit of {}.", g.frames, s.max_frames));
+        return Err(format!(
+            "{} frames is above this engine's limit of {}.",
+            g.frames, s.max_frames
+        ));
+    }
+    let upscale = match &v["upscale"] {
+        Value::Null | Value::Bool(false) => Upscale::Off,
+        Value::Bool(true) => Upscale::Auto,
+        x => match x.as_u64() {
+            Some(k @ 2..=4) => Upscale::Factor(k as usize),
+            _ => return Err("`upscale` is true, false, 2, 3 or 4.".into()),
+        },
+    };
+    if upscale != Upscale::Off && s.upscale.is_none() {
+        return Err(
+            "This engine has no upscaler: start it with --upscale realesr-animevideov3.safetensors."
+                .into(),
+        );
     }
     let seed = v["seed"].as_u64().unwrap_or_else(|| {
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos() as u64 % 1_000_000_000).unwrap_or(7)
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64 % 1_000_000_000)
+            .unwrap_or(7)
     });
-    Ok((prompt, g, seed))
+    Ok(Parsed {
+        prompt,
+        geometry: g,
+        out,
+        seed,
+        upscale,
+    })
 }
 
 /// Serve until killed. `start_engine` builds the backend on the engine thread.
-pub fn serve(s: Settings, start_engine: impl FnOnce(&Settings, Arc<Shared>, mpsc::Receiver<u64>) -> Result<()> + Send + 'static) -> Result<()> {
+pub fn serve(
+    s: Settings,
+    start_engine: impl FnOnce(&Settings, Arc<Shared>, mpsc::Receiver<u64>) -> Result<()>
+    + Send
+    + 'static,
+) -> Result<()> {
     let pika = s.model.as_ref().is_some_and(|m| m.variant.pika_buckets);
     let shared = Arc::new(Shared {
         jobs: Mutex::new(Vec::new()),
@@ -424,13 +806,18 @@ pub fn serve(s: Settings, start_engine: impl FnOnce(&Settings, Arc<Shared>, mpsc
         std::thread::Builder::new()
             .name("engine".into())
             .spawn(move || {
-                let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| start_engine(&s, shared.clone(), rx)));
+                let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    start_engine(&s, shared.clone(), rx)
+                }));
                 let msg = match run {
                     Ok(Ok(())) => return,
                     Ok(Err(e)) => format!("{e:#}"),
                     Err(p) => format!(
                         "engine crashed: {}",
-                        p.downcast_ref::<String>().map(String::as_str).or_else(|| p.downcast_ref::<&str>().copied()).unwrap_or("panic")
+                        p.downcast_ref::<String>()
+                            .map(String::as_str)
+                            .or_else(|| p.downcast_ref::<&str>().copied())
+                            .unwrap_or("panic")
                     ),
                 };
                 eprintln!("engine failed: {msg}");
@@ -461,7 +848,11 @@ pub fn serve(s: Settings, start_engine: impl FnOnce(&Settings, Arc<Shared>, mpsc
             }
             (tiny_http::Method::Get, "/") | (tiny_http::Method::Get, "/index.html") => {
                 let h = hdr("Content-Type", "text/html; charset=utf-8");
-                send(req, tiny_http::Response::from_string(PAGE).with_header(h), &cors);
+                send(
+                    req,
+                    tiny_http::Response::from_string(PAGE).with_header(h),
+                    &cors,
+                );
             }
             (tiny_http::Method::Get, "/api/info") => {
                 let mut info = shared.info.lock().unwrap().clone();
@@ -471,31 +862,57 @@ pub fn serve(s: Settings, start_engine: impl FnOnce(&Settings, Arc<Shared>, mpsc
                 respond_json(req, 200, &info, &cors);
             }
             (tiny_http::Method::Post, "/api/generate") => {
-                let header = |k: &str| req.headers().iter().find(|h| h.field.as_str().as_str().eq_ignore_ascii_case(k)).map(|h| h.value.as_str().to_string());
-                let json_body = header("Content-Type").is_some_and(|c| c.starts_with("application/json"));
+                let header = |k: &str| {
+                    req.headers()
+                        .iter()
+                        .find(|h| h.field.as_str().as_str().eq_ignore_ascii_case(k))
+                        .map(|h| h.value.as_str().to_string())
+                };
+                let json_body =
+                    header("Content-Type").is_some_and(|c| c.starts_with("application/json"));
                 let origin_ok = match header("Origin") {
                     None => true,
-                    Some(o) => !cors.is_empty() || header("Host").is_some_and(|h| o == format!("http://{h}") || o == format!("https://{h}")),
+                    Some(o) => {
+                        !cors.is_empty()
+                            || header("Host").is_some_and(|h| {
+                                o == format!("http://{h}") || o == format!("https://{h}")
+                            })
+                    }
                 };
                 if !json_body || !origin_ok {
-                    respond_json(req, 403, &json!({"error": "Requests must be JSON and come from this engine's page or its --allow-origin site."}), &cors);
+                    respond_json(
+                        req,
+                        403,
+                        &json!({"error": "Requests must be JSON and come from this engine's page or its --allow-origin site."}),
+                        &cors,
+                    );
                     continue;
                 }
                 let mut body = String::new();
-                if req.as_reader().take(64 * 1024).read_to_string(&mut body).is_err() {
+                if req
+                    .as_reader()
+                    .take(64 * 1024)
+                    .read_to_string(&mut body)
+                    .is_err()
+                {
                     respond_json(req, 400, &json!({"error": "unreadable body"}), &cors);
                     continue;
                 }
                 let info = shared.info.lock().unwrap().clone();
                 if !info["ready"].as_bool().unwrap_or(false) {
-                    let msg = info["error"].as_str().map(|e| format!("The engine failed to start: {e}")).unwrap_or_else(|| "The engine is still loading the model. Try again in a moment.".into());
+                    let msg = info["error"]
+                        .as_str()
+                        .map(|e| format!("The engine failed to start: {e}"))
+                        .unwrap_or_else(|| {
+                            "The engine is still loading the model. Try again in a moment.".into()
+                        });
                     respond_json(req, 503, &json!({"error": msg}), &cors);
                     continue;
                 }
                 let parsed = parse_request(&body, &s, pika).and_then(|r| {
                     let info = shared.info.lock().unwrap();
                     match info["gallery"].as_array() {
-                        Some(g) if !g.iter().any(|p| p.as_str().is_some_and(|p| p.split_whitespace().eq(r.0.split_whitespace()))) => {
+                        Some(g) if !g.iter().any(|p| p.as_str().is_some_and(|p| p.split_whitespace().eq(r.prompt.split_whitespace()))) => {
                             Err(format!("This engine has no text encoder: pick one of its {} gallery prompts.", g.len()))
                         }
                         _ => Ok(r),
@@ -503,11 +920,21 @@ pub fn serve(s: Settings, start_engine: impl FnOnce(&Settings, Arc<Shared>, mpsc
                 });
                 match parsed {
                     Err(e) => respond_json(req, 400, &json!({"error": e}), &cors),
-                    Ok((prompt, geometry, seed)) => {
+                    Ok(parsed) => {
                         let mut jobs = shared.jobs.lock().unwrap();
-                        if jobs.iter().filter(|j| matches!(j.stage, Stage::Queued)).count() >= MAX_QUEUE {
+                        if jobs
+                            .iter()
+                            .filter(|j| matches!(j.stage, Stage::Queued))
+                            .count()
+                            >= MAX_QUEUE
+                        {
                             drop(jobs);
-                            respond_json(req, 429, &json!({"error": "Three clips are already waiting. Try again when one finishes."}), &cors);
+                            respond_json(
+                                req,
+                                429,
+                                &json!({"error": "Three clips are already waiting. Try again when one finishes."}),
+                                &cors,
+                            );
                             continue;
                         }
                         let id = {
@@ -516,29 +943,13 @@ pub fn serve(s: Settings, start_engine: impl FnOnce(&Settings, Arc<Shared>, mpsc
                             *n - 1
                         };
                         let total_steps = info["steps"].as_u64().unwrap_or(8) as usize;
-                        jobs.push(Job {
-                            id,
-                            prompt,
-                            geometry,
-                            seed,
-                            stage: Stage::Queued,
-                            tokens: 0,
-                            encode_s: 0.0,
-                            prepare_s: 0.0,
-                            steps: Vec::new(),
-                            total_steps,
-                            decode_s: 0.0,
-                            started: None,
-                            total_s: 0.0,
-                            width: 0,
-                            height: 0,
-                            frames: 0,
-                            rgb: Vec::new(),
-                            audio: None,
-                            error: None,
-                        });
+                        let seed = parsed.seed;
+                        jobs.push(Job::new(id, parsed, total_steps));
                         while jobs.len() > KEEP_JOBS {
-                            match jobs.iter().position(|j| matches!(j.stage, Stage::Done | Stage::Failed)) {
+                            match jobs
+                                .iter()
+                                .position(|j| matches!(j.stage, Stage::Done | Stage::Failed))
+                            {
                                 Some(i) => {
                                     jobs.remove(i);
                                 }
@@ -563,7 +974,11 @@ pub fn serve(s: Settings, start_engine: impl FnOnce(&Settings, Arc<Shared>, mpsc
                 };
                 match what {
                     "frames" => {
-                        let from = query.split('&').find_map(|kv| kv.strip_prefix("from=")).and_then(|v| v.parse::<usize>().ok()).unwrap_or(0);
+                        let from = query
+                            .split('&')
+                            .find_map(|kv| kv.strip_prefix("from="))
+                            .and_then(|v| v.parse::<usize>().ok())
+                            .unwrap_or(0);
                         let body = shared.with(id, |j| {
                             let px = j.width * j.height * 3;
                             let first = from.min(j.frames);
@@ -576,13 +991,47 @@ pub fn serve(s: Settings, start_engine: impl FnOnce(&Settings, Arc<Shared>, mpsc
                             out
                         });
                         match body {
-                            Some(b) => send(req, tiny_http::Response::from_data(b).with_header(hdr("Content-Type", "application/octet-stream")), &cors),
+                            Some(b) => send(
+                                req,
+                                tiny_http::Response::from_data(b)
+                                    .with_header(hdr("Content-Type", "application/octet-stream")),
+                                &cors,
+                            ),
+                            None => respond_json(req, 404, &json!({"error": "no such job"}), &cors),
+                        }
+                    }
+                    "hd" => {
+                        let n = query
+                            .split('&')
+                            .find_map(|kv| kv.strip_prefix("frame="))
+                            .and_then(|v| v.parse::<usize>().ok())
+                            .unwrap_or(0);
+                        match shared.with(id, |j| j.hd.get(n).cloned()) {
+                            Some(Some(b)) => send(
+                                req,
+                                tiny_http::Response::from_data(b)
+                                    .with_header(hdr("Content-Type", "image/jpeg")),
+                                &cors,
+                            ),
+                            Some(None) => respond_json(
+                                req,
+                                404,
+                                &json!({"error": "that frame is not upscaled (yet)"}),
+                                &cors,
+                            ),
                             None => respond_json(req, 404, &json!({"error": "no such job"}), &cors),
                         }
                     }
                     "audio" => match shared.with(id, |j| j.audio.clone()) {
-                        Some(Some(b)) => send(req, tiny_http::Response::from_data(b).with_header(hdr("Content-Type", "audio/wav")), &cors),
-                        Some(None) => respond_json(req, 404, &json!({"error": "no audio yet"}), &cors),
+                        Some(Some(b)) => send(
+                            req,
+                            tiny_http::Response::from_data(b)
+                                .with_header(hdr("Content-Type", "audio/wav")),
+                            &cors,
+                        ),
+                        Some(None) => {
+                            respond_json(req, 404, &json!({"error": "no audio yet"}), &cors)
+                        }
                         None => respond_json(req, 404, &json!({"error": "no such job"}), &cors),
                     },
                     "" => match shared.with(id, |j| j.status()) {
@@ -599,3 +1048,150 @@ pub fn serve(s: Settings, start_engine: impl FnOnce(&Settings, Arc<Shared>, mpsc
 }
 
 use std::io::Read as _;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    #[derive(Parser)]
+    struct A {
+        #[command(flatten)]
+        attn: AttnArgs,
+    }
+
+    fn settings(upscale: bool) -> Settings {
+        Settings {
+            addr: String::new(),
+            model: None,
+            gallery: None,
+            synthetic: true,
+            max_pixels: 1344 * 768,
+            max_frames: 243,
+            allow_origin: None,
+            attn: A::parse_from(["t"]).attn,
+            tiling: None,
+            preview: false,
+            upscale: upscale.then(|| PathBuf::from("x")),
+        }
+    }
+
+    #[test]
+    fn sizes_off_the_grid_render_the_next_canvas_up() {
+        let p = parse_request(
+            r#"{"prompt":"a fox","width":480,"height":272}"#,
+            &settings(false),
+            false,
+        )
+        .unwrap();
+        assert_eq!(
+            (p.geometry.width, p.geometry.height, p.out),
+            (480, 288, (480, 272))
+        );
+        let p = parse_request(
+            r#"{"prompt":"a fox","width":272,"height":480}"#,
+            &settings(false),
+            false,
+        )
+        .unwrap();
+        assert_eq!(
+            (p.geometry.width, p.geometry.height, p.out),
+            (288, 480, (272, 480))
+        );
+        let p = parse_request(
+            r#"{"prompt":"a fox","width":1344,"height":768}"#,
+            &settings(false),
+            false,
+        )
+        .unwrap();
+        assert_eq!(
+            (p.geometry.width, p.geometry.height, p.out),
+            (1344, 768, (1344, 768))
+        );
+        assert!(
+            parse_request(
+                r#"{"prompt":"a fox","width":481,"height":272}"#,
+                &settings(false),
+                false
+            )
+            .is_err()
+        );
+        // Pika's canvases are not cropped.
+        assert!(
+            parse_request(
+                r#"{"prompt":"a fox","width":480,"height":272}"#,
+                &settings(false),
+                true
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn upscale_needs_an_upscaler_and_a_known_factor() {
+        let body =
+            |u: &str| format!(r#"{{"prompt":"a fox","width":480,"height":272,"upscale":{u}}}"#);
+        assert_eq!(
+            parse_request(&body("false"), &settings(false), false)
+                .unwrap()
+                .upscale,
+            Upscale::Off
+        );
+        assert!(
+            parse_request(&body("true"), &settings(false), false)
+                .unwrap_err()
+                .contains("--upscale")
+        );
+        assert_eq!(
+            parse_request(&body("true"), &settings(true), false)
+                .unwrap()
+                .upscale,
+            Upscale::Auto
+        );
+        assert_eq!(
+            parse_request(&body("3"), &settings(true), false)
+                .unwrap()
+                .upscale,
+            Upscale::Factor(3)
+        );
+        assert!(parse_request(&body("5"), &settings(true), false).is_err());
+        assert!(parse_request(&body("\"yes\""), &settings(true), false).is_err());
+    }
+
+    #[test]
+    fn upscaled_frames_are_jpegs_of_the_factor() {
+        let be = h3_cpu::Cpu;
+        let up = Esrgan::load(&be, EsrganConfig::tiny(), &Synthetic { seed: 5 }).unwrap();
+        let shared = Shared {
+            jobs: Mutex::new(Vec::new()),
+            info: Mutex::new(json!({})),
+            next: Mutex::new(1),
+        };
+        let p = parse_request(
+            r#"{"prompt":"a fox","width":480,"height":272,"upscale":true}"#,
+            &settings(true),
+            false,
+        )
+        .unwrap();
+        let mut j = Job::new(1, p, 4);
+        (j.width, j.height, j.frames) = (20, 12, 3);
+        j.rgb = (0..3 * 20 * 12 * 3).map(|i| (i * 13 % 256) as u8).collect();
+        shared.jobs.lock().unwrap().push(j);
+        upscale_job(&be, Some(&up), &shared, 1, Upscale::Auto).unwrap();
+        let st = shared.with(1, |j| j.status()).unwrap();
+        assert_eq!(
+            (
+                st["stage"].as_str(),
+                st["upscale"].as_u64(),
+                st["up_frames"].as_u64()
+            ),
+            (Some("upscaling"), Some(2), Some(3))
+        );
+        let hd = shared.with(1, |j| j.hd.clone()).unwrap();
+        for f in &hd {
+            let im = image::load_from_memory_with_format(f, image::ImageFormat::Jpeg).unwrap();
+            assert_eq!((im.width(), im.height()), (40, 24));
+        }
+        assert!(upscale_job(&be, None, &shared, 1, Upscale::Auto).is_err());
+    }
+}

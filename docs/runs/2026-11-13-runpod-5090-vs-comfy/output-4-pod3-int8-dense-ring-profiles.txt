@@ -1,0 +1,103 @@
+NVIDIA GeForce RTX 5090, 595.91.07, 600.00 W, 32607 MiB, 1, 8
+Filesystem      Size  Used Avail Use% Mounted on
+overlay         250G  166G   85G  67% /
+               total        used        free      shared  buff/cache   available
+Mem:             123          26           7           0          90          96
+== conformance (127 cases, int8 dense attention included)
+user	0m9.865s
+sys	0m0.642s
+attention qk8 h3 kv3 37x37 d16 causal=false          rel 1.96e-2  ok
+attention qk8 h4 kv2 70x70 d32 causal=true           rel 1.15e-2  ok
+attention qk8 h2 kv2 130x65 d64 causal=false         rel 1.37e-2  ok
+attention qk8 h2 kv1 33x33 d128 causal=true          rel 7.30e-3  ok
+dit tiny Dense { qk8: true } native                  rel 5.43e-3  ok
+dit tiny Dense { qk8: true } native streamed         rel 5.43e-3  ok
+== v2: --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --tables /workspace/h3-rs/tables/v2.tables --stream-blocks
+peak VRAM MiB: 17996; exit 0
+cuda NVIDIA GeForce RTX 5090 (sm_120)
+load 50.6s
+prompt: 462 rows in 69.9s
+run 0: total 59.79s  prepare 0.23s  adaln 0.00s  denoise 53.15s (["6.86", "6.59", "6.61", "6.61", "6.61", "6.62", "6.62", "6.63"])  decode 6.15s  audio 0.18s
+real	3m7.133s
+== per-kernel profile, V2 streamed
+== v2-profile: --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --tables /workspace/h3-rs/tables/v2.tables --stream-blocks
+peak VRAM MiB: 17996; exit 0
+cuda NVIDIA GeForce RTX 5090 (sm_120)
+load 26.3s
+prompt: 462 rows in 66.1s
+run 0: total 75.36s  prepare 0.24s  adaln 0.00s  denoise 68.01s (["8.76", "8.45", "8.45", "8.49", "8.46", "8.46", "8.46", "8.49"])  decode 6.85s  audio 0.19s
+real	2m53.895s
+== per-kernel profile, raw H3 dense bf16 attention, 2 euler steps
+== base2-profile: --variant h3 --model-dir /w/h3-base --weights mxfp8 --decoder-weights mxfp8 --attention dense --stream-blocks --steps 2
+peak VRAM MiB: 15884; exit 0
+cuda NVIDIA GeForce RTX 5090 (sm_120)
+load 58.3s
+prompt: 462 rows in 66.6s
+run 0: total 78.66s  prepare 0.02s  adaln 41.07s  denoise 30.55s (["15.35", "15.20"])  decode 6.75s  audio 0.19s
+real	3m29.983s
+== per-kernel profile, raw H3 dense INT8 Q·Kᵀ, 2 euler steps
+== base2-qk8-profile: --variant h3 --model-dir /w/h3-base --weights mxfp8 --decoder-weights mxfp8 --attention dense --stream-blocks --steps 2 --qk8
+peak VRAM MiB: 16364; exit 0
+cuda NVIDIA GeForce RTX 5090 (sm_120)
+load 58.8s
+prompt: 462 rows in 67.1s
+run 0: total 71.56s  prepare 0.02s  adaln 40.67s  denoise 23.91s (["12.11", "11.80"])  decode 6.69s  audio 0.19s
+real	3m23.911s
+== base25-qk8: --variant h3 --model-dir /w/h3-base --weights mxfp8 --decoder-weights mxfp8 --attention dense --stream-blocks --steps 25 --qk8 --tables /workspace/h3-rs/tables/base25.tables
+peak VRAM MiB: 16835; exit 0
+cuda NVIDIA GeForce RTX 5090 (sm_120)
+load 59.6s
+prompt: 462 rows in 66.8s
+run 0: total 255.20s  prepare 0.03s  adaln 0.00s  denoise 248.75s (["10.17", "9.86", "9.88", "9.87", "9.87", "9.92", "9.93", "9.90", "9.94", "9.95", "9.95", "9.95", "9.96", "9.97", "9.94", "9.97", "9.98", "9.96", "9.97", "9.97", "9.93", "9.97", "9.97", "9.96", "10.01"])  decode 6.18s  audio 0.18s
+real	6m27.764s
+== base25-bf16: --variant h3 --model-dir /w/h3-base --weights mxfp8 --decoder-weights mxfp8 --attention dense --stream-blocks --steps 25 --tables /workspace/h3-rs/tables/base25.tables
+peak VRAM MiB: 15948; exit 0
+cuda NVIDIA GeForce RTX 5090 (sm_120)
+load 60.1s
+prompt: 462 rows in 67.0s
+run 0: total 336.49s  prepare 0.02s  adaln 0.00s  denoise 329.99s (["13.31", "13.09", "13.13", "13.15", "13.16", "13.18", "13.18", "13.19", "13.19", "13.19", "13.20", "13.21", "13.21", "13.20", "13.20", "13.20", "13.20", "13.21", "13.30", "13.26", "13.20", "13.20", "13.20", "13.21", "13.20"])  decode 6.22s  audio 0.18s
+real	7m49.877s
+== pinned staging ring
+== v2-ring: --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --tables /workspace/h3-rs/tables/v2.tables --stream-blocks
+peak VRAM MiB: 17936; exit 0
+cuda NVIDIA GeForce RTX 5090 (sm_120)
+load 26.7s
+prompt: 462 rows in 66.4s
+run 0: total 59.90s  prepare 0.24s  adaln 0.00s  denoise 53.33s (["7.13", "6.59", "6.59", "6.59", "6.59", "6.60", "6.62", "6.62"])  decode 6.08s  audio 0.18s
+real	2m39.492s
+== v2-ring-2: --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --tables /workspace/h3-rs/tables/v2.tables --stream-blocks
+peak VRAM MiB: 17936; exit 0
+cuda NVIDIA GeForce RTX 5090 (sm_120)
+load 26.2s
+prompt: 462 rows in 64.8s
+run 0: total 59.83s  prepare 0.22s  adaln 0.00s  denoise 53.20s (["7.12", "6.57", "6.56", "6.58", "6.59", "6.59", "6.60", "6.60"])  decode 6.17s  audio 0.18s
+real	2m37.057s
+== v1: --variant fasth3-v1 --model-dir /w/h3-base --adapter /w/FastH3-4-step-Preview-v1-LoRA/vsa-datafree/adapter_model.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --stream-blocks --tables /workspace/h3-rs/tables/v1-vsa.tables
+peak VRAM MiB: 17868; exit 0
+cuda NVIDIA GeForce RTX 5090 (sm_120)
+load 74.3s
+prompt: 462 rows in 67.4s
+run 0: total 30.55s  prepare 0.21s  adaln 0.00s  denoise 23.96s (["6.17", "5.92", "5.92", "5.95"])  decode 6.13s  audio 0.18s
+real	2m58.450s
+== v2-comfy: --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --tables /workspace/h3-rs/tables/v2.tables --stream-blocks --vsa-sparsity 0.9 --dense-first-steps 2
+peak VRAM MiB: 17868; exit 0
+cuda NVIDIA GeForce RTX 5090 (sm_120)
+load 26.3s
+prompt: 462 rows in 65.5s
+run 0: total 66.58s  prepare 0.22s  adaln 0.00s  denoise 59.94s (["12.19", "11.93", "5.98", "5.96", "5.98", "5.97", "5.96", "5.98"])  decode 6.18s  audio 0.18s
+real	2m44.550s
+== v2-15s: --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --tables /workspace/h3-rs/tables/v2.tables --stream-blocks --ffn-chunk 16384
+peak VRAM MiB: 30828; exit 0
+cuda NVIDIA GeForce RTX 5090 (sm_120)
+load 26.3s
+prompt: 569 rows in 65.6s
+run 0: total 220.38s  prepare 1.28s  adaln 0.00s  denoise 199.62s (["25.27", "24.78", "24.84", "24.91", "24.91", "24.93", "25.01", "24.97"])  decode 18.75s  audio 0.51s
+real	5m19.714s
+== v2-15s-ring: --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --tables /workspace/h3-rs/tables/v2.tables --stream-blocks --ffn-chunk 16384
+peak VRAM MiB: 30896; exit 0
+cuda NVIDIA GeForce RTX 5090 (sm_120)
+load 26.3s
+prompt: 569 rows in 65.5s
+run 0: total 220.23s  prepare 1.27s  adaln 0.00s  denoise 199.36s (["25.26", "24.75", "24.83", "24.89", "24.89", "24.93", "24.91", "24.91"])  decode 18.87s  audio 0.51s
+real	5m19.804s
+5090d done; terminating pod fagl3elupnvi43

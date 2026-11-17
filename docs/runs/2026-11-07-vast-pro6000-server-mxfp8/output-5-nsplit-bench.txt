@@ -1,0 +1,78 @@
+watchdog armed
+name, driver_version, power.limit [W], memory.total [MiB], clocks.max.sm [MHz]
+NVIDIA RTX PRO 6000 Blackwell Server Edition, 615.71.09, 600.00 W, 97887 MiB, 2430 MHz
+128
+== check default
+snake beta                                           rel 3.01e-2  FAIL
+Error: 1 of 109 checks failed (tolerance 3e-2)
+== check with the N-split forced onto the 512-row cases
+linear mxfp8 130x64x512 GeluTanh (split-able)        rel 3.59e-3  ok
+linear mxfp8 no-bias 130x64x512 (split-able)         rel 4.39e-3  ok
+snake beta                                           rel 3.01e-2  FAIL
+== H3_CUDA_MX_SPLIT=1
+forward 0: 1.282s (160.3 ms/block; ×50/8 blocks ≈ 8.01s)
+  gemm mxfp8 n=28672 k=5376                     98.8 ms  10.3%       3 calls    32.921 ms/call
+  gemm mxfp8 n=21504 k=5376                     33.5 ms   3.5%       3 calls    11.167 ms/call
+  gemm mxfp8 n=5376 k=14336                     22.4 ms   2.3%       3 calls     7.464 ms/call
+  gemm mxfp8 n=5376 k=7168                      11.4 ms   1.2%       3 calls     3.812 ms/call
+  gemm mxfp8 n=7168 k=5376                      11.1 ms   1.2%       3 calls     3.694 ms/call
+  mx quant (activations)                         8.8 ms   0.9%      15 calls     0.587 ms/call
+== H3_CUDA_MX_SPLIT=2
+forward 0: 1.105s (138.1 ms/block; ×50/8 blocks ≈ 6.90s)
+  gemm mxfp8 n=28672 k=5376 (×2)                45.4 ms   5.0%       3 calls    15.144 ms/call
+  gemm mxfp8 n=21504 k=5376                     34.1 ms   3.7%       3 calls    11.374 ms/call
+  gemm mxfp8 n=5376 k=14336                     23.1 ms   2.5%       3 calls     7.703 ms/call
+  gemm mxfp8 n=5376 k=7168                      11.6 ms   1.3%       3 calls     3.878 ms/call
+  gemm mxfp8 n=7168 k=5376                      11.3 ms   1.2%       3 calls     3.767 ms/call
+  mx quant (activations)                         8.8 ms   1.0%      15 calls     0.587 ms/call
+== H3_CUDA_MX_SPLIT=4
+forward 0: 1.085s (135.6 ms/block; ×50/8 blocks ≈ 6.78s)
+  gemm mxfp8 n=28672 k=5376 (×4)                45.3 ms   5.0%       3 calls    15.095 ms/call
+  gemm mxfp8 n=21504 k=5376                     33.7 ms   3.7%       3 calls    11.240 ms/call
+  gemm mxfp8 n=5376 k=14336                     22.9 ms   2.5%       3 calls     7.636 ms/call
+  gemm mxfp8 n=5376 k=7168                      11.6 ms   1.3%       3 calls     3.875 ms/call
+  gemm mxfp8 n=7168 k=5376                      11.3 ms   1.2%       3 calls     3.751 ms/call
+  mx quant (activations)                         8.8 ms   1.0%      15 calls     0.586 ms/call
+== H3_CUDA_MX_SPLIT=7
+forward 0: 1.082s (135.2 ms/block; ×50/8 blocks ≈ 6.76s)
+  gemm mxfp8 n=28672 k=5376 (×7)                45.9 ms   5.0%       3 calls    15.310 ms/call
+  gemm mxfp8 n=21504 k=5376                     33.9 ms   3.7%       3 calls    11.299 ms/call
+  gemm mxfp8 n=5376 k=14336                     23.0 ms   2.5%       3 calls     7.654 ms/call
+  gemm mxfp8 n=5376 k=7168                      11.6 ms   1.3%       3 calls     3.872 ms/call
+  gemm mxfp8 n=7168 k=5376                      11.2 ms   1.2%       3 calls     3.747 ms/call
+  mx quant (activations)                         8.8 ms   1.0%      15 calls     0.587 ms/call
+== H3_CUDA_MX_SPLIT=2 H3_CUDA_MX_SPLIT_MIN=20000
+forward 0: 1.073s (134.1 ms/block; ×50/8 blocks ≈ 6.71s)
+  gemm mxfp8 n=28672 k=5376 (×2)                45.1 ms   5.0%       3 calls    15.036 ms/call
+  gemm mxfp8 n=21504 k=5376 (×2)                33.8 ms   3.7%       3 calls    11.262 ms/call
+  gemm mxfp8 n=5376 k=14336                     23.0 ms   2.5%       3 calls     7.666 ms/call
+  gemm mxfp8 n=5376 k=7168                      11.6 ms   1.3%       3 calls     3.857 ms/call
+  gemm mxfp8 n=7168 k=5376                      11.3 ms   1.2%       3 calls     3.762 ms/call
+  mx quant (activations)                         8.8 ms   1.0%      15 calls     0.587 ms/call
+== H3_CUDA_MX_SPLIT=3 H3_CUDA_MX_SPLIT_MIN=20000
+forward 0: 1.238s (154.8 ms/block; ×50/8 blocks ≈ 7.74s)
+  gemm mxfp8 n=28672 k=5376                     98.7 ms  10.3%       3 calls    32.912 ms/call
+  gemm mxfp8 n=21504 k=5376 (×3)                33.3 ms   3.5%       3 calls    11.107 ms/call
+  gemm mxfp8 n=5376 k=14336                     22.1 ms   2.3%       3 calls     7.376 ms/call
+  gemm mxfp8 n=5376 k=7168                      11.4 ms   1.2%       3 calls     3.786 ms/call
+  gemm mxfp8 n=7168 k=5376                      11.1 ms   1.2%       3 calls     3.694 ms/call
+  mx quant (activations)                         8.8 ms   0.9%      15 calls     0.586 ms/call
+== H3_CUDA_MX_SPLIT=4 H3_CUDA_MX_SPLIT_MIN=5000
+forward 0: 1.110s (138.7 ms/block; ×50/8 blocks ≈ 6.93s)
+  gemm mxfp8 n=28672 k=5376 (×4)                45.2 ms   5.0%       3 calls    15.051 ms/call
+  gemm mxfp8 n=21504 k=5376 (×4)                33.3 ms   3.7%       3 calls    11.112 ms/call
+  gemm mxfp8 n=5376 k=14336                     23.2 ms   2.5%       3 calls     7.728 ms/call
+  gemm mxfp8 n=7168 k=5376 (×4)                 11.6 ms   1.3%       3 calls     3.868 ms/call
+  gemm mxfp8 n=5376 k=7168                      11.4 ms   1.2%       3 calls     3.784 ms/call
+  mx quant (activations)                         8.8 ms   1.0%      15 calls     0.586 ms/call
+== full depth, default split (2 on n >= 24576), 3 forwards
+cuda NVIDIA RTX PRO 6000 Blackwell Server Edition (sm_120)  |  fasth3-v2 1344x768x124  37966 tokens  50 blocks  weights mxfp8
+forward 0: 4.977s (99.5 ms/block; ×50/50 blocks ≈ 4.98s)
+forward 1: 4.804s (96.1 ms/block; ×50/50 blocks ≈ 4.80s)
+forward 2: 4.827s (96.5 ms/block; ×50/50 blocks ≈ 4.83s)
+== full depth, split off
+forward 0: 5.813s (116.3 ms/block; ×50/50 blocks ≈ 5.81s)
+forward 1: 5.509s (110.2 ms/block; ×50/50 blocks ≈ 5.51s)
+forward 2: 5.526s (110.5 ms/block; ×50/50 blocks ≈ 5.53s)
+exit 0
+

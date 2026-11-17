@@ -27,7 +27,7 @@ for src, dst in SETS:
     for page in s3.get_paginator("list_objects_v2").paginate(Bucket="fv-weights", Prefix=src):
         for o in page.get("Contents", []):
             rel = o["Key"][len(src):]
-            files.append((get("fv-weights", o["Key"]), dst.rstrip("/") + "/" + rel))
+            files.append((get("fv-weights", o["Key"]), dst if rel == "" else dst.rstrip("/") + "/" + rel))
 print(f"{len(files)} weight files", file=sys.stderr)
 N = 40
 L = ["#!/bin/bash", "set -u", "LOG=/root/boot.log", "exec >>$LOG 2>&1",

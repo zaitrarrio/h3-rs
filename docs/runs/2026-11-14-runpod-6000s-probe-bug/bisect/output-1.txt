@@ -1,0 +1,487 @@
++ O=/root/out
++ mkdir -p /root/out /root/bins
++ cd /root
++ nvidia-smi --query-gpu=name,driver_version,power.limit,memory.total --format=csv,noheader
+NVIDIA RTX PRO 6000 Blackwell Server Edition, 595.91.07, 600.00 W, 97887 MiB
++ df -h /
++ cat
+Filesystem      Size  Used Avail Use% Mounted on
+overlay         250G  163G   88G  65% /
++ ls -la /w/h3-8step/ /w/h3-8step-mxfp8/
+/w/h3-8step-mxfp8/:
+total 24999896
+drwx------ 2 root root         112 Nov 14 18:14 .
+drwx------ 4 root root          56 Nov 14 18:15 ..
+-rw------- 1 root root          81 Nov 14 18:14 .complete
+-rw------- 1 root root          47 Nov 14 18:14 .fv-revision
+-rw------- 1 root root           6 Nov 14 18:14 .fv-source
+-rw------- 1 root root 25599877328 Nov 14 18:15 transformer.safetensors
+
+/w/h3-8step/:
+total 24
+drwx------ 7 root root  181 Nov 14 18:15 .
+drwx------ 4 root root   56 Nov 14 18:15 ..
+-rw------- 1 root root   17 Nov 14 18:15 .complete
+-rw------- 1 root root   41 Nov 14 18:15 .fv-revision
+-rw------- 1 root root    3 Nov 14 18:15 .fv-source
+drwx------ 2 root root   80 Nov 14 18:15 audio_vae
+drwx------ 2 root root 4096 Nov 14 18:15 text_encoder
+drwx------ 2 root root  113 Nov 14 18:15 tokenizer
+drwx------ 2 root root 4096 Nov 14 18:15 transformer
+drwx------ 2 root root 4096 Nov 14 18:15 vae
++ chmod +x /root/bins/b1109
++ chmod +x /root/bins/b1113a
++ chmod +x /root/bins/b1113b
++ chmod +x /root/bins/b1113c
++ chmod +x /root/bins/b1113d
++ chmod +x /root/bins/b1114a
++ chmod +x /root/bins/b1114b
++ cp /root/bins/b1109 /root/bins/b1113a /root/bins/b1113b /root/bins/b1113c /root/bins/b1113d /root/bins/b1114a /root/bins/b1114b /root/
++ ln -sf /w/h3-bin /root/bins/b1114c
++ ls -la /root/bins/
+total 138908
+drwx------ 2 root root      153 Nov 14 18:16 .
+drwx------ 1 root root     4096 Nov 14 18:16 ..
+-rwx------ 1 root root 20142816 Nov 14 18:16 b1109
+-rwx------ 1 root root 20157704 Nov 14 18:16 b1113a
+-rwx------ 1 root root 20247224 Nov 14 18:16 b1113b
+-rwx------ 1 root root 20358400 Nov 14 18:16 b1113c
+-rwx------ 1 root root 20400144 Nov 14 18:16 b1113d
+-rwx------ 1 root root 20448776 Nov 14 18:16 b1114a
+-rwx------ 1 root root 20467480 Nov 14 18:16 b1114b
+lrwxrwxrwx 1 root root        9 Nov 14 18:16 b1114c -> /w/h3-bin
++ FOX='A red fox trots through fresh snow at dawn in a quiet pine forest; snow crunches softly under its paws and a light wind moves through the branches.'
++ cat
++ cp /workspace/h3-rs/tables/v2.tables /root/v2.tables
++ A='--variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --tables /root/v2.tables'
++ echo '== B. the 11-09 binary (code of the good 2026-11-12 clip) on the same inputs: expect the fox'
+== B. the 11-09 binary (code of the good 2026-11-12 clip) on the same inputs: expect the fox
++ run good b1109 'A red fox trots through fresh snow at dawn in a quiet pine forest; snow crunches softly under its paws and a light wind moves through the branches.' --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --tables /root/v2.tables
++ n=good
++ b=b1109
++ p='A red fox trots through fresh snow at dawn in a quiet pine forest; snow crunches softly under its paws and a light wind moves through the branches.'
++ shift 3
++ echo '== good [b1109]: --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --tables /root/v2.tables'
+== good [b1109]: --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --tables /root/v2.tables
++ echo 'exit 0'
+exit 0
++ grep -E '^cuda|^load|prompt:|^run |rror|panick|warning|^trace' /root/out/good.log
++ cut -c1-300
++ head -40
+cuda NVIDIA RTX PRO 6000 Blackwell Server Edition (sm_120)
+load 45.6s
+prompt: 33 rows in 68.7s
+run 0: total 44.05s  prepare 0.24s  adaln 0.00s  denoise 37.57s (["4.83", "4.65", "4.66", "4.67", "4.68", "4.69", "4.69", "4.70"])  decode 5.96s  audio 0.19s
++ '[' -f /root/out/good.y4m ']'
+++ stats /root/out/good.y4m
+++ ffmpeg -v info -i /root/out/good.y4m -frames:v 2 -vf signalstats,metadata=print:key=lavfi.signalstats.YAVG -f null -
+++ grep -o 'YAVG=[0-9.]*'
+++ head -2
+++ tr '\n' ' '
++ echo 'luma: YAVG=116.652 YAVG=116.87 '
+luma: YAVG=116.652 YAVG=116.87 
++ grid /root/out/good.y4m /root/out/good.grid.png
++ ffmpeg -loglevel error -y -i /root/out/good.y4m -vf 'select='\''eq(n\,0)+eq(n\,40)+eq(n\,80)+eq(n\,120)'\'',scale=448:-1,tile=2x2' -vframes 1 /root/out/good.grid.png
++ ffmpeg -loglevel error -y -i /root/out/good.y4m -c:v libx264 -crf 22 -pix_fmt yuv420p /root/out/good.mp4
++ echo '== A. the current binary on the same inputs, with the hidden-state trace'
+== A. the current binary on the same inputs, with the hidden-state trace
++ H3_TRACE=2
++ run cur b1114c 'A red fox trots through fresh snow at dawn in a quiet pine forest; snow crunches softly under its paws and a light wind moves through the branches.' --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --tables /root/v2.tables
++ n=cur
++ b=b1114c
++ p='A red fox trots through fresh snow at dawn in a quiet pine forest; snow crunches softly under its paws and a light wind moves through the branches.'
++ shift 3
++ echo '== cur [b1114c]: --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --tables /root/v2.tables'
+== cur [b1114c]: --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --tables /root/v2.tables
++ echo 'exit 0'
+exit 0
++ grep -E '^cuda|^load|prompt:|^run |rror|panick|warning|^trace' /root/out/cur.log
++ cut -c1-300
++ head -40
+cuda NVIDIA RTX PRO 6000 Blackwell Server Edition (sm_120)
+load 29.8s
+prompt: 33 rows in 67.2s
+trace input h: max 1.0250e2, non-finite 0 of 202906368
+trace block 0 attn: max 1.7000e1, non-finite 0 of 270541824
+trace block 0 h: max 1.1110e5, non-finite 0 of 202906368
+trace block 1 attn: max 6.1500e1, non-finite 0 of 270541824
+trace block 1 h: max 3.2563e5, non-finite 0 of 202906368
+trace block 2 attn: max 2.8500e1, non-finite 0 of 270541824
+trace block 2 h: max 3.2768e5, non-finite 0 of 202906368
+trace block 3 attn: max 2.7375e1, non-finite 0 of 270541824
+trace block 3 h: max 3.2973e5, non-finite 0 of 202906368
+trace block 4 attn: max 2.5500e1, non-finite 0 of 270541824
+trace block 4 h: max 3.3997e5, non-finite 0 of 202906368
+trace block 5 attn: max 1.1650e2, non-finite 0 of 270541824
+trace block 5 h: max 3.4611e5, non-finite 0 of 202906368
+trace block 6 attn: max 3.4500e1, non-finite 0 of 270541824
+trace block 6 h: max 3.5840e5, non-finite 0 of 202906368
+trace block 7 attn: max 4.1500e1, non-finite 0 of 270541824
+trace block 7 h: max 4.0550e5, non-finite 0 of 202906368
+trace block 8 attn: max 4.2250e1, non-finite 0 of 270541824
+trace block 8 h: max 4.0755e5, non-finite 0 of 202906368
+trace block 9 attn: max 3.7750e1, non-finite 0 of 270541824
+trace block 9 h: max 4.0755e5, non-finite 0 of 202906368
+trace block 10 attn: max 4.2000e1, non-finite 0 of 270541824
+trace block 10 h: max 4.0755e5, non-finite 0 of 202906368
+trace block 11 attn: max 3.7250e1, non-finite 0 of 270541824
+trace block 11 h: max 4.8538e5, non-finite 0 of 202906368
+trace block 12 attn: max 4.7500e1, non-finite 0 of 270541824
+trace block 12 h: max 4.9152e5, non-finite 0 of 202906368
+trace block 13 attn: max 5.4000e1, non-finite 0 of 270541824
+trace block 13 h: max 7.0451e5, non-finite 0 of 202906368
+trace block 14 attn: max 5.2750e1, non-finite 0 of 270541824
+trace block 14 h: max 7.0451e5, non-finite 0 of 202906368
+trace block 15 attn: max 4.9000e1, non-finite 0 of 270541824
+trace block 15 h: max 7.0451e5, non-finite 0 of 202906368
+trace block 16 attn: max 6.5000e1, non-finite 0 of 270541824
+trace block 16 h: max 7.0451e5, non-finite 0 of 202906368
+trace block 17 attn: max 7.1000e1, non-finite 0 of 270541824
+trace block 17 h: max 7.0451e5, non-finite 0 of 202906368
++ '[' -f /root/out/cur.y4m ']'
+++ stats /root/out/cur.y4m
+++ ffmpeg -v info -i /root/out/cur.y4m -frames:v 2 -vf signalstats,metadata=print:key=lavfi.signalstats.YAVG -f null -
+++ grep -o 'YAVG=[0-9.]*'
+++ head -2
+++ tr '\n' ' '
++ echo 'luma: YAVG=115.343 YAVG=115.3 '
+luma: YAVG=115.343 YAVG=115.3 
++ grid /root/out/cur.y4m /root/out/cur.grid.png
++ ffmpeg -loglevel error -y -i /root/out/cur.y4m -vf 'select='\''eq(n\,0)+eq(n\,40)+eq(n\,80)+eq(n\,120)'\'',scale=448:-1,tile=2x2' -vframes 1 /root/out/cur.grid.png
++ ffmpeg -loglevel error -y -i /root/out/cur.y4m -c:v libx264 -crf 22 -pix_fmt yuv420p /root/out/cur.mp4
++ psnr cur good
++ echo '== psnr cur vs good'
+== psnr cur vs good
++ ffmpeg -loglevel info -i /root/out/cur.y4m -i /root/out/good.y4m -lavfi psnr -f null -
++ grep -oE 'PSNR.*'
+PSNR y:14.685556 u:27.469144 v:30.335669 average:19.122910 min:17.279383 max:19.869846
++ echo '== C. current binary, samurai prompt (the prompt the 5090 clips used)'
+== C. current binary, samurai prompt (the prompt the 5090 clips used)
+++ cat /root/samurai.txt
++ run cur-samurai b1114c 'integrated_multimodal_description: [Shot 1] Live-action, cinematic, a medium-wide shot frames an elderly Japanese samurai standing in the open stone courtyard of a temple in light, steady rain, facing the camera squarely under grey overcast daylight, framed from the knees up. He is around seventy, with a deeply lined, weathered face, a thin white beard and mustache, and a full head of thick, long, loose grey-white hair falling from the crown of his head past his shoulders, damp strands lifting and swaying in the wind; he wears a dark indigo kimono over grey hakama, with a katana and a shorter sword tucked through the sash at his left hip. Fine rain streaks fall through the whole frame and small droplets splash on the wet flagstones, while the dark wooden pillars and pale paper shoji screens of the temple hall stand behind him. Keeping his eyes on the lens, he raises both forearms and crosses them firmly at the wrists in an X in front of his chest, open hands flat with fingers together, the wide wet sleeves sliding back along his forearms, as the elderly samurai with a low, gravelly, unhurried voice (S1) says: <d>[English] No.</d> The camera pans right with small amplitude at slow speed while he holds the crossed arms, the pillars drifting across the background behind the falling rain. He lowers his arms to his sides, and the camera pushes in with large amplitude toward his face, ending on a tight close-up in which the wrinkles around his eyes, the individual white beard hairs, wet strands of long hair clinging to his cheek, and raindrops running down his skin are sharply visible, as he (S1) continues, lips moving clearly: <d>[English] A blade drawn in anger cuts its owner first.</d> He holds a steady gaze into the lens as the rain keeps falling.
+
+overall_soundscape: Light, steady rain patters on the stone courtyard and the temple roof tiles, with water trickling from the eaves and a low wind passing through. Heavy damp fabric rustles as the sleeves slide back and the forearms cross, and small droplets splash on the flagstones.
+
+non_diegetic_music: N/A' --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --tables /root/v2.tables
++ n=cur-samurai
++ b=b1114c
++ p='integrated_multimodal_description: [Shot 1] Live-action, cinematic, a medium-wide shot frames an elderly Japanese samurai standing in the open stone courtyard of a temple in light, steady rain, facing the camera squarely under grey overcast daylight, framed from the knees up. He is around seventy, with a deeply lined, weathered face, a thin white beard and mustache, and a full head of thick, long, loose grey-white hair falling from the crown of his head past his shoulders, damp strands lifting and swaying in the wind; he wears a dark indigo kimono over grey hakama, with a katana and a shorter sword tucked through the sash at his left hip. Fine rain streaks fall through the whole frame and small droplets splash on the wet flagstones, while the dark wooden pillars and pale paper shoji screens of the temple hall stand behind him. Keeping his eyes on the lens, he raises both forearms and crosses them firmly at the wrists in an X in front of his chest, open hands flat with fingers together, the wide wet sleeves sliding back along his forearms, as the elderly samurai with a low, gravelly, unhurried voice (S1) says: <d>[English] No.</d> The camera pans right with small amplitude at slow speed while he holds the crossed arms, the pillars drifting across the background behind the falling rain. He lowers his arms to his sides, and the camera pushes in with large amplitude toward his face, ending on a tight close-up in which the wrinkles around his eyes, the individual white beard hairs, wet strands of long hair clinging to his cheek, and raindrops running down his skin are sharply visible, as he (S1) continues, lips moving clearly: <d>[English] A blade drawn in anger cuts its owner first.</d> He holds a steady gaze into the lens as the rain keeps falling.
+
+overall_soundscape: Light, steady rain patters on the stone courtyard and the temple roof tiles, with water trickling from the eaves and a low wind passing through. Heavy damp fabric rustles as the sleeves slide back and the forearms cross, and small droplets splash on the flagstones.
+
+non_diegetic_music: N/A'
++ shift 3
++ echo '== cur-samurai [b1114c]: --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --tables /root/v2.tables'
+== cur-samurai [b1114c]: --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --tables /root/v2.tables
++ echo 'exit 0'
+exit 0
++ grep -E '^cuda|^load|prompt:|^run |rror|panick|warning|^trace' /root/out/cur-samurai.log
++ cut -c1-300
++ head -40
+cuda NVIDIA RTX PRO 6000 Blackwell Server Edition (sm_120)
+load 30.8s
+prompt: 462 rows in 68.7s
+run 0: total 46.04s  prepare 0.34s  adaln 0.00s  denoise 39.34s (["5.32", "4.83", "4.84", "4.85", "4.86", "4.87", "4.88", "4.88"])  decode 6.08s  audio 0.19s
++ '[' -f /root/out/cur-samurai.y4m ']'
+++ stats /root/out/cur-samurai.y4m
+++ ffmpeg -v info -i /root/out/cur-samurai.y4m -frames:v 2 -vf signalstats,metadata=print:key=lavfi.signalstats.YAVG -f null -
+++ grep -o 'YAVG=[0-9.]*'
+++ head -2
+++ tr '\n' ' '
++ echo 'luma: YAVG=78.1269 YAVG=78.2728 '
+luma: YAVG=78.1269 YAVG=78.2728 
++ grid /root/out/cur-samurai.y4m /root/out/cur-samurai.grid.png
++ ffmpeg -loglevel error -y -i /root/out/cur-samurai.y4m -vf 'select='\''eq(n\,0)+eq(n\,40)+eq(n\,80)+eq(n\,120)'\'',scale=448:-1,tile=2x2' -vframes 1 /root/out/cur-samurai.grid.png
++ ffmpeg -loglevel error -y -i /root/out/cur-samurai.y4m -c:v libx264 -crf 22 -pix_fmt yuv420p /root/out/cur-samurai.mp4
++ echo '== D. current binary, bf16 tree quantized at load instead of the stored file'
+== D. current binary, bf16 tree quantized at load instead of the stored file
++ run cur-tree b1114c 'A red fox trots through fresh snow at dawn in a quiet pine forest; snow crunches softly under its paws and a light wind moves through the branches.' --variant fasth3-v2 --model-dir /w/h3-8step --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --tables /root/v2.tables
++ n=cur-tree
++ b=b1114c
++ p='A red fox trots through fresh snow at dawn in a quiet pine forest; snow crunches softly under its paws and a light wind moves through the branches.'
++ shift 3
++ echo '== cur-tree [b1114c]: --variant fasth3-v2 --model-dir /w/h3-8step --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --tables /root/v2.tables'
+== cur-tree [b1114c]: --variant fasth3-v2 --model-dir /w/h3-8step --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --tables /root/v2.tables
++ echo 'exit 0'
+exit 0
++ grep -E '^cuda|^load|prompt:|^run |rror|panick|warning|^trace' /root/out/cur-tree.log
++ cut -c1-300
++ head -40
+cuda NVIDIA RTX PRO 6000 Blackwell Server Edition (sm_120)
+load 77.6s
+prompt: 33 rows in 68.8s
+run 0: total 44.75s  prepare 0.29s  adaln 0.00s  denoise 37.89s (["5.14", "4.66", "4.66", "4.67", "4.68", "4.69", "4.70", "4.70"])  decode 6.29s  audio 0.19s
++ '[' -f /root/out/cur-tree.y4m ']'
+++ stats /root/out/cur-tree.y4m
+++ ffmpeg -v info -i /root/out/cur-tree.y4m -frames:v 2 -vf signalstats,metadata=print:key=lavfi.signalstats.YAVG -f null -
+++ grep -o 'YAVG=[0-9.]*'
+++ head -2
+++ tr '\n' ' '
++ echo 'luma: YAVG=117.047 YAVG=117.331 '
+luma: YAVG=117.047 YAVG=117.331 
++ grid /root/out/cur-tree.y4m /root/out/cur-tree.grid.png
++ ffmpeg -loglevel error -y -i /root/out/cur-tree.y4m -vf 'select='\''eq(n\,0)+eq(n\,40)+eq(n\,80)+eq(n\,120)'\'',scale=448:-1,tile=2x2' -vframes 1 /root/out/cur-tree.grid.png
++ ffmpeg -loglevel error -y -i /root/out/cur-tree.y4m -c:v libx264 -crf 22 -pix_fmt yuv420p /root/out/cur-tree.mp4
++ psnr cur-tree good
++ echo '== psnr cur-tree vs good'
+== psnr cur-tree vs good
++ ffmpeg -loglevel info -i /root/out/cur-tree.y4m -i /root/out/good.y4m -lavfi psnr -f null -
++ grep -oE 'PSNR.*'
+PSNR y:11.301748 u:25.389759 v:28.399597 average:15.825969 min:13.980946 max:17.572526
++ echo '== E. current binary, tables rebuilt by it'
+== E. current binary, tables rebuilt by it
++ tail -2
+user	1m22.358s
+sys	1m4.292s
++ cmp /root/v2.tables /root/v2new.tables
+/root/v2.tables /root/v2new.tables differ: char 30, line 1
++ echo 'tables differ'
+tables differ
++ run cur-newtables b1114c 'A red fox trots through fresh snow at dawn in a quiet pine forest; snow crunches softly under its paws and a light wind moves through the branches.' --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --tables /root/v2new.tables
++ n=cur-newtables
++ b=b1114c
++ p='A red fox trots through fresh snow at dawn in a quiet pine forest; snow crunches softly under its paws and a light wind moves through the branches.'
++ shift 3
++ echo '== cur-newtables [b1114c]: --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --tables /root/v2new.tables'
+== cur-newtables [b1114c]: --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --tables /root/v2new.tables
++ echo 'exit 0'
+exit 0
++ grep -E '^cuda|^load|prompt:|^run |rror|panick|warning|^trace' /root/out/cur-newtables.log
++ cut -c1-300
++ head -40
+cuda NVIDIA RTX PRO 6000 Blackwell Server Edition (sm_120)
+load 30.6s
+prompt: 33 rows in 69.3s
+run 0: total 44.71s  prepare 0.30s  adaln 0.00s  denoise 37.89s (["5.14", "4.66", "4.67", "4.67", "4.68", "4.69", "4.69", "4.70"])  decode 6.24s  audio 0.19s
++ '[' -f /root/out/cur-newtables.y4m ']'
+++ stats /root/out/cur-newtables.y4m
+++ ffmpeg -v info -i /root/out/cur-newtables.y4m -frames:v 2 -vf signalstats,metadata=print:key=lavfi.signalstats.YAVG -f null -
+++ grep -o 'YAVG=[0-9.]*'
+++ head -2
+++ tr '\n' ' '
++ echo 'luma: YAVG=115.036 YAVG=115.153 '
+luma: YAVG=115.036 YAVG=115.153 
++ grid /root/out/cur-newtables.y4m /root/out/cur-newtables.grid.png
++ ffmpeg -loglevel error -y -i /root/out/cur-newtables.y4m -vf 'select='\''eq(n\,0)+eq(n\,40)+eq(n\,80)+eq(n\,120)'\'',scale=448:-1,tile=2x2' -vframes 1 /root/out/cur-newtables.grid.png
++ ffmpeg -loglevel error -y -i /root/out/cur-newtables.y4m -c:v libx264 -crf 22 -pix_fmt yuv420p /root/out/cur-newtables.mp4
++ psnr cur-newtables good
++ echo '== psnr cur-newtables vs good'
+== psnr cur-newtables vs good
++ ffmpeg -loglevel info -i /root/out/cur-newtables.y4m -i /root/out/good.y4m -lavfi psnr -f null -
++ grep -oE 'PSNR.*'
+PSNR y:14.126988 u:26.831003 v:29.724411 average:18.559091 min:17.503659 max:19.498377
++ echo '== F. bisect the saved binaries on the inputs of A'
+== F. bisect the saved binaries on the inputs of A
++ for b in b1113a b1113b b1113c b1113d b1114a b1114b
++ run bis-b1113a b1113a 'A red fox trots through fresh snow at dawn in a quiet pine forest; snow crunches softly under its paws and a light wind moves through the branches.' --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --tables /root/v2.tables
++ n=bis-b1113a
++ b=b1113a
++ p='A red fox trots through fresh snow at dawn in a quiet pine forest; snow crunches softly under its paws and a light wind moves through the branches.'
++ shift 3
++ echo '== bis-b1113a [b1113a]: --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --tables /root/v2.tables'
+== bis-b1113a [b1113a]: --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --tables /root/v2.tables
++ echo 'exit 0'
+exit 0
++ grep -E '^cuda|^load|prompt:|^run |rror|panick|warning|^trace' /root/out/bis-b1113a.log
++ cut -c1-300
++ head -40
+cuda NVIDIA RTX PRO 6000 Blackwell Server Edition (sm_120)
+load 27.9s
+prompt: 33 rows in 66.1s
+run 0: total 44.53s  prepare 0.29s  adaln 0.00s  denoise 37.59s (["4.84", "4.66", "4.66", "4.67", "4.68", "4.69", "4.69", "4.70"])  decode 6.37s  audio 0.19s
++ '[' -f /root/out/bis-b1113a.y4m ']'
+++ stats /root/out/bis-b1113a.y4m
+++ ffmpeg -v info -i /root/out/bis-b1113a.y4m -frames:v 2 -vf signalstats,metadata=print:key=lavfi.signalstats.YAVG -f null -
+++ grep -o 'YAVG=[0-9.]*'
+++ head -2
+++ tr '\n' ' '
++ echo 'luma: YAVG=116.652 YAVG=116.87 '
+luma: YAVG=116.652 YAVG=116.87 
++ grid /root/out/bis-b1113a.y4m /root/out/bis-b1113a.grid.png
++ ffmpeg -loglevel error -y -i /root/out/bis-b1113a.y4m -vf 'select='\''eq(n\,0)+eq(n\,40)+eq(n\,80)+eq(n\,120)'\'',scale=448:-1,tile=2x2' -vframes 1 /root/out/bis-b1113a.grid.png
++ ffmpeg -loglevel error -y -i /root/out/bis-b1113a.y4m -c:v libx264 -crf 22 -pix_fmt yuv420p /root/out/bis-b1113a.mp4
++ psnr bis-b1113a good
++ echo '== psnr bis-b1113a vs good'
+== psnr bis-b1113a vs good
++ ffmpeg -loglevel info -i /root/out/bis-b1113a.y4m -i /root/out/good.y4m -lavfi psnr -f null -
++ grep -oE 'PSNR.*'
+PSNR y:inf u:inf v:inf average:inf min:inf max:inf
++ for b in b1113a b1113b b1113c b1113d b1114a b1114b
++ run bis-b1113b b1113b 'A red fox trots through fresh snow at dawn in a quiet pine forest; snow crunches softly under its paws and a light wind moves through the branches.' --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --tables /root/v2.tables
++ n=bis-b1113b
++ b=b1113b
++ p='A red fox trots through fresh snow at dawn in a quiet pine forest; snow crunches softly under its paws and a light wind moves through the branches.'
++ shift 3
++ echo '== bis-b1113b [b1113b]: --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --tables /root/v2.tables'
+== bis-b1113b [b1113b]: --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --tables /root/v2.tables
++ echo 'exit 0'
+exit 0
++ grep -E '^cuda|^load|prompt:|^run |rror|panick|warning|^trace' /root/out/bis-b1113b.log
++ cut -c1-300
++ head -40
+cuda NVIDIA RTX PRO 6000 Blackwell Server Edition (sm_120)
+load 29.6s
+prompt: 33 rows in 66.3s
+run 0: total 44.38s  prepare 0.24s  adaln 0.00s  denoise 37.60s (["4.84", "4.66", "4.67", "4.67", "4.68", "4.69", "4.69", "4.70"])  decode 6.27s  audio 0.19s
++ '[' -f /root/out/bis-b1113b.y4m ']'
+++ stats /root/out/bis-b1113b.y4m
+++ ffmpeg -v info -i /root/out/bis-b1113b.y4m -frames:v 2 -vf signalstats,metadata=print:key=lavfi.signalstats.YAVG -f null -
+++ grep -o 'YAVG=[0-9.]*'
+++ head -2
+++ tr '\n' ' '
++ echo 'luma: YAVG=116.652 YAVG=116.87 '
+luma: YAVG=116.652 YAVG=116.87 
++ grid /root/out/bis-b1113b.y4m /root/out/bis-b1113b.grid.png
++ ffmpeg -loglevel error -y -i /root/out/bis-b1113b.y4m -vf 'select='\''eq(n\,0)+eq(n\,40)+eq(n\,80)+eq(n\,120)'\'',scale=448:-1,tile=2x2' -vframes 1 /root/out/bis-b1113b.grid.png
++ ffmpeg -loglevel error -y -i /root/out/bis-b1113b.y4m -c:v libx264 -crf 22 -pix_fmt yuv420p /root/out/bis-b1113b.mp4
++ psnr bis-b1113b good
++ echo '== psnr bis-b1113b vs good'
+== psnr bis-b1113b vs good
++ ffmpeg -loglevel info -i /root/out/bis-b1113b.y4m -i /root/out/good.y4m -lavfi psnr -f null -
++ grep -oE 'PSNR.*'
+PSNR y:inf u:inf v:inf average:inf min:inf max:inf
++ for b in b1113a b1113b b1113c b1113d b1114a b1114b
++ run bis-b1113c b1113c 'A red fox trots through fresh snow at dawn in a quiet pine forest; snow crunches softly under its paws and a light wind moves through the branches.' --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --tables /root/v2.tables
++ n=bis-b1113c
++ b=b1113c
++ p='A red fox trots through fresh snow at dawn in a quiet pine forest; snow crunches softly under its paws and a light wind moves through the branches.'
++ shift 3
++ echo '== bis-b1113c [b1113c]: --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --tables /root/v2.tables'
+== bis-b1113c [b1113c]: --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --tables /root/v2.tables
++ echo 'exit 0'
+exit 0
++ grep -E '^cuda|^load|prompt:|^run |rror|panick|warning|^trace' /root/out/bis-b1113c.log
++ cut -c1-300
++ head -40
+cuda NVIDIA RTX PRO 6000 Blackwell Server Edition (sm_120)
+load 30.9s
+prompt: 33 rows in 67.5s
+run 0: total 44.44s  prepare 0.28s  adaln 0.00s  denoise 37.59s (["4.84", "4.66", "4.67", "4.67", "4.68", "4.69", "4.69", "4.70"])  decode 6.29s  audio 0.19s
++ '[' -f /root/out/bis-b1113c.y4m ']'
+++ stats /root/out/bis-b1113c.y4m
+++ ffmpeg -v info -i /root/out/bis-b1113c.y4m -frames:v 2 -vf signalstats,metadata=print:key=lavfi.signalstats.YAVG -f null -
+++ grep -o 'YAVG=[0-9.]*'
+++ head -2
+++ tr '\n' ' '
++ echo 'luma: YAVG=116.652 YAVG=116.87 '
+luma: YAVG=116.652 YAVG=116.87 
++ grid /root/out/bis-b1113c.y4m /root/out/bis-b1113c.grid.png
++ ffmpeg -loglevel error -y -i /root/out/bis-b1113c.y4m -vf 'select='\''eq(n\,0)+eq(n\,40)+eq(n\,80)+eq(n\,120)'\'',scale=448:-1,tile=2x2' -vframes 1 /root/out/bis-b1113c.grid.png
++ ffmpeg -loglevel error -y -i /root/out/bis-b1113c.y4m -c:v libx264 -crf 22 -pix_fmt yuv420p /root/out/bis-b1113c.mp4
++ psnr bis-b1113c good
++ echo '== psnr bis-b1113c vs good'
+== psnr bis-b1113c vs good
++ ffmpeg -loglevel info -i /root/out/bis-b1113c.y4m -i /root/out/good.y4m -lavfi psnr -f null -
++ grep -oE 'PSNR.*'
+PSNR y:inf u:inf v:inf average:inf min:inf max:inf
++ for b in b1113a b1113b b1113c b1113d b1114a b1114b
++ run bis-b1113d b1113d 'A red fox trots through fresh snow at dawn in a quiet pine forest; snow crunches softly under its paws and a light wind moves through the branches.' --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --tables /root/v2.tables
++ n=bis-b1113d
++ b=b1113d
++ p='A red fox trots through fresh snow at dawn in a quiet pine forest; snow crunches softly under its paws and a light wind moves through the branches.'
++ shift 3
++ echo '== bis-b1113d [b1113d]: --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --tables /root/v2.tables'
+== bis-b1113d [b1113d]: --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --tables /root/v2.tables
++ echo 'exit 0'
+exit 0
++ grep -E '^cuda|^load|prompt:|^run |rror|panick|warning|^trace' /root/out/bis-b1113d.log
++ cut -c1-300
++ head -40
+cuda NVIDIA RTX PRO 6000 Blackwell Server Edition (sm_120)
+load 30.6s
+prompt: 33 rows in 70.2s
+run 0: total 44.53s  prepare 0.32s  adaln 0.00s  denoise 37.61s (["4.85", "4.66", "4.67", "4.67", "4.68", "4.69", "4.70", "4.70"])  decode 6.32s  audio 0.19s
++ '[' -f /root/out/bis-b1113d.y4m ']'
+++ stats /root/out/bis-b1113d.y4m
+++ ffmpeg -v info -i /root/out/bis-b1113d.y4m -frames:v 2 -vf signalstats,metadata=print:key=lavfi.signalstats.YAVG -f null -
+++ grep -o 'YAVG=[0-9.]*'
+++ head -2
+++ tr '\n' ' '
++ echo 'luma: YAVG=116.652 YAVG=116.87 '
+luma: YAVG=116.652 YAVG=116.87 
++ grid /root/out/bis-b1113d.y4m /root/out/bis-b1113d.grid.png
++ ffmpeg -loglevel error -y -i /root/out/bis-b1113d.y4m -vf 'select='\''eq(n\,0)+eq(n\,40)+eq(n\,80)+eq(n\,120)'\'',scale=448:-1,tile=2x2' -vframes 1 /root/out/bis-b1113d.grid.png
++ ffmpeg -loglevel error -y -i /root/out/bis-b1113d.y4m -c:v libx264 -crf 22 -pix_fmt yuv420p /root/out/bis-b1113d.mp4
++ psnr bis-b1113d good
++ echo '== psnr bis-b1113d vs good'
+== psnr bis-b1113d vs good
++ ffmpeg -loglevel info -i /root/out/bis-b1113d.y4m -i /root/out/good.y4m -lavfi psnr -f null -
++ grep -oE 'PSNR.*'
+PSNR y:inf u:inf v:inf average:inf min:inf max:inf
++ for b in b1113a b1113b b1113c b1113d b1114a b1114b
++ run bis-b1114a b1114a 'A red fox trots through fresh snow at dawn in a quiet pine forest; snow crunches softly under its paws and a light wind moves through the branches.' --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --tables /root/v2.tables
++ n=bis-b1114a
++ b=b1114a
++ p='A red fox trots through fresh snow at dawn in a quiet pine forest; snow crunches softly under its paws and a light wind moves through the branches.'
++ shift 3
++ echo '== bis-b1114a [b1114a]: --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --tables /root/v2.tables'
+== bis-b1114a [b1114a]: --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --tables /root/v2.tables
++ echo 'exit 0'
+exit 0
++ grep -E '^cuda|^load|prompt:|^run |rror|panick|warning|^trace' /root/out/bis-b1114a.log
++ cut -c1-300
++ head -40
+cuda NVIDIA RTX PRO 6000 Blackwell Server Edition (sm_120)
+load 31.3s
+prompt: 33 rows in 71.3s
+run 0: total 44.30s  prepare 0.29s  adaln 0.00s  denoise 37.60s (["4.84", "4.66", "4.67", "4.67", "4.68", "4.69", "4.70", "4.70"])  decode 6.13s  audio 0.19s
++ '[' -f /root/out/bis-b1114a.y4m ']'
+++ stats /root/out/bis-b1114a.y4m
+++ ffmpeg -v info -i /root/out/bis-b1114a.y4m -frames:v 2 -vf signalstats,metadata=print:key=lavfi.signalstats.YAVG -f null -
+++ grep -o 'YAVG=[0-9.]*'
+++ head -2
+++ tr '\n' ' '
++ echo 'luma: YAVG=116.652 YAVG=116.87 '
+luma: YAVG=116.652 YAVG=116.87 
++ grid /root/out/bis-b1114a.y4m /root/out/bis-b1114a.grid.png
++ ffmpeg -loglevel error -y -i /root/out/bis-b1114a.y4m -vf 'select='\''eq(n\,0)+eq(n\,40)+eq(n\,80)+eq(n\,120)'\'',scale=448:-1,tile=2x2' -vframes 1 /root/out/bis-b1114a.grid.png
++ ffmpeg -loglevel error -y -i /root/out/bis-b1114a.y4m -c:v libx264 -crf 22 -pix_fmt yuv420p /root/out/bis-b1114a.mp4
++ psnr bis-b1114a good
++ echo '== psnr bis-b1114a vs good'
+== psnr bis-b1114a vs good
++ ffmpeg -loglevel info -i /root/out/bis-b1114a.y4m -i /root/out/good.y4m -lavfi psnr -f null -
++ grep -oE 'PSNR.*'
+PSNR y:inf u:inf v:inf average:inf min:inf max:inf
++ for b in b1113a b1113b b1113c b1113d b1114a b1114b
++ run bis-b1114b b1114b 'A red fox trots through fresh snow at dawn in a quiet pine forest; snow crunches softly under its paws and a light wind moves through the branches.' --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --tables /root/v2.tables
++ n=bis-b1114b
++ b=b1114b
++ p='A red fox trots through fresh snow at dawn in a quiet pine forest; snow crunches softly under its paws and a light wind moves through the branches.'
++ shift 3
++ echo '== bis-b1114b [b1114b]: --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --tables /root/v2.tables'
+== bis-b1114b [b1114b]: --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --tables /root/v2.tables
++ echo 'exit 0'
+exit 0
++ grep -E '^cuda|^load|prompt:|^run |rror|panick|warning|^trace' /root/out/bis-b1114b.log
++ cut -c1-300
++ head -40
+cuda NVIDIA RTX PRO 6000 Blackwell Server Edition (sm_120)
+load 31.0s
+prompt: 33 rows in 72.1s
+run 0: total 44.76s  prepare 0.29s  adaln 0.00s  denoise 37.87s (["5.15", "4.65", "4.66", "4.67", "4.67", "4.68", "4.69", "4.69"])  decode 6.32s  audio 0.19s
++ '[' -f /root/out/bis-b1114b.y4m ']'
+++ stats /root/out/bis-b1114b.y4m
+++ ffmpeg -v info -i /root/out/bis-b1114b.y4m -frames:v 2 -vf signalstats,metadata=print:key=lavfi.signalstats.YAVG -f null -
+++ grep -o 'YAVG=[0-9.]*'
+++ head -2
+++ tr '\n' ' '
++ echo 'luma: YAVG=115.343 YAVG=115.3 '
+luma: YAVG=115.343 YAVG=115.3 
++ grid /root/out/bis-b1114b.y4m /root/out/bis-b1114b.grid.png
++ ffmpeg -loglevel error -y -i /root/out/bis-b1114b.y4m -vf 'select='\''eq(n\,0)+eq(n\,40)+eq(n\,80)+eq(n\,120)'\'',scale=448:-1,tile=2x2' -vframes 1 /root/out/bis-b1114b.grid.png
++ ffmpeg -loglevel error -y -i /root/out/bis-b1114b.y4m -c:v libx264 -crf 22 -pix_fmt yuv420p /root/out/bis-b1114b.mp4
++ psnr bis-b1114b good
++ echo '== psnr bis-b1114b vs good'
+== psnr bis-b1114b vs good
++ ffmpeg -loglevel info -i /root/out/bis-b1114b.y4m -i /root/out/good.y4m -lavfi psnr -f null -
++ grep -oE 'PSNR.*'
+PSNR y:14.685556 u:27.469144 v:30.335669 average:19.122910 min:17.279383 max:19.869846
++ tar czf /root/cmd1.tgz -C /root/out '--exclude=*.y4m' '--exclude=*.wav' '--exclude=*.mp4' .
+++ cd /root/out
+++ ls bis-b1113a.mp4 bis-b1113b.mp4 bis-b1113c.mp4 bis-b1113d.mp4 bis-b1114a.mp4 bis-b1114b.mp4 cur-newtables.mp4 cur-samurai.mp4 cur-tree.mp4 cur.mp4 good.mp4
++ tar czf /root/mp4.tgz -C /root/out bis-b1113a.mp4 bis-b1113b.mp4 bis-b1113c.mp4 bis-b1113d.mp4 bis-b1114a.mp4 bis-b1114b.mp4 cur-newtables.mp4 cur-samurai.mp4 cur-tree.mp4 cur.mp4 good.mp4
+++ date -u
++ echo 'cmd1 done Sat Nov 14 18:50:14 UTC 2026'
+cmd1 done Sat Nov 14 18:50:14 UTC 2026
+exit 0
+

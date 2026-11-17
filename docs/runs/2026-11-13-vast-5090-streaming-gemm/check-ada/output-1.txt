@@ -1,0 +1,101 @@
++ O=/root/out
++ mkdir -p /root/out
++ cd /root
++ nvidia-smi --query-gpu=name,driver_version,power.limit,memory.total,compute_cap --format=csv,noheader
+NVIDIA RTX 2000 Ada Generation, 595.91.07, 70.00 W, 16380 MiB, 8.9
++ echo '== conformance (fixed fences, bin5)'
+== conformance (fixed fences, bin5)
++ timeout 1800 /w/h3-bin check --backend cuda
++ echo 'check exit 0'
+check exit 0
++ grep -E 'checks|panick|FAIL|rror|== resident' /root/out/check.log
+dit tiny Dense { qk8: false, pv8: false } native streamed == resident rel 0.00e0  ok
+dit tiny Vsa { sparsity: 0.5, tile: 64, ref_sparsity: 0.5, qk8: false, pv8: false } native streamed == resident rel 0.00e0  ok
+dit tiny Dense { qk8: false, pv8: false } int8 streamed == resident rel 0.00e0  ok
+dit tiny Vsa { sparsity: 0.5, tile: 64, ref_sparsity: 0.5, qk8: false, pv8: false } int8 streamed == resident rel 0.00e0  ok
+dit tiny Dense { qk8: false, pv8: false } int4-hqq-g32 streamed == resident rel 0.00e0  ok
+dit tiny Vsa { sparsity: 0.5, tile: 64, ref_sparsity: 0.5, qk8: false, pv8: false } int4-hqq-g32 streamed == resident rel 0.00e0  ok
+dit tiny Dense { qk8: true, pv8: false } native streamed == resident rel 0.00e0  ok
+dit tiny Dense { qk8: true, pv8: true } native streamed == resident rel 0.00e0  ok
+dit tiny Vsa { sparsity: 0.5, tile: 64, ref_sparsity: 0.5, qk8: true, pv8: false } native streamed == resident rel 0.00e0  ok
+dit tiny Vsa { sparsity: 0.5, tile: 64, ref_sparsity: 0.5, qk8: true, pv8: true } native streamed == resident rel 0.00e0  ok
+all 153 checks pass (tolerance 3e-2)
++ echo '== H3_STREAM_STRESS=1 (zeroed, 5 ms delay, then copy)'
+== H3_STREAM_STRESS=1 (zeroed, 5 ms delay, then copy)
++ H3_STREAM_STRESS=1
++ timeout 1800 /w/h3-bin check --backend cuda
++ echo 'check exit 0'
+check exit 0
++ grep -E 'checks|panick|FAIL|rror|== resident' /root/out/check-stress.log
+dit tiny Dense { qk8: false, pv8: false } native streamed == resident rel 0.00e0  ok
+dit tiny Vsa { sparsity: 0.5, tile: 64, ref_sparsity: 0.5, qk8: false, pv8: false } native streamed == resident rel 0.00e0  ok
+dit tiny Dense { qk8: false, pv8: false } int8 streamed == resident rel 0.00e0  ok
+dit tiny Vsa { sparsity: 0.5, tile: 64, ref_sparsity: 0.5, qk8: false, pv8: false } int8 streamed == resident rel 0.00e0  ok
+dit tiny Dense { qk8: false, pv8: false } int4-hqq-g32 streamed == resident rel 0.00e0  ok
+dit tiny Vsa { sparsity: 0.5, tile: 64, ref_sparsity: 0.5, qk8: false, pv8: false } int4-hqq-g32 streamed == resident rel 0.00e0  ok
+dit tiny Dense { qk8: true, pv8: false } native streamed == resident rel 0.00e0  ok
+dit tiny Dense { qk8: true, pv8: true } native streamed == resident rel 0.00e0  ok
+dit tiny Vsa { sparsity: 0.5, tile: 64, ref_sparsity: 0.5, qk8: true, pv8: false } native streamed == resident rel 0.00e0  ok
+dit tiny Vsa { sparsity: 0.5, tile: 64, ref_sparsity: 0.5, qk8: true, pv8: true } native streamed == resident rel 0.00e0  ok
+all 153 checks pass (tolerance 3e-2)
++ echo '== H3_STREAM_STRESS=1 H3_PREFETCH_DEPTH=2'
+== H3_STREAM_STRESS=1 H3_PREFETCH_DEPTH=2
++ H3_STREAM_STRESS=1
++ H3_PREFETCH_DEPTH=2
++ timeout 1800 /w/h3-bin check --backend cuda
++ echo 'check exit 0'
+check exit 0
++ grep -E 'checks|panick|FAIL|rror|== resident' /root/out/check-stress-d2.log
+dit tiny Dense { qk8: false, pv8: false } native streamed == resident rel 0.00e0  ok
+dit tiny Vsa { sparsity: 0.5, tile: 64, ref_sparsity: 0.5, qk8: false, pv8: false } native streamed == resident rel 0.00e0  ok
+dit tiny Dense { qk8: false, pv8: false } int8 streamed == resident rel 0.00e0  ok
+dit tiny Vsa { sparsity: 0.5, tile: 64, ref_sparsity: 0.5, qk8: false, pv8: false } int8 streamed == resident rel 0.00e0  ok
+dit tiny Dense { qk8: false, pv8: false } int4-hqq-g32 streamed == resident rel 0.00e0  ok
+dit tiny Vsa { sparsity: 0.5, tile: 64, ref_sparsity: 0.5, qk8: false, pv8: false } int4-hqq-g32 streamed == resident rel 0.00e0  ok
+dit tiny Dense { qk8: true, pv8: false } native streamed == resident rel 0.00e0  ok
+dit tiny Dense { qk8: true, pv8: true } native streamed == resident rel 0.00e0  ok
+dit tiny Vsa { sparsity: 0.5, tile: 64, ref_sparsity: 0.5, qk8: true, pv8: false } native streamed == resident rel 0.00e0  ok
+dit tiny Vsa { sparsity: 0.5, tile: 64, ref_sparsity: 0.5, qk8: true, pv8: true } native streamed == resident rel 0.00e0  ok
+all 153 checks pass (tolerance 3e-2)
++ echo '== a one-off build with 3eb1d82'\''s FIFO bug re-applied, under stress: the streamed cases must FAIL'
+== a one-off build with 3eb1d82's FIFO bug re-applied, under stress: the streamed cases must FAIL
++ chmod +x /w/h3-bin-bug
++ H3_STREAM_STRESS=1
++ timeout 1800 /w/h3-bin-bug check --backend cuda
++ echo 'check exit 1'
+check exit 1
++ grep -E 'checks|panick|FAIL|rror|== resident' /root/out/check-bug-stress.log
++ head -5
+dit tiny Dense { qk8: false, pv8: false } native streamed == resident rel 2.12e-2  FAIL
+dit tiny Vsa { sparsity: 0.5, tile: 64, ref_sparsity: 0.5, qk8: false, pv8: false } native streamed == resident rel 2.23e-2  FAIL
+dit tiny Dense { qk8: false, pv8: false } int8 streamed == resident rel 2.23e-2  FAIL
+dit tiny Vsa { sparsity: 0.5, tile: 64, ref_sparsity: 0.5, qk8: false, pv8: false } int8 streamed == resident rel 2.12e-2  FAIL
+dit tiny Dense { qk8: false, pv8: false } int4-hqq-g32 streamed == resident rel 2.46e-2  FAIL
++ grep -E streamed /root/out/check-bug-stress.log
++ head -12
+dit tiny Dense { qk8: false, pv8: false } native streamed rel 2.14e-2  ok
+dit tiny Dense { qk8: false, pv8: false } native streamed == resident rel 2.12e-2  FAIL
+dit tiny Vsa { sparsity: 0.5, tile: 64, ref_sparsity: 0.5, qk8: false, pv8: false } native streamed rel 2.32e-2  ok
+dit tiny Vsa { sparsity: 0.5, tile: 64, ref_sparsity: 0.5, qk8: false, pv8: false } native streamed == resident rel 2.23e-2  FAIL
+dit tiny Dense { qk8: false, pv8: false } int8 streamed rel 2.39e-2  ok
+dit tiny Dense { qk8: false, pv8: false } int8 streamed == resident rel 2.23e-2  FAIL
+dit tiny Vsa { sparsity: 0.5, tile: 64, ref_sparsity: 0.5, qk8: false, pv8: false } int8 streamed rel 2.21e-2  ok
+dit tiny Vsa { sparsity: 0.5, tile: 64, ref_sparsity: 0.5, qk8: false, pv8: false } int8 streamed == resident rel 2.12e-2  FAIL
+dit tiny Dense { qk8: false, pv8: false } int4-hqq-g32 streamed rel 2.50e-2  ok
+dit tiny Dense { qk8: false, pv8: false } int4-hqq-g32 streamed == resident rel 2.46e-2  FAIL
+dit tiny Vsa { sparsity: 0.5, tile: 64, ref_sparsity: 0.5, qk8: false, pv8: false } int4-hqq-g32 streamed rel 2.28e-2  ok
+dit tiny Vsa { sparsity: 0.5, tile: 64, ref_sparsity: 0.5, qk8: false, pv8: false } int4-hqq-g32 streamed == resident rel 2.46e-2  FAIL
++ echo '== the same buggy build without stress (passes by luck?)'
+== the same buggy build without stress (passes by luck?)
++ timeout 1800 /w/h3-bin-bug check --backend cuda
++ echo 'check exit 0'
+check exit 0
++ grep -E 'checks|FAIL' /root/out/check-bug.log
++ head -3
+all 153 checks pass (tolerance 3e-2)
++ echo 'check done; terminating pod 5bjtum4fm1o6bw'
+check done; terminating pod 5bjtum4fm1o6bw
++ terminate
++ curl -sS -X DELETE -A h3-rs-pod/1 -H 'Authorization: Bearer REDACTED' https://rest.runpod.io/v1/pods/5bjtum4fm1o6bw
+exit 0
+

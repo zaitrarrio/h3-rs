@@ -13,10 +13,10 @@
 //! `H3_ALLOW_SOFTWARE=1` accepts a CPU rasterizer (lavapipe) adapter.
 
 use h3_core::backend::{
-    Act, Backend, Conv1dShape, Conv3dShape, ConvEpilogue, ConvShape, ConvT1dShape, FlowStep, Gate, HeadNorm, Modulation,
-    Pad, Rope, Snake,
+    Act, Backend, Conv1dShape, Conv3dShape, ConvEpilogue, ConvShape, ConvT1dShape, FlowStep, Gate,
+    HeadNorm, Modulation, Pad, Rope, Snake,
 };
-use h3_core::quant::{Q4, Q8};
+use h3_core::quant::{Mxfp8, Q4, Q8};
 use h3_core::vsa::VsaSpec;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -32,6 +32,10 @@ const FLASH: &str = include_str!("shaders/flash.wgsl");
 const VSA_POOL: &str = include_str!("shaders/vsa_pool.wgsl");
 const VSA_COARSE: &str = include_str!("shaders/vsa_coarse.wgsl");
 const ELEM: &str = include_str!("shaders/elementwise.wgsl");
+const MX_ACT: &str = include_str!("shaders/mx_act.wgsl");
+const VSA_QK8: &str = include_str!("shaders/vsa_qk8.wgsl");
+const ATTN_QK8: &str = include_str!("shaders/attn_qk8.wgsl");
+const ATTN_PV8: &str = include_str!("shaders/attn_pv8.wgsl");
 const GROUP_NORM: &str = include_str!("shaders/group_norm.wgsl");
 const CONV: &str = include_str!("shaders/conv.wgsl");
 const CONV3D: &str = include_str!("shaders/conv3d.wgsl");
@@ -74,7 +78,15 @@ pub struct GVsa {
     seq: usize,
     scale: f32,
     tile: usize,
+    /// INT8 Q·Kᵀ emulation (`vsa_qk8.wgsl`): per-head K mean, rounded Q / K copies.
+    qk8: Option<(GBuf, GBuf, GBuf)>,
+    /// FP8 P·V emulation (`attn_qk8.wgsl` modes 0 / 3 / 4 on V): per-head V mean, E4M3 codes, per-head scale.
+    pv8: Option<(GBuf, GBuf, GBuf)>,
     sub: usize,
+    /// Every tile kept: the dense attention path plus the gated pooled branch.
+    dense: bool,
+    /// `slot_of_row` (tile = slot / tile), for the dense path's gate add.
+    rowslot: GBuf,
 }
 
 struct Prof {
@@ -102,7 +114,9 @@ impl WgpuOptions {
         Self {
             f16: std::env::var("H3_WGPU_F16").is_ok_and(|v| v == "1"),
             allow_software: std::env::var("H3_ALLOW_SOFTWARE").is_ok_and(|v| v == "1"),
-            max_binding: std::env::var("H3_WGPU_MAX_BINDING").ok().and_then(|v| v.parse().ok()),
+            max_binding: std::env::var("H3_WGPU_MAX_BINDING")
+                .ok()
+                .and_then(|v| v.parse().ok()),
         }
     }
 }
@@ -116,6 +130,10 @@ pub struct GWeight {
     /// per-group scales (Q8) or interleaved scale / zero pairs (Q4), then the
     /// group size.
     quant: Option<(Quant, GBuf, usize)>,
+    /// MXFP8 W8A8: the weight is stored dequantized (no FP8 tensor cores
+    /// here) and `linear` rounds its activations through E4M3 / E8M0 blocks
+    /// first (`mx_act.wgsl`), so the result equals the CPU reference.
+    mx: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -163,7 +181,8 @@ impl Wgpu {
     }
 
     pub async fn with_options_async(opts: WgpuOptions) -> Result<Self, InitError> {
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+        let instance =
+            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
                 power_preference: wgpu::PowerPreference::HighPerformance,
@@ -202,7 +221,8 @@ impl Wgpu {
             .map_err(|e| InitError(format!("request_device: {e}")))?;
         let wgs = device.limits().max_compute_workgroup_storage_size as usize;
         let attn_bk = if wgs >= 2 * 32 * 128 * 4 { 32 } else { 16 };
-        let flash_ok = wgs >= FLASH_SHARED as usize && std::env::var("H3_WGPU_FLASH").map_or(true, |v| v != "0");
+        let flash_ok = wgs >= FLASH_SHARED as usize
+            && std::env::var("H3_WGPU_FLASH").map_or(true, |v| v != "0");
         let coarse_ok = wgs >= COARSE_SHARED as usize;
         let dummy = GBuf {
             buf: Arc::new(device.create_buffer(&wgpu::BufferDescriptor {
@@ -280,21 +300,33 @@ impl Wgpu {
             return p.clone();
         }
         let body = src();
-        let code = if body.contains("vec4<f16>") { format!("enable f16;\n{COMMON}\n{body}") } else { format!("{COMMON}\n{body}") };
-        let module = self.device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some(key),
-            source: wgpu::ShaderSource::Wgsl(code.into()),
-        });
-        let p = Arc::new(self.device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some(key),
-            layout: None,
-            module: &module,
-            entry_point: Some("main"),
-            compilation_options: Default::default(),
-            cache: None,
-        }));
+        let code = if body.contains("vec4<f16>") {
+            format!("enable f16;\n{COMMON}\n{body}")
+        } else {
+            format!("{COMMON}\n{body}")
+        };
+        let module = self
+            .device
+            .create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some(key),
+                source: wgpu::ShaderSource::Wgsl(code.into()),
+            });
+        let p = Arc::new(
+            self.device
+                .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                    label: Some(key),
+                    layout: None,
+                    module: &module,
+                    entry_point: Some("main"),
+                    compilation_options: Default::default(),
+                    cache: None,
+                }),
+        );
         map.insert(key.to_string(), p.clone());
-        self.names.lock().unwrap().insert(Arc::as_ptr(&p) as usize, key.to_string());
+        self.names
+            .lock()
+            .unwrap()
+            .insert(Arc::as_ptr(&p) as usize, key.to_string());
         p
     }
 
@@ -306,7 +338,10 @@ impl Wgpu {
         let total: f64 = p.totals.values().map(|v| v.0).sum();
         let mut rows: Vec<_> = p.totals.iter().collect();
         rows.sort_by(|a, b| b.1.0.total_cmp(&a.1.0));
-        let mut out = format!("GPU time by kernel ({:.1} ms total, timestamp queries):\n", total / 1e6);
+        let mut out = format!(
+            "GPU time by kernel ({:.1} ms total, timestamp queries):\n",
+            total / 1e6
+        );
         for (name, (ns, n)) in rows {
             out += &format!(
                 "  {:>9.1} ms {:>5.1}%  {:>6} calls {:>9.3} ms/call  {name}\n",
@@ -328,10 +363,13 @@ impl Wgpu {
 
     fn weight_src(src: &str, f16: bool) -> String {
         if f16 {
-            src.replace("{W_TYPE}", "u32")
-                .replace("{W_LOAD}", "let v = unpack2x16float(w[i >> 1u]); return select(v.x, v.y, (i & 1u) == 1u);")
+            src.replace("{W_TYPE}", "u32").replace(
+                "{W_LOAD}",
+                "let v = unpack2x16float(w[i >> 1u]); return select(v.x, v.y, (i & 1u) == 1u);",
+            )
         } else {
-            src.replace("{W_TYPE}", "f32").replace("{W_LOAD}", "return w[i];")
+            src.replace("{W_TYPE}", "f32")
+                .replace("{W_LOAD}", "return w[i];")
         }
     }
 
@@ -357,7 +395,13 @@ impl Wgpu {
             )
     }
 
-    fn dispatch(&self, pipe: &wgpu::ComputePipeline, params: &[u32], bufs: &[&GBuf], groups: (u32, u32, u32)) {
+    fn dispatch(
+        &self,
+        pipe: &wgpu::ComputePipeline,
+        params: &[u32],
+        bufs: &[&GBuf],
+        groups: (u32, u32, u32),
+    ) {
         let full: Vec<(&GBuf, Option<(u64, u64)>)> = bufs.iter().map(|b| (*b, None)).collect();
         self.dispatch_ranges(pipe, params, &full, groups);
     }
@@ -393,7 +437,13 @@ impl Wgpu {
     }
 
     /// `dispatch` where a buffer may be bound as a byte sub-range `(offset, size)`.
-    fn dispatch_ranges(&self, pipe: &wgpu::ComputePipeline, params: &[u32], bufs: &[(&GBuf, Option<(u64, u64)>)], groups: (u32, u32, u32)) {
+    fn dispatch_ranges(
+        &self,
+        pipe: &wgpu::ComputePipeline,
+        params: &[u32],
+        bufs: &[(&GBuf, Option<(u64, u64)>)],
+        groups: (u32, u32, u32),
+    ) {
         let tag = self.tag.lock().unwrap().take();
         let slot = self.prof.as_ref().map(|prof| {
             let full = {
@@ -404,7 +454,13 @@ impl Wgpu {
                 self.flush();
             }
             let mut p = prof.lock().unwrap();
-            let base = self.names.lock().unwrap().get(&(pipe as *const _ as usize)).cloned().unwrap_or_else(|| "?".into());
+            let base = self
+                .names
+                .lock()
+                .unwrap()
+                .get(&(pipe as *const _ as usize))
+                .cloned()
+                .unwrap_or_else(|| "?".into());
             p.slots.push(match tag {
                 Some(t) => format!("{base} {t}"),
                 None => base,
@@ -415,12 +471,17 @@ impl Wgpu {
         while words.len() % 4 != 0 {
             words.push(0);
         }
-        let ubuf = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: None,
-            contents: bytemuck::cast_slice(&words),
-            usage: wgpu::BufferUsages::UNIFORM,
-        });
-        let mut entries = vec![wgpu::BindGroupEntry { binding: 0, resource: ubuf.as_entire_binding() }];
+        let ubuf = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: None,
+                contents: bytemuck::cast_slice(&words),
+                usage: wgpu::BufferUsages::UNIFORM,
+            });
+        let mut entries = vec![wgpu::BindGroupEntry {
+            binding: 0,
+            resource: ubuf.as_entire_binding(),
+        }];
         for (i, (b, range)) in bufs.iter().enumerate() {
             let resource = match range {
                 None => b.buf.as_entire_binding(),
@@ -430,7 +491,10 @@ impl Wgpu {
                     size: std::num::NonZeroU64::new(*size),
                 }),
             };
-            entries.push(wgpu::BindGroupEntry { binding: i as u32 + 1, resource });
+            entries.push(wgpu::BindGroupEntry {
+                binding: i as u32 + 1,
+                resource,
+            });
         }
         let bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: None,
@@ -438,7 +502,9 @@ impl Wgpu {
             entries: &entries,
         });
         let mut pend = self.pending.lock().unwrap();
-        let enc = pend.enc.get_or_insert_with(|| self.device.create_command_encoder(&Default::default()));
+        let enc = pend
+            .enc
+            .get_or_insert_with(|| self.device.create_command_encoder(&Default::default()));
         {
             let guard = self.prof.as_ref().map(|p| p.lock().unwrap());
             let tw = match (&guard, slot) {
@@ -449,7 +515,10 @@ impl Wgpu {
                 }),
                 _ => None,
             };
-            let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor { label: None, timestamp_writes: tw });
+            let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: None,
+                timestamp_writes: tw,
+            });
             pass.set_pipeline(pipe);
             pass.set_bind_group(0, &bg, &[]);
             pass.dispatch_workgroups(groups.0, groups.1, groups.2);
@@ -486,7 +555,8 @@ impl Wgpu {
                     usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
                     mapped_at_creation: false,
                 });
-                let e = enc.get_or_insert_with(|| self.device.create_command_encoder(&Default::default()));
+                let e = enc
+                    .get_or_insert_with(|| self.device.create_command_encoder(&Default::default()));
                 e.resolve_query_set(&p.qs, 0..2 * n, &resolve, 0);
                 e.copy_buffer_to_buffer(&resolve, 0, &read, 0, bytes);
                 readback = Some(read);
@@ -499,8 +569,13 @@ impl Wgpu {
         if let (Some(read), Some(prof)) = (readback, &self.prof) {
             let slice = read.slice(..);
             slice.map_async(wgpu::MapMode::Read, |_| {});
-            let _ = self.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
-            let ticks: Vec<u64> = bytemuck::cast_slice::<u8, u64>(&slice.get_mapped_range().expect("timestamps")).to_vec();
+            let _ = self.device.poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: None,
+            });
+            let ticks: Vec<u64> =
+                bytemuck::cast_slice::<u8, u64>(&slice.get_mapped_range().expect("timestamps"))
+                    .to_vec();
             let mut p = prof.lock().unwrap();
             let period = p.period_ns;
             let slots = std::mem::take(&mut p.slots);
@@ -527,11 +602,16 @@ impl Wgpu {
     fn upload_u32_buf(&self, data: &[u32]) -> GBuf {
         let data = if data.is_empty() { &[0u32][..] } else { data };
         GBuf {
-            buf: Arc::new(self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: None,
-                contents: bytemuck::cast_slice(data),
-                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
-            })),
+            buf: Arc::new(
+                self.device
+                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: None,
+                        contents: bytemuck::cast_slice(data),
+                        usage: wgpu::BufferUsages::STORAGE
+                            | wgpu::BufferUsages::COPY_SRC
+                            | wgpu::BufferUsages::COPY_DST,
+                    }),
+            ),
             len: data.len(),
         }
     }
@@ -570,9 +650,30 @@ struct Ep {
 impl Ep {
     fn words(&self) -> Vec<u32> {
         let mut v: Vec<u32> = [
-            self.n, self.op as usize, self.dim, self.slots, self.slot, self.off, self.xoff, self.c, self.t, self.h, self.w,
-            self.pt, self.ph, self.pw, self.t2, self.h2, self.w2, self.left, self.len, self.r, self.frames, self.stride,
-            self.col, self.has_z as usize,
+            self.n,
+            self.op as usize,
+            self.dim,
+            self.slots,
+            self.slot,
+            self.off,
+            self.xoff,
+            self.c,
+            self.t,
+            self.h,
+            self.w,
+            self.pt,
+            self.ph,
+            self.pw,
+            self.t2,
+            self.h2,
+            self.w2,
+            self.left,
+            self.len,
+            self.r,
+            self.frames,
+            self.stride,
+            self.col,
+            self.has_z as usize,
         ]
         .iter()
         .map(|&x| x as u32)
@@ -583,13 +684,138 @@ impl Ep {
 }
 
 impl Wgpu {
-    fn elementwise(&self, p: &Ep, x: &GBuf, y: Option<&GBuf>, aux: Option<&GBuf>, z: Option<&GBuf>, ui: Option<&GBuf>) {
+    /// [`Backend::linear`] without the MXFP8 activation rounding.
+    #[allow(clippy::too_many_arguments)]
+    fn linear_plain(
+        &self,
+        x: &GBuf,
+        x_row: usize,
+        rows: usize,
+        w: &GWeight,
+        bias: Option<&GBuf>,
+        act: Act,
+        y: &GBuf,
+        y_row: usize,
+    ) {
+        if rows == 0 {
+            return;
+        }
+        if self.prof.is_some() {
+            *self.tag.lock().unwrap() = Some(format!("{}x{} {act:?}", w.rows, w.cols));
+        }
+        let act_code = match act {
+            Act::None => 0,
+            Act::GeluTanh => 1,
+            Act::GeluErf => 2,
+            Act::Silu => 3,
+        };
+        let half = self.f16 && w.f16 && rows >= F16_MIN_ROWS;
+        let pipe = if let Some((kind, ..)) = &w.quant {
+            match kind {
+                Quant::Q8 => self.pipeline("linear3_q8", || Self::q8_src(LINEAR3)),
+                Quant::Q4 => self.pipeline("linear3_q4", || Self::q4_src(LINEAR3)),
+            }
+        } else if half {
+            self.pipeline("linear3h", || LINEAR3H.to_string())
+        } else {
+            self.pipeline(if w.f16 { "linear3_f16" } else { "linear3_f32" }, || {
+                Self::weight_src(LINEAR3, w.f16)
+            })
+        };
+        let p = [
+            rows as u32,
+            w.rows as u32,
+            w.cols as u32,
+            (x_row * w.cols) as u32,
+            (y_row * w.rows) as u32,
+            bias.is_some() as u32,
+            act_code,
+            w.quant.as_ref().map_or(0, |q| q.2) as u32,
+        ];
+        let b = bias.unwrap_or(&self.dummy);
+        let lim = self.max_binding_bytes();
+        if (x.len as u64) * 4 <= lim && (y.len as u64) * 4 <= lim {
+            let groups = (w.rows.div_ceil(64) as u32, rows.div_ceil(64) as u32, 1);
+            return match &w.quant {
+                Some((_, scales, _)) => {
+                    self.dispatch(&pipe, &p, &[x, &w.buf, b, y, scales], groups)
+                }
+                None => self.dispatch(&pipe, &p, &[x, &w.buf, b, y], groups),
+            };
+        }
+        // An activation larger than one binding (the DiT's fused QKV at
+        // 38k tokens is 3.3 GB): run the GEMM over row chunks, binding each
+        // chunk's rows of x and y as sub-ranges; the binding offset is
+        // aligned down and the remainder rides in the element offsets.
+        let chunk = self.row_chunk(&[w.cols, w.rows]);
+        let mut r0 = 0;
+        while r0 < rows {
+            let n = chunk.min(rows - r0);
+            let mut pc = p;
+            pc[0] = n as u32;
+            let (xr, xo) = self.sub_range((x_row + r0) * w.cols, n * w.cols);
+            let (yr, yo) = self.sub_range((y_row + r0) * w.rows, n * w.rows);
+            pc[3] = xo as u32;
+            pc[4] = yo as u32;
+            let (xr, yr) = (Some(xr), Some(yr));
+            let groups = (w.rows.div_ceil(64) as u32, n.div_ceil(64) as u32, 1);
+            match &w.quant {
+                Some((_, scales, _)) => self.dispatch_ranges(
+                    &pipe,
+                    &pc,
+                    &[(x, xr), (&w.buf, None), (b, None), (y, yr), (scales, None)],
+                    groups,
+                ),
+                None => self.dispatch_ranges(
+                    &pipe,
+                    &pc,
+                    &[(x, xr), (&w.buf, None), (b, None), (y, yr)],
+                    groups,
+                ),
+            }
+            r0 += n;
+        }
+    }
+
+    /// `Mxfp8::round_rows` of `rows` rows of `x` from `x_row` into a fresh
+    /// `[rows, k]` buffer (`mx_act.wgsl`); the slice must fit one binding.
+    fn mx_round(&self, x: &GBuf, x_row: usize, rows: usize, k: usize) -> GBuf {
+        assert!(k.is_multiple_of(32), "MXFP8 needs k % 32 == 0");
+        let out = self.alloc(rows * k);
+        let blocks = rows * k / 32;
+        let (xr, xo) = self.sub_range(x_row * k, rows * k);
+        let pipe = self.pipeline("mx_act", || MX_ACT.to_string());
+        let p = [blocks as u32, xo as u32, 0, 0];
+        self.dispatch_ranges(
+            &pipe,
+            &p,
+            &[(x, Some(xr)), (&out, None)],
+            Self::grid(blocks.div_ceil(256)),
+        );
+        out
+    }
+
+    fn elementwise(
+        &self,
+        p: &Ep,
+        x: &GBuf,
+        y: Option<&GBuf>,
+        aux: Option<&GBuf>,
+        z: Option<&GBuf>,
+        ui: Option<&GBuf>,
+    ) {
         let pipe = self.pipeline("elementwise", || ELEM.to_string());
         let d = &self.dummy;
         self.dispatch(
             &pipe,
             &p.words(),
-            &[x, y.unwrap_or(d), aux.unwrap_or(d), z.unwrap_or(d), ui.unwrap_or(d)],
+            &[
+                x,
+                y.unwrap_or(d),
+                aux.unwrap_or(d),
+                z.unwrap_or(d),
+                ui.unwrap_or(d),
+            ],
             Self::grid(p.n.div_ceil(256)),
         );
     }
@@ -637,7 +863,12 @@ impl Wgpu {
             0,
             0,
         ];
-        self.dispatch(&pipe, &p, &[h, a.unwrap_or(d), gbuf, gidx, w.unwrap_or(d), mt, midx, out], Self::grid(rows));
+        self.dispatch(
+            &pipe,
+            &p,
+            &[h, a.unwrap_or(d), gbuf, gidx, w.unwrap_or(d), mt, midx, out],
+            Self::grid(rows),
+        );
     }
 
     /// Flash kernel dispatch: mode 0 dense, mode 1 VSA fine stage.
@@ -657,9 +888,12 @@ impl Wgpu {
         scale: f32,
         causal: bool,
         vsa: Option<(&GVsa, Option<&GBuf>)>,
+        pv8: Option<(&GBuf, &GBuf)>,
     ) {
         let pipe = self.pipeline("flash", || FLASH.to_string());
-        let (nb, tile, sub, has_gate) = vsa.map_or((0, 64, 1, 0), |(s, g)| (s.nb, s.tile, s.sub, g.is_some() as u32));
+        let (nb, tile, sub, has_gate) = vsa.map_or((0, 64, 1, 0), |(s, g)| {
+            (s.nb, s.tile, s.sub, g.is_some() as u32)
+        });
         let p = [
             heads as u32,
             (heads / kv_heads) as u32,
@@ -673,6 +907,10 @@ impl Wgpu {
             tile as u32,
             sub as u32,
             has_gate,
+            pv8.is_some() as u32,
+            0,
+            0,
+            0,
         ];
         let blocks = if mode == 0 { sq.div_ceil(64) } else { nb * sub };
         let dm = &self.dummy;
@@ -680,13 +918,22 @@ impl Wgpu {
             Some((s, g)) => (&s.slot, &s.sel, &s.coarse, g.unwrap_or(dm)),
             None => (dm, dm, dm, dm),
         };
+        let (vmean, vscale) = pv8.unwrap_or((dm, dm));
         assert!(blocks as u32 <= MAX_DIM && heads as u32 <= MAX_DIM);
-        self.dispatch(&pipe, &p, &[q, k, v, out, slot, sel, coarse, gate], (blocks as u32, heads as u32, 1));
+        self.dispatch(
+            &pipe,
+            &p,
+            &[q, k, v, out, slot, sel, coarse, gate, vmean, vscale],
+            (blocks as u32, heads as u32, 1),
+        );
     }
 
     fn conv_pipe(&self, name: &str, src: &str, w: &GWeight) -> Arc<wgpu::ComputePipeline> {
         assert!(w.quant.is_none(), "conv weights are not quantized");
-        self.pipeline(&format!("{name}_{}", if w.f16 { "f16" } else { "f32" }), || Self::weight_src(src, w.f16))
+        self.pipeline(
+            &format!("{name}_{}", if w.f16 { "f16" } else { "f32" }),
+            || Self::weight_src(src, w.f16),
+        )
     }
 
     fn epilogue<'a>(&'a self, ep: &ConvEpilogue<'a, GBuf>) -> (u32, &'a GBuf) {
@@ -695,6 +942,7 @@ impl Wgpu {
             ConvEpilogue::Relu => (1, &self.dummy),
             ConvEpilogue::AddRelu(r) => (2, r),
             ConvEpilogue::Add(r) => (3, r),
+            ConvEpilogue::Prelu(slope) => (4, slope),
         }
     }
 
@@ -721,7 +969,11 @@ impl Backend for Wgpu {
             self.info.backend,
             self.info.name,
             self.info.driver,
-            if self.info.driver_info.is_empty() { String::new() } else { format!(" {}", self.info.driver_info) },
+            if self.info.driver_info.is_empty() {
+                String::new()
+            } else {
+                format!(" {}", self.info.driver_info)
+            },
             if self.f16 { " +f16" } else { "" }
         )
     }
@@ -735,7 +987,9 @@ impl Backend for Wgpu {
             buf: Arc::new(self.device.create_buffer(&wgpu::BufferDescriptor {
                 label: None,
                 size: (len.max(1) * 4) as u64,
-                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
+                usage: wgpu::BufferUsages::STORAGE
+                    | wgpu::BufferUsages::COPY_SRC
+                    | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             })),
             len,
@@ -751,11 +1005,16 @@ impl Backend for Wgpu {
             bytemuck::cast_slice(data)
         };
         GBuf {
-            buf: Arc::new(self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: None,
-                contents: bytes,
-                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
-            })),
+            buf: Arc::new(
+                self.device
+                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: None,
+                        contents: bytes,
+                        usage: wgpu::BufferUsages::STORAGE
+                            | wgpu::BufferUsages::COPY_SRC
+                            | wgpu::BufferUsages::COPY_DST,
+                    }),
+            ),
             len: data.len(),
         }
     }
@@ -766,7 +1025,8 @@ impl Backend for Wgpu {
 
     fn write(&self, buf: &GBuf, data: &[f32]) {
         self.flush();
-        self.queue.write_buffer(&buf.buf, 0, bytemuck::cast_slice(data));
+        self.queue
+            .write_buffer(&buf.buf, 0, bytemuck::cast_slice(data));
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -780,7 +1040,9 @@ impl Backend for Wgpu {
         });
         {
             let mut pend = self.pending.lock().unwrap();
-            let enc = pend.enc.get_or_insert_with(|| self.device.create_command_encoder(&Default::default()));
+            let enc = pend
+                .enc
+                .get_or_insert_with(|| self.device.create_command_encoder(&Default::default()));
             enc.copy_buffer_to_buffer(&buf.buf, 0, &staging, 0, size);
         }
         self.flush();
@@ -790,7 +1052,10 @@ impl Backend for Wgpu {
             let _ = tx.send(r);
         });
         self.device
-            .poll(wgpu::PollType::Wait { submission_index: None, timeout: None })
+            .poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: None,
+            })
             .expect("device lost while reading back");
         rx.recv().unwrap().expect("map failed");
         let data = slice.get_mapped_range().expect("mapped range");
@@ -821,15 +1086,29 @@ impl Backend for Wgpu {
             return;
         }
         let mut pend = self.pending.lock().unwrap();
-        let enc = pend.enc.get_or_insert_with(|| self.device.create_command_encoder(&Default::default()));
-        enc.copy_buffer_to_buffer(&src.buf, (so * 4) as u64, &dst.buf, (d * 4) as u64, (len * 4) as u64);
+        let enc = pend
+            .enc
+            .get_or_insert_with(|| self.device.create_command_encoder(&Default::default()));
+        enc.copy_buffer_to_buffer(
+            &src.buf,
+            (so * 4) as u64,
+            &dst.buf,
+            (d * 4) as u64,
+            (len * 4) as u64,
+        );
     }
 
     fn fill(&self, buf: &GBuf, off: usize, len: usize, value: f32) {
         if len == 0 {
             return;
         }
-        let p = Ep { n: len, op: 14, off, f: [value, 0.0, 0.0, 0.0], ..Default::default() };
+        let p = Ep {
+            n: len,
+            op: 14,
+            off,
+            f: [value, 0.0, 0.0, 0.0],
+            ..Default::default()
+        };
         self.elementwise(&p, buf, None, None, None, None);
     }
 
@@ -846,31 +1125,83 @@ impl Backend for Wgpu {
                 })
                 .collect();
             let buf = GBuf {
-                buf: Arc::new(self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: None,
-                    contents: bytemuck::cast_slice(&packed),
-                    usage: wgpu::BufferUsages::STORAGE,
-                })),
+                buf: Arc::new(
+                    self.device
+                        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                            label: None,
+                            contents: bytemuck::cast_slice(&packed),
+                            usage: wgpu::BufferUsages::STORAGE,
+                        }),
+                ),
                 len: packed.len(),
             };
-            GWeight { buf, rows, cols, f16: true, quant: None }
+            GWeight {
+                buf,
+                rows,
+                cols,
+                f16: true,
+                quant: None,
+                mx: false,
+            }
         } else {
-            GWeight { buf: self.upload(data), rows, cols, f16: false, quant: None }
+            GWeight {
+                buf: self.upload(data),
+                rows,
+                cols,
+                f16: false,
+                quant: None,
+                mx: false,
+            }
+        }
+    }
+
+    fn weight_mxfp8(&self, q: &Mxfp8) -> GWeight {
+        GWeight {
+            mx: true,
+            ..self.weight(&q.dequantize(), q.rows, q.cols)
         }
     }
 
     fn weight_q8(&self, q: &Q8) -> GWeight {
         let packed: Vec<u32> =
-            q.q.chunks(4).map(|c| c.iter().enumerate().fold(0u32, |a, (j, &v)| a | ((v as u8 as u32) << (8 * j)))).collect();
-        GWeight { buf: self.upload_u32_buf(&packed), rows: q.rows, cols: q.cols, f16: false, quant: Some((Quant::Q8, self.upload(&q.scales), q.group)) }
+            q.q.chunks(4)
+                .map(|c| {
+                    c.iter()
+                        .enumerate()
+                        .fold(0u32, |a, (j, &v)| a | ((v as u8 as u32) << (8 * j)))
+                })
+                .collect();
+        GWeight {
+            buf: self.upload_u32_buf(&packed),
+            rows: q.rows,
+            cols: q.cols,
+            f16: false,
+            quant: Some((Quant::Q8, self.upload(&q.scales), q.group)),
+            mx: false,
+        }
     }
 
     fn weight_q4(&self, q: &Q4) -> GWeight {
         let mut bytes = q.packed();
         bytes.resize(bytes.len().div_ceil(4) * 4, 0);
-        let words: Vec<u32> = bytes.chunks_exact(4).map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect();
-        let sz: Vec<f32> = q.scales.iter().zip(&q.zeros).flat_map(|(&s, &z)| [s, z]).collect();
-        GWeight { buf: self.upload_u32_buf(&words), rows: q.rows, cols: q.cols, f16: false, quant: Some((Quant::Q4, self.upload(&sz), q.group)) }
+        let words: Vec<u32> = bytes
+            .chunks_exact(4)
+            .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+            .collect();
+        let sz: Vec<f32> = q
+            .scales
+            .iter()
+            .zip(&q.zeros)
+            .flat_map(|(&s, &z)| [s, z])
+            .collect();
+        GWeight {
+            buf: self.upload_u32_buf(&words),
+            rows: q.rows,
+            cols: q.cols,
+            f16: false,
+            quant: Some((Quant::Q4, self.upload(&sz), q.group)),
+            mx: false,
+        }
     }
 
     fn weight_bytes(&self, w: &GWeight) -> usize {
@@ -880,7 +1211,10 @@ impl Backend for Wgpu {
     fn sync(&self) {
         self.flush();
         #[cfg(not(target_arch = "wasm32"))]
-        let _ = self.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+        let _ = self.device.poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: None,
+        });
     }
 
     fn profile_report(&self) -> Option<String> {
@@ -890,79 +1224,56 @@ impl Backend for Wgpu {
         Wgpu::profile_reset(self)
     }
 
-    fn linear(&self, x: &GBuf, x_row: usize, rows: usize, w: &GWeight, bias: Option<&GBuf>, act: Act, y: &GBuf, y_row: usize) {
+    fn linear(
+        &self,
+        x: &GBuf,
+        x_row: usize,
+        rows: usize,
+        w: &GWeight,
+        bias: Option<&GBuf>,
+        act: Act,
+        y: &GBuf,
+        y_row: usize,
+    ) {
         if rows == 0 {
             return;
         }
-        if self.prof.is_some() {
-            *self.tag.lock().unwrap() = Some(format!("{}x{} {act:?}", w.rows, w.cols));
-        }
-        let act_code = match act {
-            Act::None => 0,
-            Act::GeluTanh => 1,
-            Act::GeluErf => 2,
-            Act::Silu => 3,
-        };
-        let half = self.f16 && w.f16 && rows >= F16_MIN_ROWS;
-        let pipe = if let Some((kind, ..)) = &w.quant {
-            match kind {
-                Quant::Q8 => self.pipeline("linear3_q8", || Self::q8_src(LINEAR3)),
-                Quant::Q4 => self.pipeline("linear3_q4", || Self::q4_src(LINEAR3)),
+        if w.mx {
+            // MXFP8 W8A8: round the activations per 32-column block into a
+            // scratch copy first, in row chunks that fit one binding.
+            let chunk = self.row_chunk(&[w.cols, w.rows]);
+            let mut r0 = 0;
+            while r0 < rows {
+                let n = chunk.min(rows - r0);
+                let xq = self.mx_round(x, x_row + r0, n, w.cols);
+                self.linear_plain(&xq, 0, n, w, bias, act, y, y_row + r0);
+                r0 += n;
             }
-        } else if half {
-            self.pipeline("linear3h", || LINEAR3H.to_string())
-        } else {
-            self.pipeline(if w.f16 { "linear3_f16" } else { "linear3_f32" }, || Self::weight_src(LINEAR3, w.f16))
-        };
-        let p = [
-            rows as u32,
-            w.rows as u32,
-            w.cols as u32,
-            (x_row * w.cols) as u32,
-            (y_row * w.rows) as u32,
-            bias.is_some() as u32,
-            act_code,
-            w.quant.as_ref().map_or(0, |q| q.2) as u32,
-        ];
-        let b = bias.unwrap_or(&self.dummy);
-        let lim = self.max_binding_bytes();
-        if (x.len as u64) * 4 <= lim && (y.len as u64) * 4 <= lim {
-            let groups = (w.rows.div_ceil(64) as u32, rows.div_ceil(64) as u32, 1);
-            return match &w.quant {
-                Some((_, scales, _)) => self.dispatch(&pipe, &p, &[x, &w.buf, b, y, scales], groups),
-                None => self.dispatch(&pipe, &p, &[x, &w.buf, b, y], groups),
-            };
+            return;
         }
-        // An activation larger than one binding (the DiT's fused QKV at
-        // 38k tokens is 3.3 GB): run the GEMM over row chunks, binding each
-        // chunk's rows of x and y as sub-ranges; the binding offset is
-        // aligned down and the remainder rides in the element offsets.
-        let chunk = self.row_chunk(&[w.cols, w.rows]);
-        let mut r0 = 0;
-        while r0 < rows {
-            let n = chunk.min(rows - r0);
-            let mut pc = p;
-            pc[0] = n as u32;
-            let (xr, xo) = self.sub_range((x_row + r0) * w.cols, n * w.cols);
-            let (yr, yo) = self.sub_range((y_row + r0) * w.rows, n * w.rows);
-            pc[3] = xo as u32;
-            pc[4] = yo as u32;
-            let (xr, yr) = (Some(xr), Some(yr));
-            let groups = (w.rows.div_ceil(64) as u32, n.div_ceil(64) as u32, 1);
-            match &w.quant {
-                Some((_, scales, _)) => self.dispatch_ranges(&pipe, &pc, &[(x, xr), (&w.buf, None), (b, None), (y, yr), (scales, None)], groups),
-                None => self.dispatch_ranges(&pipe, &pc, &[(x, xr), (&w.buf, None), (b, None), (y, yr)], groups),
-            }
-            r0 += n;
-        }
+        self.linear_plain(x, x_row, rows, w, bias, act, y, y_row);
     }
 
     fn swiglu(&self, x: &GBuf, rows: usize, dim: usize, out: &GBuf) {
-        let p = Ep { n: rows * dim, op: 13, dim, ..Default::default() };
+        let p = Ep {
+            n: rows * dim,
+            op: 13,
+            dim,
+            ..Default::default()
+        };
         self.elementwise(&p, out, Some(x), None, None, None);
     }
 
-    fn rms_norm(&self, x: &GBuf, rows: usize, dim: usize, w: Option<&GBuf>, modulation: Modulation<'_, GBuf>, eps: f32, out: &GBuf) {
+    fn rms_norm(
+        &self,
+        x: &GBuf,
+        rows: usize,
+        dim: usize,
+        w: Option<&GBuf>,
+        modulation: Modulation<'_, GBuf>,
+        eps: f32,
+        out: &GBuf,
+    ) {
         self.norm(x, None, rows, dim, 0, Gate::None, w, modulation, eps, out);
     }
 
@@ -985,10 +1296,41 @@ impl Backend for Wgpu {
     fn gate_residual(&self, h: &GBuf, a: &GBuf, rows: usize, dim: usize, gate: Gate<'_, GBuf>) {
         let n = rows * dim;
         match gate {
-            Gate::None => self.elementwise(&Ep { n, op: 0, dim, ..Default::default() }, h, Some(a), None, None, None),
-            Gate::Vector(g) => self.elementwise(&Ep { n, op: 1, dim, ..Default::default() }, h, Some(a), Some(g), None, None),
+            Gate::None => self.elementwise(
+                &Ep {
+                    n,
+                    op: 0,
+                    dim,
+                    ..Default::default()
+                },
+                h,
+                Some(a),
+                None,
+                None,
+                None,
+            ),
+            Gate::Vector(g) => self.elementwise(
+                &Ep {
+                    n,
+                    op: 1,
+                    dim,
+                    ..Default::default()
+                },
+                h,
+                Some(a),
+                Some(g),
+                None,
+                None,
+            ),
             Gate::Table(m) => self.elementwise(
-                &Ep { n, op: 2, dim, slots: m.table.slots, slot: m.slot, ..Default::default() },
+                &Ep {
+                    n,
+                    op: 2,
+                    dim,
+                    slots: m.table.slots,
+                    slot: m.slot,
+                    ..Default::default()
+                },
                 h,
                 Some(a),
                 Some(m.table.table),
@@ -998,8 +1340,28 @@ impl Backend for Wgpu {
         }
     }
 
-    fn layer_norm(&self, x: &GBuf, rows: usize, dim: usize, w: Option<&GBuf>, b: Option<&GBuf>, eps: f32, out: &GBuf) {
-        self.norm(x, b, rows, dim, 2, Gate::None, w, Modulation::None, eps, out);
+    fn layer_norm(
+        &self,
+        x: &GBuf,
+        rows: usize,
+        dim: usize,
+        w: Option<&GBuf>,
+        b: Option<&GBuf>,
+        eps: f32,
+        out: &GBuf,
+    ) {
+        self.norm(
+            x,
+            b,
+            rows,
+            dim,
+            2,
+            Gate::None,
+            w,
+            Modulation::None,
+            eps,
+            out,
+        );
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1027,31 +1389,83 @@ impl Backend for Wgpu {
             None => (0, d, d, 0),
         };
         let has_w = norm.and_then(|n| n.w).is_some() as u32;
-        let chunk = if (src.len as u64) * 4 <= self.max_binding_bytes() { rows } else { self.row_chunk(&[stride]) };
+        let chunk = if (src.len as u64) * 4 <= self.max_binding_bytes() {
+            rows
+        } else {
+            self.row_chunk(&[stride])
+        };
         let mut r0 = 0;
         while r0 < rows {
             let n = chunk.min(rows - r0);
-            let (sr, rem) = if chunk == rows { (None, 0) } else {
+            let (sr, rem) = if chunk == rows {
+                (None, 0)
+            } else {
                 let (r, rem) = self.sub_range(r0 * stride, n * stride);
                 (Some(r), rem)
             };
-            let p = [n as u32, stride as u32, (col_off + rem) as u32, heads as u32, hd as u32, has_norm, has_w, has_rope, rot as u32, eps.to_bits(), r0 as u32, rows as u32];
-            self.dispatch_ranges(&pipe, &p, &[(src, sr), (w, None), (cs, None), (sn, None), (out, None)], Self::grid(n));
+            let p = [
+                n as u32,
+                stride as u32,
+                (col_off + rem) as u32,
+                heads as u32,
+                hd as u32,
+                has_norm,
+                has_w,
+                has_rope,
+                rot as u32,
+                eps.to_bits(),
+                r0 as u32,
+                rows as u32,
+            ];
+            self.dispatch_ranges(
+                &pipe,
+                &p,
+                &[(src, sr), (w, None), (cs, None), (sn, None), (out, None)],
+                Self::grid(n),
+            );
             r0 += n;
         }
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn attention(&self, q: &GBuf, k: &GBuf, v: &GBuf, heads: usize, kv_heads: usize, sq: usize, sk: usize, d: usize, causal: bool, out: &GBuf) {
+    fn attention(
+        &self,
+        q: &GBuf,
+        k: &GBuf,
+        v: &GBuf,
+        heads: usize,
+        kv_heads: usize,
+        sq: usize,
+        sk: usize,
+        d: usize,
+        causal: bool,
+        out: &GBuf,
+    ) {
         assert!(d <= 128, "attention kernel supports head_dim <= 128");
         assert!(heads % kv_heads == 0);
         if self.flash_ok && d % 16 == 0 {
-            self.flash(0, q, k, v, out, heads, kv_heads, sq, sk, d, 1.0 / (d as f32).sqrt(), causal, None);
+            self.flash(
+                0,
+                q,
+                k,
+                v,
+                out,
+                heads,
+                kv_heads,
+                sq,
+                sk,
+                d,
+                1.0 / (d as f32).sqrt(),
+                causal,
+                None,
+                None,
+            );
             return;
         }
         let bk = self.attn_bk;
         let pipe = self.pipeline(&format!("attention_bk{bk}"), || {
-            ATTN.replace("{BK_D}", &(bk * 128).to_string()).replace("{BK}", &bk.to_string())
+            ATTN.replace("{BK_D}", &(bk * 128).to_string())
+                .replace("{BK}", &bk.to_string())
         });
         let p = [
             heads as u32,
@@ -1064,7 +1478,114 @@ impl Backend for Wgpu {
             0,
         ];
         assert!(heads as u32 <= MAX_DIM);
-        self.dispatch(&pipe, &p, &[q, k, v, out], (sq.div_ceil(64) as u32, heads as u32, 1));
+        self.dispatch(
+            &pipe,
+            &p,
+            &[q, k, v, out],
+            (sq.div_ceil(64) as u32, heads as u32, 1),
+        );
+    }
+
+    fn attention_qk8(
+        &self,
+        q: &GBuf,
+        k: &GBuf,
+        v: &GBuf,
+        heads: usize,
+        kv_heads: usize,
+        sq: usize,
+        sk: usize,
+        d: usize,
+        causal: bool,
+        pv8: bool,
+        out: &GBuf,
+    ) {
+        // Emulation: the rounded f32 copies through the exact kernel (or, with
+        // FP8 P·V, through the oracle's two-pass kernel).
+        let (kmean, q8, k8) = (
+            self.alloc(kv_heads * d),
+            self.alloc(heads * sq * d),
+            self.alloc(kv_heads * sk * d),
+        );
+        let pipe = self.pipeline("attn_qk8", || ATTN_QK8.to_string());
+        let mut p = [
+            heads as u32,
+            kv_heads as u32,
+            sq as u32,
+            sk as u32,
+            d as u32,
+            0,
+            0,
+            0,
+        ];
+        self.dispatch(
+            &pipe,
+            &p,
+            &[q, k, &kmean, &q8, &k8],
+            (kv_heads as u32, 1, 1),
+        );
+        p[5] = 1;
+        self.dispatch(
+            &pipe,
+            &p,
+            &[q, k, &kmean, &q8, &k8],
+            (sq.div_ceil(64) as u32, heads as u32, 1),
+        );
+        p[5] = 2;
+        self.dispatch(
+            &pipe,
+            &p,
+            &[q, k, &kmean, &q8, &k8],
+            (sk.div_ceil(64) as u32, kv_heads as u32, 1),
+        );
+        if !pv8 {
+            self.attention(&q8, &k8, v, heads, kv_heads, sq, sk, d, causal, out);
+            return;
+        }
+        // V: mean (mode 0 on V), scale (mode 3), codes (mode 4).
+        let (vmean, v8, vscale) = (
+            self.alloc(kv_heads * d),
+            self.alloc(kv_heads * sk * d),
+            self.alloc(kv_heads.max(1)),
+        );
+        p[5] = 0;
+        self.dispatch(
+            &pipe,
+            &p,
+            &[q, v, &vmean, &v8, &vscale],
+            (kv_heads as u32, 1, 1),
+        );
+        p[5] = 3;
+        self.dispatch(
+            &pipe,
+            &p,
+            &[q, v, &vmean, &v8, &vscale],
+            (kv_heads as u32, 1, 1),
+        );
+        p[5] = 4;
+        self.dispatch(
+            &pipe,
+            &p,
+            &[q, v, &vmean, &v8, &vscale],
+            (sk.div_ceil(64) as u32, kv_heads as u32, 1),
+        );
+        let pipe8 = self.pipeline("attn_pv8", || ATTN_PV8.to_string());
+        let p8 = [
+            heads as u32,
+            kv_heads as u32,
+            sq as u32,
+            sk as u32,
+            d as u32,
+            causal as u32,
+            (1.0 / (d as f32).sqrt()).to_bits(),
+            0,
+        ];
+        self.dispatch(
+            &pipe8,
+            &p8,
+            &[&q8, &k8, &v8, &vmean, &vscale, out],
+            (sq.div_ceil(64) as u32, heads as u32, 1),
+        );
     }
 
     fn vsa_supported(&self, head_dim: usize) -> bool {
@@ -1074,7 +1595,10 @@ impl Backend for Wgpu {
     fn vsa_prepare(&self, spec: &VsaSpec) -> GVsa {
         let plan = &spec.plan;
         let (nb, h, d) = (plan.num_tiles(), spec.heads, spec.head_dim);
-        assert!(nb <= MAX_TILES, "VSA coarse stage holds at most {MAX_TILES} tiles ({nb} tiles)");
+        assert!(
+            nb <= MAX_TILES,
+            "VSA coarse stage holds at most {MAX_TILES} tiles ({nb} tiles)"
+        );
         assert!(plan.tile_elems % 64 == 0);
         let mut regions = Vec::new();
         for r in &plan.regions {
@@ -1096,65 +1620,374 @@ impl Backend for Wgpu {
             scale: spec.scale,
             tile: plan.tile_elems,
             sub: plan.tile_elems / 64,
+            qk8: spec.qk8.then(|| {
+                (
+                    self.alloc(h * d),
+                    self.alloc(h * plan.seq * d),
+                    self.alloc(h * plan.seq * d),
+                )
+            }),
+            pv8: spec.pv8.then(|| {
+                (
+                    self.alloc(h * d),
+                    self.alloc(h * plan.seq * d),
+                    self.alloc(h),
+                )
+            }),
+            dense: plan.is_dense(),
+            rowslot: self.upload_u32_buf(&plan.slot_of_row()),
         }
     }
 
-    fn vsa_attention(&self, q: &GBuf, k: &GBuf, v: &GBuf, gate: Option<&GBuf>, s: &GVsa, out: &GBuf) {
-        assert!(self.vsa_supported(s.d), "VSA needs the flash kernel (head_dim multiple of 16, <= 128)");
+    fn vsa_attention(
+        &self,
+        q: &GBuf,
+        k: &GBuf,
+        v: &GBuf,
+        gate: Option<&GBuf>,
+        s: &GVsa,
+        out: &GBuf,
+    ) {
+        assert!(
+            self.vsa_supported(s.d),
+            "VSA needs the flash kernel (head_dim multiple of 16, <= 128)"
+        );
         let pool = self.pipeline("vsa_pool", || VSA_POOL.to_string());
         self.dispatch(
             &pool,
-            &[s.heads as u32, s.seq as u32, s.d as u32, s.nb as u32, s.tile as u32, 0, 0, 0],
+            &[
+                s.heads as u32,
+                s.seq as u32,
+                s.d as u32,
+                s.nb as u32,
+                s.tile as u32,
+                0,
+                0,
+                0,
+            ],
             &[q, k, v, &s.slot, &s.bsz, &s.pooled],
             (s.nb as u32, s.heads as u32, 1),
         );
         let coarse = self.pipeline("vsa_coarse", || VSA_COARSE.to_string());
-        let p = [s.heads as u32, s.d as u32, s.nb as u32, s.nprefix as u32, s.nregions as u32, s.scale.to_bits(), 0, 0];
-        self.dispatch(&coarse, &p, &[&s.pooled, &s.coarse, &s.sel, &s.regions], (s.nb as u32, s.heads as u32, 1));
-        self.flash(1, q, k, v, out, s.heads, s.heads, s.seq, s.seq, s.d, s.scale, false, Some((s, gate)));
+        let p = [
+            s.heads as u32,
+            s.d as u32,
+            s.nb as u32,
+            s.nprefix as u32,
+            s.nregions as u32,
+            s.scale.to_bits(),
+            0,
+            0,
+        ];
+        self.dispatch(
+            &coarse,
+            &p,
+            &[&s.pooled, &s.coarse, &s.sel, &s.regions],
+            (s.nb as u32, s.heads as u32, 1),
+        );
+        if s.dense {
+            // A dense plan: the dense attention (its INT8 / FP8 recipe when the
+            // spec asks) plus the gated pooled branch; see `vsa_reference`.
+            if s.qk8.is_some() || s.pv8.is_some() {
+                self.attention_qk8(
+                    q,
+                    k,
+                    v,
+                    s.heads,
+                    s.heads,
+                    s.seq,
+                    s.seq,
+                    s.d,
+                    false,
+                    s.pv8.is_some(),
+                    out,
+                );
+            } else {
+                self.attention(q, k, v, s.heads, s.heads, s.seq, s.seq, s.d, false, out);
+            }
+            if let Some(g) = gate {
+                let n = s.seq * s.heads * s.d;
+                self.elementwise(
+                    &Ep {
+                        n,
+                        op: 20,
+                        dim: s.d,
+                        slots: s.heads,
+                        slot: s.nb,
+                        off: s.tile,
+                        len: s.seq,
+                        ..Default::default()
+                    },
+                    out,
+                    Some(g),
+                    Some(&s.coarse),
+                    None,
+                    Some(&s.rowslot),
+                );
+            }
+            return;
+        }
+        // INT8 Q·Kᵀ emulation: the fine stage reads the rounded copies; the
+        // tile means and selection above used the exact values.
+        if let Some((kmean, q8, k8)) = &s.qk8 {
+            let pipe = self.pipeline("vsa_qk8", || VSA_QK8.to_string());
+            let base = [
+                s.heads as u32,
+                s.seq as u32,
+                s.d as u32,
+                s.nb as u32,
+                s.tile as u32,
+                0,
+                0,
+                0,
+            ];
+            self.dispatch(
+                &pipe,
+                &base,
+                &[q, k, &s.slot, &s.bsz, kmean, q8, k8],
+                (s.heads as u32, 1, 1),
+            );
+            let mut p1 = base;
+            p1[5] = 1;
+            self.dispatch(
+                &pipe,
+                &p1,
+                &[q, k, &s.slot, &s.bsz, kmean, q8, k8],
+                (s.nb as u32, s.heads as u32, 1),
+            );
+            if let Some((vmean, v8, vscale)) = &s.pv8 {
+                // V: mean (mode 0 on V), per-head scale (mode 3), codes (mode 4).
+                let pipe = self.pipeline("attn_qk8", || ATTN_QK8.to_string());
+                let mut pv = [
+                    s.heads as u32,
+                    s.heads as u32,
+                    s.seq as u32,
+                    s.seq as u32,
+                    s.d as u32,
+                    0,
+                    0,
+                    0,
+                ];
+                self.dispatch(
+                    &pipe,
+                    &pv,
+                    &[q, v, vmean, v8, vscale],
+                    (s.heads as u32, 1, 1),
+                );
+                pv[5] = 3;
+                self.dispatch(
+                    &pipe,
+                    &pv,
+                    &[q, v, vmean, v8, vscale],
+                    (s.heads as u32, 1, 1),
+                );
+                pv[5] = 4;
+                self.dispatch(
+                    &pipe,
+                    &pv,
+                    &[q, v, vmean, v8, vscale],
+                    (s.seq.div_ceil(64) as u32, s.heads as u32, 1),
+                );
+                self.flash(
+                    1,
+                    q8,
+                    k8,
+                    v8,
+                    out,
+                    s.heads,
+                    s.heads,
+                    s.seq,
+                    s.seq,
+                    s.d,
+                    s.scale,
+                    false,
+                    Some((s, gate)),
+                    Some((vmean, vscale)),
+                );
+                return;
+            }
+            self.flash(
+                1,
+                q8,
+                k8,
+                v,
+                out,
+                s.heads,
+                s.heads,
+                s.seq,
+                s.seq,
+                s.d,
+                s.scale,
+                false,
+                Some((s, gate)),
+                None,
+            );
+            return;
+        }
+        self.flash(
+            1,
+            q,
+            k,
+            v,
+            out,
+            s.heads,
+            s.heads,
+            s.seq,
+            s.seq,
+            s.d,
+            s.scale,
+            false,
+            Some((s, gate)),
+            None,
+        );
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn patchify(&self, latent: &GBuf, c: usize, t: usize, h: usize, w: usize, patch: (usize, usize, usize), out: &GBuf, out_row: usize) {
+    fn patchify(
+        &self,
+        latent: &GBuf,
+        c: usize,
+        t: usize,
+        h: usize,
+        w: usize,
+        patch: (usize, usize, usize),
+        out: &GBuf,
+        out_row: usize,
+    ) {
         let n = c * t * h * w;
-        let p = Ep { n, op: 11, off: out_row, c, t, h, w, pt: patch.0, ph: patch.1, pw: patch.2, ..Default::default() };
+        let p = Ep {
+            n,
+            op: 11,
+            off: out_row,
+            c,
+            t,
+            h,
+            w,
+            pt: patch.0,
+            ph: patch.1,
+            pw: patch.2,
+            ..Default::default()
+        };
         self.elementwise(&p, out, Some(latent), None, None, None);
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn unpatchify(&self, x: &GBuf, x_row: usize, x_stride: usize, col: usize, c: usize, t: usize, h: usize, w: usize, patch: (usize, usize, usize), out: &GBuf) {
+    fn unpatchify(
+        &self,
+        x: &GBuf,
+        x_row: usize,
+        x_stride: usize,
+        col: usize,
+        c: usize,
+        t: usize,
+        h: usize,
+        w: usize,
+        patch: (usize, usize, usize),
+        out: &GBuf,
+    ) {
         let n = c * t * h * w;
-        let p = Ep { n, op: 12, off: x_row, stride: x_stride, col, c, t, h, w, pt: patch.0, ph: patch.1, pw: patch.2, ..Default::default() };
+        let p = Ep {
+            n,
+            op: 12,
+            off: x_row,
+            stride: x_stride,
+            col,
+            c,
+            t,
+            h,
+            w,
+            pt: patch.0,
+            ph: patch.1,
+            pw: patch.2,
+            ..Default::default()
+        };
         self.elementwise(&p, out, Some(x), None, None, None);
     }
 
-    fn flow_step(&self, x: &GBuf, off: usize, v: &GBuf, v_off: usize, noise: Option<&GBuf>, n: usize, step: FlowStep) {
+    fn flow_step(
+        &self,
+        x: &GBuf,
+        off: usize,
+        v: &GBuf,
+        v_off: usize,
+        noise: Option<&GBuf>,
+        n: usize,
+        step: FlowStep,
+    ) {
         let (op, f) = match step {
             FlowStep::Euler { sigma, next } => (3, [sigma, next, 0.0, 0.0]),
             FlowStep::Renoise { sigma, next } => (4, [sigma, next, 0.0, 0.0]),
             FlowStep::Terminal { sigma } => (5, [sigma, 0.0, 0.0, 0.0]),
         };
-        let z = if op == 4 { Some(noise.expect("renoise needs noise")) } else { None };
-        let p = Ep { n, op, off, xoff: v_off, f, ..Default::default() };
+        let z = if op == 4 {
+            Some(noise.expect("renoise needs noise"))
+        } else {
+            None
+        };
+        let p = Ep {
+            n,
+            op,
+            off,
+            xoff: v_off,
+            f,
+            ..Default::default()
+        };
         self.elementwise(&p, x, Some(v), z, None, None);
     }
 
     fn axpby(&self, y: &GBuf, off: usize, a: f32, x: &GBuf, x_off: usize, b: f32, n: usize) {
         if Arc::ptr_eq(&y.buf, &x.buf) {
-            let p = Ep { n, op: 9, off, xoff: x_off, f: [a, b, 0.0, 0.0], ..Default::default() };
+            let p = Ep {
+                n,
+                op: 9,
+                off,
+                xoff: x_off,
+                f: [a, b, 0.0, 0.0],
+                ..Default::default()
+            };
             self.elementwise(&p, y, None, None, None, None);
         } else {
-            let p = Ep { n, op: 8, off, xoff: x_off, f: [a, b, 0.0, 0.0], ..Default::default() };
+            let p = Ep {
+                n,
+                op: 8,
+                off,
+                xoff: x_off,
+                f: [a, b, 0.0, 0.0],
+                ..Default::default()
+            };
             self.elementwise(&p, y, Some(x), None, None, None);
         }
     }
 
-    fn channel_affine(&self, x: &GBuf, c: usize, inner: usize, scale: &GBuf, shift: Option<&GBuf>, out: &GBuf) {
-        let p = Ep { n: c * inner, op: 10, dim: inner, has_z: shift.is_some(), ..Default::default() };
+    fn channel_affine(
+        &self,
+        x: &GBuf,
+        c: usize,
+        inner: usize,
+        scale: &GBuf,
+        shift: Option<&GBuf>,
+        out: &GBuf,
+    ) {
+        let p = Ep {
+            n: c * inner,
+            op: 10,
+            dim: inner,
+            has_z: shift.is_some(),
+            ..Default::default()
+        };
         self.elementwise(&p, out, Some(x), Some(scale), shift, None);
     }
 
-    fn conv2d(&self, a: &GBuf, b: Option<&GBuf>, s: &ConvShape, w: &GWeight, bias: Option<&GBuf>, ep: ConvEpilogue<'_, GBuf>, out: &GBuf) {
+    fn conv2d(
+        &self,
+        a: &GBuf,
+        b: Option<&GBuf>,
+        s: &ConvShape,
+        w: &GWeight,
+        bias: Option<&GBuf>,
+        ep: ConvEpilogue<'_, GBuf>,
+        out: &GBuf,
+    ) {
         assert_eq!((w.rows, w.cols), (s.cout, s.k_len()), "conv weight shape");
         if self.prof.is_some() {
             *self.tag.lock().unwrap() = Some(format!("{}->{} k{}", s.cin(), s.cout, s.k));
@@ -1178,13 +2011,38 @@ impl Backend for Wgpu {
         let (oh, ow) = s.out_hw();
         let (gy, gz) = Self::mgrid(s.frames * oh * ow);
         let groups = (s.cout.div_ceil(64) as u32, gy, gz);
-        self.dispatch(&pipe, &p, &[a, b.unwrap_or(&self.dummy), &w.buf, bias.unwrap_or(&self.dummy), res, out], groups);
+        self.dispatch(
+            &pipe,
+            &p,
+            &[
+                a,
+                b.unwrap_or(&self.dummy),
+                &w.buf,
+                bias.unwrap_or(&self.dummy),
+                res,
+                out,
+            ],
+            groups,
+        );
     }
 
-    fn conv3d(&self, x: &GBuf, s: &Conv3dShape, w: &GWeight, bias: Option<&GBuf>, ep: ConvEpilogue<'_, GBuf>, out: &GBuf) {
+    fn conv3d(
+        &self,
+        x: &GBuf,
+        s: &Conv3dShape,
+        w: &GWeight,
+        bias: Option<&GBuf>,
+        ep: ConvEpilogue<'_, GBuf>,
+        out: &GBuf,
+    ) {
+        assert!(
+            !matches!(ep, ConvEpilogue::Prelu(_)),
+            "PReLU is a conv2d epilogue"
+        );
         assert_eq!((w.rows, w.cols), (s.cout, s.k_len()), "conv3d weight shape");
         if self.prof.is_some() {
-            *self.tag.lock().unwrap() = Some(format!("{}->{} k{:?} g{}", s.cin, s.cout, s.k, s.groups));
+            *self.tag.lock().unwrap() =
+                Some(format!("{}->{} k{:?} g{}", s.cin, s.cout, s.k, s.groups));
         }
         let (epc, res) = self.epilogue(&ep);
         let (ot, oh, ow) = s.out_dims();
@@ -1223,8 +2081,24 @@ impl Backend for Wgpu {
         }
     }
 
-    fn conv1d(&self, x: &GBuf, s: &Conv1dShape, w: &GWeight, bias: Option<&GBuf>, ep: ConvEpilogue<'_, GBuf>, out: &GBuf) {
-        assert_eq!((w.rows, w.cols), (s.cout, (s.cin / s.groups) * s.k), "conv1d weight shape");
+    fn conv1d(
+        &self,
+        x: &GBuf,
+        s: &Conv1dShape,
+        w: &GWeight,
+        bias: Option<&GBuf>,
+        ep: ConvEpilogue<'_, GBuf>,
+        out: &GBuf,
+    ) {
+        assert!(
+            !matches!(ep, ConvEpilogue::Prelu(_)),
+            "PReLU is a conv2d epilogue"
+        );
+        assert_eq!(
+            (w.rows, w.cols),
+            (s.cout, (s.cin / s.groups) * s.k),
+            "conv1d weight shape"
+        );
         let pipe = self.conv_pipe("conv1d", CONV1D, w);
         let (epc, res) = self.epilogue(&ep);
         let n = s.out_len();
@@ -1242,16 +2116,47 @@ impl Backend for Wgpu {
             epc,
             n as u32,
         ];
-        self.dispatch(&pipe, &p, &[x, &w.buf, bias.unwrap_or(&self.dummy), res, out], Self::grid(n.div_ceil(256)));
+        self.dispatch(
+            &pipe,
+            &p,
+            &[x, &w.buf, bias.unwrap_or(&self.dummy), res, out],
+            Self::grid(n.div_ceil(256)),
+        );
     }
 
-    fn replicate_pad1d(&self, x: &GBuf, c: usize, len: usize, left: usize, right: usize, out: &GBuf) {
-        let p = Ep { n: c * (len + left + right), op: 15, left, len, r: right, ..Default::default() };
+    fn replicate_pad1d(
+        &self,
+        x: &GBuf,
+        c: usize,
+        len: usize,
+        left: usize,
+        right: usize,
+        out: &GBuf,
+    ) {
+        let p = Ep {
+            n: c * (len + left + right),
+            op: 15,
+            left,
+            len,
+            r: right,
+            ..Default::default()
+        };
         self.elementwise(&p, out, Some(x), None, None, None);
     }
 
-    fn conv_transpose1d(&self, x: &GBuf, s: &ConvT1dShape, w: &GWeight, bias: Option<&GBuf>, out: &GBuf) {
-        assert_eq!((w.rows, w.cols), (s.cin, (s.cout / s.groups) * s.k), "conv_transpose1d weight shape");
+    fn conv_transpose1d(
+        &self,
+        x: &GBuf,
+        s: &ConvT1dShape,
+        w: &GWeight,
+        bias: Option<&GBuf>,
+        out: &GBuf,
+    ) {
+        assert_eq!(
+            (w.rows, w.cols),
+            (s.cin, (s.cout / s.groups) * s.k),
+            "conv_transpose1d weight shape"
+        );
         let pipe = self.conv_pipe("convt1d", CONVT1D, w);
         let n = s.out_len();
         let p = [
@@ -1268,11 +2173,29 @@ impl Backend for Wgpu {
             0,
             0,
         ];
-        self.dispatch(&pipe, &p, &[x, &w.buf, bias.unwrap_or(&self.dummy), out], Self::grid(n.div_ceil(256)));
+        self.dispatch(
+            &pipe,
+            &p,
+            &[x, &w.buf, bias.unwrap_or(&self.dummy), out],
+            Self::grid(n.div_ceil(256)),
+        );
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn group_norm(&self, x: &GBuf, c: usize, t: usize, hw: usize, groups: usize, per_frame: bool, w: &GBuf, b: &GBuf, eps: f32, act: Act, out: &GBuf) {
+    fn group_norm(
+        &self,
+        x: &GBuf,
+        c: usize,
+        t: usize,
+        hw: usize,
+        groups: usize,
+        per_frame: bool,
+        w: &GBuf,
+        b: &GBuf,
+        eps: f32,
+        act: Act,
+        out: &GBuf,
+    ) {
         let pipe = self.pipeline("group_norm", || GROUP_NORM.to_string());
         let act_code = match act {
             Act::None => 0,
@@ -1280,7 +2203,16 @@ impl Backend for Wgpu {
             Act::GeluErf => 2,
             Act::Silu => 3,
         };
-        let p = [c as u32, t as u32, hw as u32, groups as u32, per_frame as u32, act_code, eps.to_bits(), (c / groups) as u32];
+        let p = [
+            c as u32,
+            t as u32,
+            hw as u32,
+            groups as u32,
+            per_frame as u32,
+            act_code,
+            eps.to_bits(),
+            (c / groups) as u32,
+        ];
         let n = if per_frame { t * groups } else { groups };
         assert!(n as u32 <= MAX_DIM);
         self.dispatch(&pipe, &p, &[x, w, b, out], (n as u32, 1, 1));
@@ -1288,30 +2220,116 @@ impl Backend for Wgpu {
 
     fn snake(&self, x: &GBuf, c: usize, len: usize, snake: Snake<'_, GBuf>) {
         match snake {
-            Snake::Alpha(a) => self.elementwise(&Ep { n: c * len, op: 17, len, ..Default::default() }, x, None, Some(a), None, None),
-            Snake::AlphaBeta { alpha, beta } => {
-                self.elementwise(&Ep { n: c * len, op: 18, len, ..Default::default() }, x, None, Some(alpha), Some(beta), None)
-            }
+            Snake::Alpha(a) => self.elementwise(
+                &Ep {
+                    n: c * len,
+                    op: 17,
+                    len,
+                    ..Default::default()
+                },
+                x,
+                None,
+                Some(a),
+                None,
+                None,
+            ),
+            Snake::AlphaBeta { alpha, beta } => self.elementwise(
+                &Ep {
+                    n: c * len,
+                    op: 18,
+                    len,
+                    ..Default::default()
+                },
+                x,
+                None,
+                Some(alpha),
+                Some(beta),
+                None,
+            ),
         }
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn trilinear_resize(&self, x: &GBuf, c: usize, t: usize, h: usize, w: usize, t2: usize, h2: usize, w2: usize, out: &GBuf) {
-        let p = Ep { n: c * t2 * h2 * w2, op: 19, c, t, h, w, t2, h2, w2, ..Default::default() };
+    fn trilinear_resize(
+        &self,
+        x: &GBuf,
+        c: usize,
+        t: usize,
+        h: usize,
+        w: usize,
+        t2: usize,
+        h2: usize,
+        w2: usize,
+        out: &GBuf,
+    ) {
+        let p = Ep {
+            n: c * t2 * h2 * w2,
+            op: 19,
+            c,
+            t,
+            h,
+            w,
+            t2,
+            h2,
+            w2,
+            ..Default::default()
+        };
         self.elementwise(&p, out, Some(x), None, None, None);
     }
 
-    fn pixel_shuffle(&self, x: &GBuf, frames: usize, c: usize, h: usize, w: usize, r: usize, out: &GBuf) {
-        let p = Ep { n: frames * c * h * w * r * r, op: 16, c, h, w, r, frames, ..Default::default() };
+    fn pixel_shuffle(
+        &self,
+        x: &GBuf,
+        frames: usize,
+        c: usize,
+        h: usize,
+        w: usize,
+        r: usize,
+        out: &GBuf,
+    ) {
+        let p = Ep {
+            n: frames * c * h * w * r * r,
+            op: 16,
+            c,
+            h,
+            w,
+            r,
+            frames,
+            ..Default::default()
+        };
         self.elementwise(&p, out, Some(x), None, None, None);
     }
 
     fn tanh_clamp(&self, x: &GBuf, n: usize, s: f32) {
-        self.elementwise(&Ep { n, op: 6, f: [s, 0.0, 0.0, 0.0], ..Default::default() }, x, None, None, None, None);
+        self.elementwise(
+            &Ep {
+                n,
+                op: 6,
+                f: [s, 0.0, 0.0, 0.0],
+                ..Default::default()
+            },
+            x,
+            None,
+            None,
+            None,
+            None,
+        );
     }
 
     fn clamp(&self, x: &GBuf, n: usize, lo: f32, hi: f32) {
-        self.elementwise(&Ep { n, op: 7, f: [lo, hi, 0.0, 0.0], ..Default::default() }, x, None, None, None, None);
+        self.elementwise(
+            &Ep {
+                n,
+                op: 7,
+                f: [lo, hi, 0.0, 0.0],
+                ..Default::default()
+            },
+            x,
+            None,
+            None,
+            None,
+            None,
+        );
     }
 }
 
@@ -1327,14 +2345,21 @@ impl Wgpu {
         });
         {
             let mut pend = self.pending.lock().unwrap();
-            let enc = pend.enc.get_or_insert_with(|| self.device.create_command_encoder(&Default::default()));
+            let enc = pend
+                .enc
+                .get_or_insert_with(|| self.device.create_command_encoder(&Default::default()));
             enc.copy_buffer_to_buffer(&buf.buf, 0, &staging, 0, size);
         }
         self.flush();
         let (tx, rx) = futures_oneshot();
-        staging.slice(..).map_async(wgpu::MapMode::Read, move |r| tx.send(r));
+        staging
+            .slice(..)
+            .map_async(wgpu::MapMode::Read, move |r| tx.send(r));
         #[cfg(not(target_arch = "wasm32"))]
-        let _ = self.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+        let _ = self.device.poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: None,
+        });
         rx.await.expect("map failed");
         let data = staging.slice(..).get_mapped_range().expect("mapped range");
         let out = bytemuck::cast_slice::<u8, f32>(&data)[..buf.len].to_vec();

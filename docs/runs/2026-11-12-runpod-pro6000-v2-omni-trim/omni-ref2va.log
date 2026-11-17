@@ -1,0 +1,20 @@
++ timeout 5000 /w/h3-bin generate --backend cuda --variant fasth3-omni --model-dir /w/h3-base --variant-dir /w/fasth3-omni-8step-v1 --tables /workspace/h3-rs/tables/omni.tables --seed 7 --width 1344 --height 768 --frames 124 --prompt 'A red fox trots through fresh snow at dawn in a quiet pine forest; snow crunches softly under its paws and a light wind moves through the branches.' --task ref2va --ref image:/workspace/h3-rs/assets/first.png --out /root/out/omni.y4m
+contract: /w/fasth3-omni-8step-v1/fastvideo_inference.json
+cuda NVIDIA RTX PRO 6000 Blackwell Server Edition (sm_120)
+load 243.2s
+prompt: 7209 rows in 278.2s
+step 1/8 14.12s
+step 2/8 14.22s
+step 3/8 14.28s
+step 4/8 14.32s
+step 5/8 14.35s
+step 6/8 14.35s
+step 7/8 14.37s
+step 8/8 14.37s
+run 0: total 134.13s  prepare 0.23s  adaln 0.00s  denoise 114.39s (["14.12", "14.22", "14.28", "14.32", "14.35", "14.35", "14.37", "14.37"])  decode 8.14s  audio 0.19s
+wrote /root/out/omni.y4m (124 frames 1344x768) and /root/out/omni.wav
+mux: ffmpeg -i /root/out/omni.y4m -i /root/out/omni.wav -c:v libx264 -pix_fmt yuv420p -c:a aac /root/out/omni.mp4
+
+real	11m3.124s
+user	4m11.068s
+sys	1m58.483s

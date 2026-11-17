@@ -12,7 +12,7 @@
 //! Aliasing rule: an output buffer never aliases an input, except the
 //! arguments documented as *in place*.
 
-use crate::quant::{Nvfp4, Q4, Q8};
+use crate::quant::{Mxfp8, Nvfp4, Q4, Q8};
 use crate::vsa::VsaSpec;
 
 /// Epilogue activation of [`Backend::linear`] and [`Backend::group_norm`].
@@ -61,7 +61,11 @@ pub enum Gate<'a, T> {
 pub enum Modulation<'a, T> {
     None,
     /// `y · (1 + table[idx][scale]) + table[idx][shift]`.
-    Table { m: ModTable<'a, T>, scale: usize, shift: usize },
+    Table {
+        m: ModTable<'a, T>,
+        scale: usize,
+        shift: usize,
+    },
 }
 
 /// Per-head normalisation inside [`Backend::head_split`]: RMSNorm over the
@@ -103,6 +107,9 @@ pub enum ConvEpilogue<'a, T> {
     AddRelu(&'a T),
     /// `y + r` (ResNet skip).
     Add(&'a T),
+    /// `y ≥ 0 ? y : slope[c]·y` per output channel `c` (`nn.PReLU(c)`;
+    /// Real-ESRGAN's compact upscaler). `conv2d` only.
+    Prelu(&'a T),
 }
 
 /// A 2-D convolution over `frames` independent images, NCHW, stride 1, "same"
@@ -369,6 +376,23 @@ pub trait Backend {
     /// `buf[off..off + len] = value`.
     fn fill(&self, buf: &Self::Buf, off: usize, len: usize, value: f32);
     fn weight(&self, data: &[f32], rows: usize, cols: usize) -> Self::Weight;
+    /// [`Backend::weight`] from bf16 bits: streamed bf16 blocks keep their
+    /// host copy in this form so every step's upload is a byte copy (a
+    /// page-locked DMA on CUDA) instead of an f32 → bf16 pass plus a
+    /// synchronous pageable copy. The default converts and calls `weight`.
+    fn weight_bf16(&self, data: &[u16], rows: usize, cols: usize) -> Self::Weight {
+        let f: Vec<f32> = data
+            .iter()
+            .map(|&b| f32::from_bits((b as u32) << 16))
+            .collect();
+        self.weight(&f, rows, cols)
+    }
+    /// Whether [`Backend::weight`] stores bf16 anyway, so a streamed block
+    /// loses nothing by keeping its host copy as bf16 bits. False for the
+    /// f32 reference (its streamed and resident paths stay bit-identical).
+    fn bf16_weights(&self) -> bool {
+        false
+    }
     /// Int8 weight-only matrix for [`Backend::linear`]; must equal `linear`
     /// with `weight(&q.dequantize())` up to the backend's activation rounding.
     fn weight_q8(&self, q: &Q8) -> Self::Weight;
@@ -380,8 +404,32 @@ pub trait Backend {
         let w = q.dequantize();
         self.weight(&w, q.rows, q.cols)
     }
+    /// MXFP8 W8A8 ([`Mxfp8`]): `linear` with this weight must equal the f32
+    /// GEMM of `q.dequantize()` against [`Mxfp8::round_rows`] of the bf16
+    /// activations (the CPU reference does exactly that; CUDA runs the FP8
+    /// tensor cores on sm_100+ and emulates below). Backends without an FP8
+    /// path dequantize the weight at load and round the activations per GEMM.
+    fn weight_mxfp8(&self, q: &Mxfp8) -> Self::Weight;
     /// Bytes a weight occupies on the device.
     fn weight_bytes(&self, w: &Self::Weight) -> usize;
+    // ---- streamed weights ----------------------------------------------
+    /// Uploads between `prefetch_begin` and `prefetch_end` may land on a side
+    /// queue that overlaps the compute queue; they are usable only after
+    /// [`Backend::prefetch_wait`]. Backends with one queue do nothing.
+    fn prefetch_begin(&self) {}
+    fn prefetch_end(&self) {}
+    /// The compute queue waits for the last prefetch.
+    fn prefetch_wait(&self) {}
+    /// The side queue waits for the compute queue's work so far: call before
+    /// dropping prefetched weights the compute queue may still be reading.
+    fn prefetch_release(&self) {}
+    /// Page-lock host memory that streamed uploads will read every step, so
+    /// the copies run as DMA without a host-side wait. The returned guard
+    /// unlocks on drop and must be dropped before the memory is freed (the
+    /// caller keeps it next to the buffer). Best effort; `None` by default.
+    fn pin_host(&self, _bytes: &[u8]) -> Option<Box<dyn std::any::Any + Send>> {
+        None
+    }
     /// Wait for queued work (timing only; downloads synchronise themselves).
     fn sync(&self);
     /// Per-kernel device time since the last [`Backend::profile_reset`], when
@@ -405,6 +453,37 @@ pub trait Backend {
         y: &Self::Buf,
         y_row: usize,
     );
+
+    /// `y[y_row + i, :out] += x[x_row + i, :] · Wᵀ` for `i < rows` (`W` is
+    /// `[out, in]`, no bias, no activation): the up-projection of an unmerged
+    /// LoRA branch ([`crate::lora::Adapter::lora_factors`]). The default runs
+    /// [`Backend::linear`] into a scratch buffer, a bounded number of rows at
+    /// a time, and adds it with [`Backend::axpby`]; CUDA accumulates in the
+    /// GEMM (`beta = 1`).
+    #[allow(clippy::too_many_arguments)]
+    fn linear_add(
+        &self,
+        x: &Self::Buf,
+        x_row: usize,
+        rows: usize,
+        w: &Self::Weight,
+        out: usize,
+        y: &Self::Buf,
+        y_row: usize,
+    ) {
+        if rows == 0 {
+            return;
+        }
+        let chunk = ((1usize << 24) / out.max(1)).clamp(1, rows);
+        let scratch = self.alloc(chunk * out);
+        let mut r = 0;
+        while r < rows {
+            let m = chunk.min(rows - r);
+            self.linear(x, x_row + r, m, w, None, Act::None, &scratch, 0);
+            self.axpby(y, (y_row + r) * out, 1.0, &scratch, 0, 1.0, m * out);
+            r += m;
+        }
+    }
 
     /// `out[i, :dim] = x[i, :dim] · silu(x[i, dim:2·dim])` (H3 / Qwen3-VL
     /// `value, gate` halves; `x` rows are `2·dim` wide).
@@ -441,7 +520,14 @@ pub trait Backend {
     );
 
     /// In place on `h`: `h += gate(a)`.
-    fn gate_residual(&self, h: &Self::Buf, a: &Self::Buf, rows: usize, dim: usize, gate: Gate<'_, Self::Buf>);
+    fn gate_residual(
+        &self,
+        h: &Self::Buf,
+        a: &Self::Buf,
+        rows: usize,
+        dim: usize,
+        gate: Gate<'_, Self::Buf>,
+    );
 
     /// `out = LN(x) · w + b` over rows of width `dim`.
     #[allow(clippy::too_many_arguments)]
@@ -489,6 +575,26 @@ pub trait Backend {
         sk: usize,
         head_dim: usize,
         causal: bool,
+        out: &Self::Buf,
+    );
+    /// [`Backend::attention`] with INT8 Q·Kᵀ: must equal `attention` of
+    /// [`crate::vsa::attn_qk8_round`]'s copies of Q and K up to the backend's
+    /// rounding (CUDA runs int8 tensor cores on the same codes; the CPU and
+    /// WebGPU round and run the exact kernel). With `pv8` the P·V half runs
+    /// in FP8 too and the oracle is [`crate::vsa::attention_pv8_reference`].
+    #[allow(clippy::too_many_arguments)]
+    fn attention_qk8(
+        &self,
+        q: &Self::Buf,
+        k: &Self::Buf,
+        v: &Self::Buf,
+        heads: usize,
+        kv_heads: usize,
+        sq: usize,
+        sk: usize,
+        head_dim: usize,
+        causal: bool,
+        pv8: bool,
         out: &Self::Buf,
     );
 
@@ -561,7 +667,16 @@ pub trait Backend {
 
     /// In place: `y[off + i] = a·y[off + i] + b·x[x_off + i]` for `i < n`.
     #[allow(clippy::too_many_arguments)]
-    fn axpby(&self, y: &Self::Buf, off: usize, a: f32, x: &Self::Buf, x_off: usize, b: f32, n: usize);
+    fn axpby(
+        &self,
+        y: &Self::Buf,
+        off: usize,
+        a: f32,
+        x: &Self::Buf,
+        x_off: usize,
+        b: f32,
+        n: usize,
+    );
 
     /// `out[c, i] = x[c, i] · scale[c] + shift[c]` over `[c, inner]`.
     #[allow(clippy::too_many_arguments)]
@@ -613,7 +728,15 @@ pub trait Backend {
 
     /// `out[c, i] = x[c, clamp(i − left, 0, len − 1)]` over `[c, len + left + right]`
     /// (PyTorch `replicate` padding; the audio VAE's anti-aliasing filters).
-    fn replicate_pad1d(&self, x: &Self::Buf, c: usize, len: usize, left: usize, right: usize, out: &Self::Buf);
+    fn replicate_pad1d(
+        &self,
+        x: &Self::Buf,
+        c: usize,
+        len: usize,
+        left: usize,
+        right: usize,
+        out: &Self::Buf,
+    );
 
     /// `out = conv_transpose1d(x, W) + bias`; `W` is `[cin, (cout/groups)·k]`
     /// (PyTorch layout, rows = input channels).
@@ -666,7 +789,16 @@ pub trait Backend {
 
     /// `[frames, c·r², h, w]` → `[frames, c, h·r, w·r]` (PyTorch `pixel_shuffle`).
     #[allow(clippy::too_many_arguments)]
-    fn pixel_shuffle(&self, x: &Self::Buf, frames: usize, c: usize, h: usize, w: usize, r: usize, out: &Self::Buf);
+    fn pixel_shuffle(
+        &self,
+        x: &Self::Buf,
+        frames: usize,
+        c: usize,
+        h: usize,
+        w: usize,
+        r: usize,
+        out: &Self::Buf,
+    );
 
     /// In place: `x = tanh(x / s) · s` over `n` elements.
     fn tanh_clamp(&self, x: &Self::Buf, n: usize, s: f32);

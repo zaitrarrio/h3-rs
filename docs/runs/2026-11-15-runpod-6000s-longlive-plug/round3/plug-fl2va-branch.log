@@ -1,0 +1,16 @@
++ timeout 1500 /w/h3-bin generate --backend cuda --seed 7 --width 1344 --height 768 --frames 124 --prompt 'A red fox trots through fresh snow at dawn in a quiet pine forest; snow crunches softly under its paws and a light wind moves through the branches.' --out /root/out/plug-fl2va-branch.y4m --variant h3-plug4 --model-dir /w/h3-base --variant-dir /workspace/h3-rs/plug4 --tables /workspace/h3-rs/plug4/plug4.tables --weights mxfp8 --decoder-weights mxfp8 --pv8 --task fl2va --first-image /workspace/h3-rs/assets/first.png --last-image /workspace/h3-rs/assets/last.png
+adapter: /workspace/h3-rs/plug4/generator_lora.safetensors
+cuda NVIDIA RTX PRO 6000 Blackwell Server Edition (sm_120)
+load 92.8s
+prompt: 2065 rows in 74.4s
+step 1/4 8.67s
+step 2/4 8.18s
+step 3/4 8.19s
+step 4/4 8.20s
+run 0: total 42.31s  prepare 0.05s  adaln 0.00s  denoise 33.24s (["8.67", "8.18", "8.19", "8.20"])  decode 5.73s  audio 0.19s
+wrote /root/out/plug-fl2va-branch.y4m (124 frames 1344x768) and /root/out/plug-fl2va-branch.wav
+mux: ffmpeg -i /root/out/plug-fl2va-branch.y4m -i /root/out/plug-fl2va-branch.wav -c:v libx264 -pix_fmt yuv420p -c:a aac /root/out/plug-fl2va-branch.mp4
+
+real	3m37.777s
+user	4m19.629s
+sys	1m41.205s

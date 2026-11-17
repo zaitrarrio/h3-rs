@@ -7,4 +7,5 @@ edition = "2024"
 h3-core = { version = "0.1.0", path = "../h3-core" }
 h3-cpu = { version = "0.1.0", path = "../h3-cpu" }
 half = "2.7.1"
+rayon = "1.12.0"
 safetensors = "0.8.0"

@@ -49,13 +49,22 @@ const ROPE_SPATIAL_SCALE: f64 = 32.0;
 /// Canvas `(height, width)` for an aspect ratio under a tier's short-edge and
 /// area rules, snapped to the 32-pixel lattice (the release's 768p rule by
 /// default; Pika passes its tier values).
-pub fn canvas_size(aspect_w: f64, aspect_h: f64, short_edge: usize, max_pixels: usize) -> Result<(usize, usize)> {
+pub fn canvas_size(
+    aspect_w: f64,
+    aspect_h: f64,
+    short_edge: usize,
+    max_pixels: usize,
+) -> Result<(usize, usize)> {
     if aspect_w <= 0.0 || aspect_h <= 0.0 {
-        return Err(Error::Geometry(format!("aspect ratio must be positive, got {aspect_w}:{aspect_h}")));
+        return Err(Error::Geometry(format!(
+            "aspect ratio must be positive, got {aspect_w}:{aspect_h}"
+        )));
     }
     let ratio = aspect_w / aspect_h;
     if !(MIN_ASPECT..=MAX_ASPECT).contains(&ratio) {
-        return Err(Error::Geometry(format!("aspect ratios run from 1:4 to 4:1, got {aspect_w}:{aspect_h}")));
+        return Err(Error::Geometry(format!(
+            "aspect ratios run from 1:4 to 4:1, got {aspect_w}:{aspect_h}"
+        )));
     }
     let (mut w, mut h) = if ratio >= 1.0 {
         (short_edge as f64 * ratio, short_edge as f64)
@@ -101,7 +110,9 @@ pub fn resolve_num_frames(n: usize) -> Result<usize> {
 /// `(n − 5) / 17 · 5 + 2` latent frames.
 pub fn video_latent_frames(n: usize) -> Result<usize> {
     if n % FRAMES_PER_CHUNK != LATENTS_PER_CHUNK {
-        return Err(Error::Geometry(format!("num_frames must be 17n + 5, got {n}")));
+        return Err(Error::Geometry(format!(
+            "num_frames must be 17n + 5, got {n}"
+        )));
     }
     Ok((n - LATENTS_PER_CHUNK) / FRAMES_PER_CHUNK * LATENTS_PER_CHUNK + 2)
 }
@@ -128,16 +139,34 @@ pub struct Geometry {
 
 impl Geometry {
     /// 1344×768, 124 frames: the release's 16:9 default (5.17 s).
-    pub const H3_768P: Geometry = Geometry { width: 1344, height: 768, frames: 124 };
+    pub const H3_768P: Geometry = Geometry {
+        width: 1344,
+        height: 768,
+        frames: 124,
+    };
     /// 832×480, 124 frames: the 16:9 480p bucket.
-    pub const H3_480P: Geometry = Geometry { width: 832, height: 480, frames: 124 };
+    pub const H3_480P: Geometry = Geometry {
+        width: 832,
+        height: 480,
+        frames: 124,
+    };
 
     pub fn validate(&self, spatial_ratio: usize) -> Result<()> {
-        if self.width == 0 || self.height == 0 || self.width % CANVAS_MULTIPLE != 0 || self.height % CANVAS_MULTIPLE != 0 {
-            return Err(Error::Geometry(format!("{}x{} is not a positive multiple of 32", self.width, self.height)));
+        if self.width == 0
+            || self.height == 0
+            || self.width % CANVAS_MULTIPLE != 0
+            || self.height % CANVAS_MULTIPLE != 0
+        {
+            return Err(Error::Geometry(format!(
+                "{}x{} is not a positive multiple of 32",
+                self.width, self.height
+            )));
         }
         if self.width % spatial_ratio != 0 || self.height % spatial_ratio != 0 {
-            return Err(Error::Geometry(format!("{}x{} is not divisible by the VAE ratio {spatial_ratio}", self.width, self.height)));
+            return Err(Error::Geometry(format!(
+                "{}x{} is not divisible by the VAE ratio {spatial_ratio}",
+                self.width, self.height
+            )));
         }
         video_latent_frames(self.frames)?;
         Ok(())
@@ -171,10 +200,20 @@ pub enum Anchor {
 /// One prepared reference's latent geometry (Ref2VA).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RefGeom {
-    Image { latent_h: usize, latent_w: usize },
+    Image {
+        latent_h: usize,
+        latent_w: usize,
+    },
     /// Latent frames, height, width, and the audio latents of its soundtrack (0 if silent).
-    Video { latent_t: usize, latent_h: usize, latent_w: usize, audio_latents: usize },
-    Audio { audio_latents: usize },
+    Video {
+        latent_t: usize,
+        latent_h: usize,
+        latent_w: usize,
+        audio_latents: usize,
+    },
+    Audio {
+        audio_latents: usize,
+    },
 }
 
 /// Kinds of conditioning spans recorded on a Ref2VA layout.
@@ -234,7 +273,9 @@ fn spatial_position_grid(dim: usize, patch: usize, sqrt_area: f64) -> Vec<f64> {
     let left = (1.0 - ratio) / 2.0;
     let n = dim / patch;
     let step = ratio / n as f64;
-    (0..n).map(|i| (left + i as f64 * step) * ROPE_SPATIAL_SCALE).collect()
+    (0..n)
+        .map(|i| (left + i as f64 * step) * ROPE_SPATIAL_SCALE)
+        .collect()
 }
 
 /// Per-latent-frame rotary time: frame `i` spans `5/3 · [1, 4, 4, 4, 4][i mod 5]`.
@@ -249,7 +290,9 @@ pub fn temporal_position_grid(num_latent_frames: usize, origin: f64) -> Vec<f64>
 }
 
 fn temporal_span(num_latent_frames: usize) -> f64 {
-    (0..num_latent_frames).map(|i| ROPE_FRAME_RESCALE * ROPE_FRAMES_PER_LATENT[i % 5]).sum()
+    (0..num_latent_frames)
+        .map(|i| ROPE_FRAME_RESCALE * ROPE_FRAMES_PER_LATENT[i % 5])
+        .sum()
 }
 
 /// Frame grid `(h, w)` positions for every token of one latent frame, row-major,
@@ -267,7 +310,13 @@ fn frame_grid(latent_h: usize, latent_w: usize, ph: usize, pw: usize) -> (Vec<[f
     (g, wg)
 }
 
-fn fill_audio(pos: &mut [[f64; 3]], start: usize, num_audio_latents: usize, time0: f64, wg: &[f64]) {
+fn fill_audio(
+    pos: &mut [[f64; 3]],
+    start: usize,
+    num_audio_latents: usize,
+    time0: f64,
+    wg: &[f64],
+) {
     for ch in 0..AUDIO_CHANNELS {
         let wpos = if ch == 0 { wg[0] } else { wg[wg.len() - 1] };
         for i in 0..num_audio_latents {
@@ -278,7 +327,9 @@ fn fill_audio(pos: &mut [[f64; 3]], start: usize, num_audio_latents: usize, time
 
 fn check_text_tags(text_tags: &[u8]) -> Result<()> {
     if text_tags.iter().any(|&t| t != TEXT_TAG && t != VIDEO_TAG) {
-        return Err(Error::Geometry("text token tags may be text or vision only".into()));
+        return Err(Error::Geometry(
+            "text token tags may be text or vision only".into(),
+        ));
     }
     Ok(())
 }
@@ -295,7 +346,9 @@ pub fn build_layout(
 ) -> Result<Layout> {
     check_text_tags(text_tags)?;
     if latent_t % patch.0 != 0 || latent_h % patch.1 != 0 || latent_w % patch.2 != 0 {
-        return Err(Error::Geometry(format!("latent ({latent_t}, {latent_h}, {latent_w}) is not divisible by the patch {patch:?}")));
+        return Err(Error::Geometry(format!(
+            "latent ({latent_t}, {latent_h}, {latent_w}) is not divisible by the patch {patch:?}"
+        )));
     }
     let rows_per_frame = (latent_h / patch.1) * (latent_w / patch.2);
     let n_text = text_tags.len();
@@ -339,7 +392,10 @@ pub fn build_layout(
     for i in video_start..total {
         tags[i] = VIDEO_TAG;
     }
-    let video_indices: Vec<u32> = (cond_start..audio_start).chain(video_start..total).map(|i| i as u32).collect();
+    let video_indices: Vec<u32> = (cond_start..audio_start)
+        .chain(video_start..total)
+        .map(|i| i as u32)
+        .collect();
     Ok(Layout {
         sequence_length: total,
         position_ids: pos,
@@ -373,19 +429,27 @@ pub fn build_ref2va_layout(
     continuation: Option<(usize, usize)>,
 ) -> Result<Layout> {
     if patch != (1, 2, 2) {
-        return Err(Error::Geometry(format!("Ref2VA requires patch (1, 2, 2), got {patch:?}")));
+        return Err(Error::Geometry(format!(
+            "Ref2VA requires patch (1, 2, 2), got {patch:?}"
+        )));
     }
     check_text_tags(text_tags)?;
     if refs.is_empty() {
-        return Err(Error::Geometry("Ref2VA requires at least one reference".into()));
+        return Err(Error::Geometry(
+            "Ref2VA requires at least one reference".into(),
+        ));
     }
     if latent_t == 0 || latent_h % 2 != 0 || latent_w % 2 != 0 || num_audio_latents == 0 {
-        return Err(Error::Geometry("Ref2VA target geometry must be positive and patch-aligned".into()));
+        return Err(Error::Geometry(
+            "Ref2VA target geometry must be positive and patch-aligned".into(),
+        ));
     }
     let n_text = text_tags.len();
     let rows_of = |t: usize, h: usize, w: usize| -> Result<usize> {
         if t == 0 || h == 0 || w == 0 || h % 2 != 0 || w % 2 != 0 {
-            return Err(Error::Geometry(format!("visual reference geometry ({t}, {h}, {w}) is not patch-aligned")));
+            return Err(Error::Geometry(format!(
+                "visual reference geometry ({t}, {h}, {w}) is not patch-aligned"
+            )));
         }
         Ok(t * (h / 2) * (w / 2))
     };
@@ -396,8 +460,16 @@ pub fn build_ref2va_layout(
     let mut n_ref_audio = 0;
     for r in refs {
         match r {
-            RefGeom::Image { latent_h: h, latent_w: w } => n_ref_video += rows_of(1, *h, *w)?,
-            RefGeom::Video { latent_t: t, latent_h: h, latent_w: w, audio_latents } => {
+            RefGeom::Image {
+                latent_h: h,
+                latent_w: w,
+            } => n_ref_video += rows_of(1, *h, *w)?,
+            RefGeom::Video {
+                latent_t: t,
+                latent_h: h,
+                latent_w: w,
+                audio_latents,
+            } => {
                 n_ref_video += rows_of(*t, *h, *w)?;
                 n_ref_audio += audio_latents * AUDIO_CHANNELS;
             }
@@ -411,7 +483,9 @@ pub fn build_ref2va_layout(
     }
     if let Some((ct, ca)) = continuation {
         if ct == 0 || ct >= latent_t {
-            return Err(Error::Geometry(format!("continuation clip of {ct} latent frames does not fit a target of {latent_t}")));
+            return Err(Error::Geometry(format!(
+                "continuation clip of {ct} latent frames does not fit a target of {latent_t}"
+            )));
         }
         n_ref_video += ct * rows_per_target_frame;
         n_ref_audio += ca * AUDIO_CHANNELS;
@@ -429,7 +503,10 @@ pub fn build_ref2va_layout(
     let mut clock = n_text as f64;
     for r in refs {
         match r {
-            RefGeom::Image { latent_h: h, latent_w: w } => {
+            RefGeom::Image {
+                latent_h: h,
+                latent_w: w,
+            } => {
                 let n = rows_of(1, *h, *w)?;
                 segments.push((SegmentKind::Image, n, (1, *h, *w)));
                 let (grid, _) = frame_grid(*h, *w, 2, 2);
@@ -448,7 +525,12 @@ pub fn build_ref2va_layout(
                 cursor += n;
                 clock += *audio_latents as f64;
             }
-            RefGeom::Video { latent_t: t, latent_h: h, latent_w: w, audio_latents } => {
+            RefGeom::Video {
+                latent_t: t,
+                latent_h: h,
+                latent_w: w,
+                audio_latents,
+            } => {
                 let na = audio_latents * AUDIO_CHANNELS;
                 let nv = rows_of(*t, *h, *w)?;
                 if na > 0 {
@@ -538,7 +620,13 @@ pub fn build_ref2va_layout(
 /// Per-row clean times of one step: target video `t_v`, condition video
 /// `max(t_v, 0.999)`, target audio `t_a`, condition audio `1.0` (f32). Returns
 /// the sorted unique times and each row's index into them.
-pub fn row_timesteps(layout: &Layout, video_t: f32, audio_t: f32, cond_video_t: f32, cond_audio_t: f32) -> (Vec<f32>, Vec<u32>) {
+pub fn row_timesteps(
+    layout: &Layout,
+    video_t: f32,
+    audio_t: f32,
+    cond_video_t: f32,
+    cond_audio_t: f32,
+) -> (Vec<f32>, Vec<u32>) {
     let mut rows = vec![video_t; layout.sequence_length];
     for &i in &layout.video_indices[..layout.num_condition_video_rows] {
         rows[i as usize] = cond_video_t;
@@ -571,12 +659,33 @@ pub mod pika {
         pub reference_short_edge: usize,
     }
 
-    pub const P480: Tier = Tier { name: "p480", short_edge: 480, max_pixels: 832 * 480, reference_short_edge: 1024 };
-    pub const P768: Tier = Tier { name: "p768", short_edge: 768, max_pixels: 1344 * 768, reference_short_edge: 2048 };
+    pub const P480: Tier = Tier {
+        name: "p480",
+        short_edge: 480,
+        max_pixels: 832 * 480,
+        reference_short_edge: 1024,
+    };
+    pub const P768: Tier = Tier {
+        name: "p768",
+        short_edge: 768,
+        max_pixels: 1344 * 768,
+        reference_short_edge: 2048,
+    };
 
     /// Landscape families first, then square, then the mirrored portraits.
-    pub const ASPECTS: [(u32, u32); 11] =
-        [(21, 9), (16, 9), (3, 2), (4, 3), (5, 4), (1, 1), (4, 5), (3, 4), (2, 3), (9, 16), (9, 21)];
+    pub const ASPECTS: [(u32, u32); 11] = [
+        (21, 9),
+        (16, 9),
+        (3, 2),
+        (4, 3),
+        (5, 4),
+        (1, 1),
+        (4, 5),
+        (3, 4),
+        (2, 3),
+        (9, 16),
+        (9, 21),
+    ];
     pub const MIN_ALIGNED_FRAMES: usize = 120;
     pub const MAX_ALIGNED_FRAMES: usize = 362;
 
@@ -584,7 +693,9 @@ pub mod pika {
         match name.trim().to_ascii_lowercase().as_str() {
             "480p" | "p480" | "480" => Ok(P480),
             "768p" | "p768" | "768" => Ok(P768),
-            other => Err(Error::Geometry(format!("Pika H3 Flex samples the 480p and 768p tiers only, got {other}"))),
+            other => Err(Error::Geometry(format!(
+                "Pika H3 Flex samples the 480p and 768p tiers only, got {other}"
+            ))),
         }
     }
 
@@ -595,10 +706,16 @@ pub mod pika {
 
     /// Parse `"16:9"`.
     pub fn parse_aspect(s: &str) -> Result<(u32, u32)> {
-        let (w, h) = s.split_once(':').ok_or_else(|| Error::Geometry(format!("aspect must be W:H, got {s}")))?;
+        let (w, h) = s
+            .split_once(':')
+            .ok_or_else(|| Error::Geometry(format!("aspect must be W:H, got {s}")))?;
         let (w, h): (u32, u32) = (
-            w.trim().parse().map_err(|_| Error::Geometry(format!("bad aspect {s}")))?,
-            h.trim().parse().map_err(|_| Error::Geometry(format!("bad aspect {s}")))?,
+            w.trim()
+                .parse()
+                .map_err(|_| Error::Geometry(format!("bad aspect {s}")))?,
+            h.trim()
+                .parse()
+                .map_err(|_| Error::Geometry(format!("bad aspect {s}")))?,
         );
         if w == 0 || h == 0 {
             return Err(Error::Geometry(format!("aspect must be positive, got {s}")));
@@ -609,7 +726,12 @@ pub mod pika {
     /// Resolve a request canvas to `(height, width, tier)`: an exact bucket is
     /// kept; otherwise the tier follows the short edge (≤ 480 → p480) and the
     /// canvas snaps to the nearest aspect family.
-    pub fn resolve_canvas(height: Option<usize>, width: Option<usize>, default_aspect: (u32, u32), default_tier: Tier) -> Result<(usize, usize, Tier)> {
+    pub fn resolve_canvas(
+        height: Option<usize>,
+        width: Option<usize>,
+        default_aspect: (u32, u32),
+        default_tier: Tier,
+    ) -> Result<(usize, usize, Tier)> {
         match (height, width) {
             (None, None) => {
                 let (h, w) = canvas_for_aspect(default_aspect, default_tier)?;
@@ -617,7 +739,9 @@ pub mod pika {
             }
             (Some(h), Some(w)) => {
                 if h == 0 || w == 0 {
-                    return Err(Error::Geometry(format!("canvas must be positive, got {h}x{w}")));
+                    return Err(Error::Geometry(format!(
+                        "canvas must be positive, got {h}x{w}"
+                    )));
                 }
                 for t in [P480, P768] {
                     for a in ASPECTS {
@@ -626,10 +750,16 @@ pub mod pika {
                         }
                     }
                 }
-                let t = if h.min(w) <= P480.short_edge { P480 } else { P768 };
+                let t = if h.min(w) <= P480.short_edge {
+                    P480
+                } else {
+                    P768
+                };
                 let ratio = w as f64 / h as f64;
                 if !(super::MIN_ASPECT - 1e-9..=super::MAX_ASPECT + 1e-9).contains(&ratio) {
-                    return Err(Error::Geometry(format!("Pika H3 Flex supports 1:4 to 4:1, got {w}x{h}")));
+                    return Err(Error::Geometry(format!(
+                        "Pika H3 Flex supports 1:4 to 4:1, got {w}x{h}"
+                    )));
                 }
                 let mut best: Option<(f64, (usize, usize))> = None;
                 for a in ASPECTS {
@@ -641,7 +771,9 @@ pub mod pika {
                 let (bh, bw) = best.unwrap().1;
                 Ok((bh, bw, t))
             }
-            _ => Err(Error::Geometry("height and width must be passed together, or neither".into())),
+            _ => Err(Error::Geometry(
+                "height and width must be passed together, or neither".into(),
+            )),
         }
     }
 
@@ -649,16 +781,24 @@ pub mod pika {
     pub fn resolve_frames(n: usize) -> Result<usize> {
         let a = super::align_num_frames(n);
         if !(MIN_ALIGNED_FRAMES..=MAX_ALIGNED_FRAMES).contains(&a) {
-            return Err(Error::Geometry(format!("Pika H3 Flex generates 5–15 s at 24 fps; aligned num_frames {a} is outside 120–362")));
+            return Err(Error::Geometry(format!(
+                "Pika H3 Flex generates 5–15 s at 24 fps; aligned num_frames {a} is outside 120–362"
+            )));
         }
         Ok(a)
     }
 }
 
 /// Reference-image canvas at `short_edge` on the 32-pixel lattice.
-pub fn reference_image_size(width: usize, height: usize, short_edge: usize) -> Result<(usize, usize)> {
+pub fn reference_image_size(
+    width: usize,
+    height: usize,
+    short_edge: usize,
+) -> Result<(usize, usize)> {
     if width == 0 || height == 0 || width > 4 * height || height > 4 * width {
-        return Err(Error::Geometry(format!("a reference image must be within 1:4 and 4:1, got {width}x{height}")));
+        return Err(Error::Geometry(format!(
+            "a reference image must be within 1:4 and 4:1, got {width}x{height}"
+        )));
     }
     let s = short_edge as f64 / width.min(height) as f64;
     let m = CANVAS_MULTIPLE as f64;
@@ -671,7 +811,8 @@ pub fn trim_reference_frames(n: usize) -> usize {
     if n < 1 {
         return LATENTS_PER_CHUNK;
     }
-    ((n.saturating_sub(LATENTS_PER_CHUNK)) / FRAMES_PER_CHUNK).max(1) * FRAMES_PER_CHUNK + LATENTS_PER_CHUNK
+    ((n.saturating_sub(LATENTS_PER_CHUNK)) / FRAMES_PER_CHUNK).max(1) * FRAMES_PER_CHUNK
+        + LATENTS_PER_CHUNK
 }
 
 #[cfg(test)]
@@ -694,18 +835,36 @@ mod tests {
 
     #[test]
     fn canvas_rules() {
-        assert_eq!(canvas_size(16.0, 9.0, SHORT_EDGE, MAX_PIXELS).unwrap(), (768, 1344));
-        assert_eq!(canvas_size(9.0, 16.0, SHORT_EDGE, MAX_PIXELS).unwrap(), (1344, 768));
-        assert_eq!(canvas_size(1.0, 1.0, SHORT_EDGE, MAX_PIXELS).unwrap(), (768, 768));
+        assert_eq!(
+            canvas_size(16.0, 9.0, SHORT_EDGE, MAX_PIXELS).unwrap(),
+            (768, 1344)
+        );
+        assert_eq!(
+            canvas_size(9.0, 16.0, SHORT_EDGE, MAX_PIXELS).unwrap(),
+            (1344, 768)
+        );
+        assert_eq!(
+            canvas_size(1.0, 1.0, SHORT_EDGE, MAX_PIXELS).unwrap(),
+            (768, 768)
+        );
         // 21:9 hits the area cap and shrinks.
         let (h, w) = canvas_size(21.0, 9.0, SHORT_EDGE, MAX_PIXELS).unwrap();
         assert!(h * w <= MAX_PIXELS + 32 * 32 && h % 32 == 0 && w % 32 == 0 && w > h);
-        assert_eq!(pika::canvas_for_aspect((16, 9), pika::P480).unwrap(), (480, 832));
-        assert_eq!(pika::resolve_canvas(None, None, (16, 9), pika::P768).unwrap(), (768, 1344, pika::P768));
+        assert_eq!(
+            pika::canvas_for_aspect((16, 9), pika::P480).unwrap(),
+            (480, 832)
+        );
+        assert_eq!(
+            pika::resolve_canvas(None, None, (16, 9), pika::P768).unwrap(),
+            (768, 1344, pika::P768)
+        );
         let (h, w, t) = pika::resolve_canvas(Some(500), Some(900), (16, 9), pika::P768).unwrap();
         assert_eq!((h, w, t.name), (768, 1344, "p768"));
         assert_eq!(pika::resolve_frames(120).unwrap(), 124);
-        assert_eq!(reference_image_size(1920, 1080, 2048).unwrap(), (2048, 3648));
+        assert_eq!(
+            reference_image_size(1920, 1080, 2048).unwrap(),
+            (2048, 3648)
+        );
         assert_eq!(trim_reference_frames(48), 39);
         assert_eq!(trim_reference_frames(130), 124);
     }
@@ -748,14 +907,26 @@ mod tests {
     #[test]
     fn fl2va_anchors_and_row_timesteps() {
         let text = vec![TEXT_TAG, TEXT_TAG, VIDEO_TAG];
-        let l = build_layout(&text, 7, 4, 6, 20, (1, 2, 2), &[Anchor::First, Anchor::Last]).unwrap();
+        let l = build_layout(
+            &text,
+            7,
+            4,
+            6,
+            20,
+            (1, 2, 2),
+            &[Anchor::First, Anchor::Last],
+        )
+        .unwrap();
         assert_eq!(l.num_condition_video_rows, 2 * 2 * 3);
         let first = l.position_ids[l.video_indices[0] as usize][0];
         let last = l.position_ids[l.video_indices[6] as usize][0];
         // Upstream's "last" anchor is `origin + span − 5/3`, not the last
         // frame's own time (33 here): a checkpoint contract, kept as is.
         assert_eq!(first, 3.0);
-        assert!((last - (3.0 + 5.0 / 3.0 * 22.0 - 5.0 / 3.0)).abs() < 1e-9, "{last}");
+        assert!(
+            (last - (3.0 + 5.0 / 3.0 * 22.0 - 5.0 / 3.0)).abs() < 1e-9,
+            "{last}"
+        );
         let (u, inv) = row_timesteps(&l, 0.3, 0.6, 0.999, 1.0);
         assert_eq!(u, vec![0.3, 0.6, 0.999]);
         assert_eq!(inv[l.video_indices[0] as usize], 2);
@@ -768,8 +939,16 @@ mod tests {
     fn ref2va_layout_orders_segments() {
         let text = vec![TEXT_TAG; 4];
         let refs = vec![
-            RefGeom::Image { latent_h: 4, latent_w: 4 },
-            RefGeom::Video { latent_t: 2, latent_h: 4, latent_w: 6, audio_latents: 3 },
+            RefGeom::Image {
+                latent_h: 4,
+                latent_w: 4,
+            },
+            RefGeom::Video {
+                latent_t: 2,
+                latent_h: 4,
+                latent_w: 6,
+                audio_latents: 3,
+            },
             RefGeom::Audio { audio_latents: 5 },
         ];
         let l = build_ref2va_layout(&text, &refs, 7, 4, 6, 20, (1, 2, 2), None).unwrap();
@@ -785,10 +964,17 @@ mod tests {
         // Clock: image at 4 (+1), video audio/video at 5, span max(3, 5/3+20/3) = 25/3, audio ref at 5+25/3 (+5),
         // target at 5 + 25/3 + 5.
         let t_target = l.position_ids[l.audio_indices[l.num_condition_audio_rows] as usize][0];
-        assert!((t_target - (5.0 + 25.0 / 3.0 + 5.0)).abs() < 1e-9, "{t_target}");
-        let with_clip = build_ref2va_layout(&text, &refs, 7, 4, 6, 20, (1, 2, 2), Some((2, 3))).unwrap();
+        assert!(
+            (t_target - (5.0 + 25.0 / 3.0 + 5.0)).abs() < 1e-9,
+            "{t_target}"
+        );
+        let with_clip =
+            build_ref2va_layout(&text, &refs, 7, 4, 6, 20, (1, 2, 2), Some((2, 3))).unwrap();
         assert_eq!(with_clip.num_condition_video_rows, img + vid + 2 * 6);
-        assert_eq!(with_clip.reference_segments.last().unwrap().0, SegmentKind::Continuation);
+        assert_eq!(
+            with_clip.reference_segments.last().unwrap().0,
+            SegmentKind::Continuation
+        );
         // The clip takes the target's first coordinates.
         let clip_first = with_clip.position_ids[with_clip.video_indices[img + vid] as usize];
         let target_first = with_clip.position_ids[with_clip.video_indices[img + vid + 12] as usize];

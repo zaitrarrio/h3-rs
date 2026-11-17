@@ -1,0 +1,328 @@
++ cat
++ O=/w/out
++ mkdir -p /w/out
++ cd /w
++ T=/w/tables
++ BASE='--variant h3 --model-dir /w/h3-base --weights mxfp8 --decoder-weights mxfp8 --attention dense --stream-blocks --pv8'
++ V2='--variant fasth3-v2 --model-dir /w/h3-8step --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --pv8 --tables /w/tables/v2.tables --stream-blocks'
+++ seq 1 60
++ for i in $(seq 1 60)
++ '[' -f /w/tables/v2.tables ']'
++ sleep 30
++ for i in $(seq 1 60)
++ '[' -f /w/tables/v2.tables ']'
++ sleep 30
++ for i in $(seq 1 60)
++ '[' -f /w/tables/v2.tables ']'
++ sleep 30
++ for i in $(seq 1 60)
++ '[' -f /w/tables/v2.tables ']'
++ sleep 30
++ for i in $(seq 1 60)
++ '[' -f /w/tables/v2.tables ']'
++ sleep 30
++ for i in $(seq 1 60)
++ '[' -f /w/tables/v2.tables ']'
++ sleep 30
++ for i in $(seq 1 60)
++ '[' -f /w/tables/v2.tables ']'
++ sleep 30
++ for i in $(seq 1 60)
++ '[' -f /w/tables/v2.tables ']'
++ sleep 30
++ for i in $(seq 1 60)
++ '[' -f /w/tables/v2.tables ']'
++ sleep 30
++ for i in $(seq 1 60)
++ '[' -f /w/tables/v2.tables ']'
++ sleep 30
++ for i in $(seq 1 60)
++ '[' -f /w/tables/v2.tables ']'
++ sleep 30
++ for i in $(seq 1 60)
++ '[' -f /w/tables/v2.tables ']'
++ sleep 30
++ for i in $(seq 1 60)
++ '[' -f /w/tables/v2.tables ']'
++ sleep 30
++ for i in $(seq 1 60)
++ '[' -f /w/tables/v2.tables ']'
++ sleep 30
++ for i in $(seq 1 60)
++ '[' -f /w/tables/v2.tables ']'
++ sleep 30
++ for i in $(seq 1 60)
++ '[' -f /w/tables/v2.tables ']'
++ sleep 30
++ for i in $(seq 1 60)
++ '[' -f /w/tables/v2.tables ']'
++ sleep 30
++ for i in $(seq 1 60)
++ '[' -f /w/tables/v2.tables ']'
++ sleep 30
++ for i in $(seq 1 60)
++ '[' -f /w/tables/v2.tables ']'
++ sleep 30
++ for i in $(seq 1 60)
++ '[' -f /w/tables/v2.tables ']'
++ sleep 30
++ for i in $(seq 1 60)
++ '[' -f /w/tables/v2.tables ']'
++ sleep 30
++ for i in $(seq 1 60)
++ '[' -f /w/tables/v2.tables ']'
++ sleep 30
++ for i in $(seq 1 60)
++ '[' -f /w/tables/v2.tables ']'
++ sleep 30
++ for i in $(seq 1 60)
++ '[' -f /w/tables/v2.tables ']'
++ sleep 30
++ for i in $(seq 1 60)
++ '[' -f /w/tables/v2.tables ']'
++ sleep 30
++ for i in $(seq 1 60)
++ '[' -f /w/tables/v2.tables ']'
++ sleep 30
++ for i in $(seq 1 60)
++ '[' -f /w/tables/v2.tables ']'
++ sleep 30
++ for i in $(seq 1 60)
++ '[' -f /w/tables/v2.tables ']'
++ sleep 30
++ for i in $(seq 1 60)
++ '[' -f /w/tables/v2.tables ']'
++ sleep 30
++ for i in $(seq 1 60)
++ '[' -f /w/tables/v2.tables ']'
++ sleep 30
++ for i in $(seq 1 60)
++ '[' -f /w/tables/v2.tables ']'
++ sleep 30
++ for i in $(seq 1 60)
++ '[' -f /w/tables/v2.tables ']'
++ sleep 30
++ for i in $(seq 1 60)
++ '[' -f /w/tables/v2.tables ']'
++ sleep 30
++ for i in $(seq 1 60)
++ '[' -f /w/tables/v2.tables ']'
++ sleep 30
++ for i in $(seq 1 60)
++ '[' -f /w/tables/v2.tables ']'
++ sleep 30
++ for i in $(seq 1 60)
++ '[' -f /w/tables/v2.tables ']'
++ sleep 30
++ for i in $(seq 1 60)
++ '[' -f /w/tables/v2.tables ']'
++ sleep 30
++ for i in $(seq 1 60)
++ '[' -f /w/tables/v2.tables ']'
++ sleep 30
++ for i in $(seq 1 60)
++ '[' -f /w/tables/v2.tables ']'
++ sleep 30
++ for i in $(seq 1 60)
++ '[' -f /w/tables/v2.tables ']'
++ sleep 30
++ for i in $(seq 1 60)
++ '[' -f /w/tables/v2.tables ']'
++ sleep 30
++ for i in $(seq 1 60)
++ '[' -f /w/tables/v2.tables ']'
++ sleep 30
++ for i in $(seq 1 60)
++ '[' -f /w/tables/v2.tables ']'
++ sleep 30
++ for i in $(seq 1 60)
++ '[' -f /w/tables/v2.tables ']'
++ sleep 30
++ for i in $(seq 1 60)
++ '[' -f /w/tables/v2.tables ']'
++ sleep 30
++ for i in $(seq 1 60)
++ '[' -f /w/tables/v2.tables ']'
++ sleep 30
++ for i in $(seq 1 60)
++ '[' -f /w/tables/v2.tables ']'
++ sleep 30
++ for i in $(seq 1 60)
++ '[' -f /w/tables/v2.tables ']'
++ sleep 30
++ for i in $(seq 1 60)
++ '[' -f /w/tables/v2.tables ']'
++ sleep 30
++ for i in $(seq 1 60)
++ '[' -f /w/tables/v2.tables ']'
++ sleep 30
++ for i in $(seq 1 60)
++ '[' -f /w/tables/v2.tables ']'
++ sleep 30
++ for i in $(seq 1 60)
++ '[' -f /w/tables/v2.tables ']'
++ sleep 30
++ for i in $(seq 1 60)
++ '[' -f /w/tables/v2.tables ']'
++ sleep 30
++ for i in $(seq 1 60)
++ '[' -f /w/tables/v2.tables ']'
++ sleep 30
++ for i in $(seq 1 60)
++ '[' -f /w/tables/v2.tables ']'
++ sleep 30
++ for i in $(seq 1 60)
++ '[' -f /w/tables/v2.tables ']'
++ sleep 30
++ for i in $(seq 1 60)
++ '[' -f /w/tables/v2.tables ']'
++ sleep 30
++ for i in $(seq 1 60)
++ '[' -f /w/tables/v2.tables ']'
++ sleep 30
++ for i in $(seq 1 60)
++ '[' -f /w/tables/v2.tables ']'
++ sleep 30
++ for i in $(seq 1 60)
++ '[' -f /w/tables/v2.tables ']'
++ sleep 30
++ echo '== item 1: streamed forward stalls (H3_STALL=1 event accounting)'
+== item 1: streamed forward stalls (H3_STALL=1 event accounting)
++ H3_STALL=1
++ run v2-stall 1500 --variant fasth3-v2 --model-dir /w/h3-8step --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --pv8 --tables /w/tables/v2.tables --stream-blocks
++ n=v2-stall
++ t=1500
++ shift 2
++ echo '== v2-stall: --variant fasth3-v2 --model-dir /w/h3-8step --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --pv8 --tables /w/tables/v2.tables --stream-blocks'
+== v2-stall: --variant fasth3-v2 --model-dir /w/h3-8step --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --pv8 --tables /w/tables/v2.tables --stream-blocks
++ sp=9849
++ nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits -lms 500
++ rc=1
++ kill 9849
+++ sort -n /w/out/v2-stall.mem
+++ tail -1
++ echo 'peak VRAM MiB: 810; exit 1'
+peak VRAM MiB: 810; exit 1
++ grep -E '^cuda|^load|prompt:|^run |^prefetch|h2d probe|rror|panick|warning|real' /w/out/v2-stall.log
++ cut -c1-400
+cuda NVIDIA GeForce RTX 5090 (sm_120)
+Error: weights: /w/h3-8step/transformer/diffusion_pytorch_model-00008-of-00014.safetensors: incomplete metadata, file not fully covered
+real	0m6.312s
++ '[' -f /w/out/v2-stall.y4m ']'
++ '[' -f /w/out/v2-stall.y4m ']'
++ H3_STALL=1
++ H3_PREFETCH_DEPTH=2
++ run v2-stall-depth2 1500 --variant fasth3-v2 --model-dir /w/h3-8step --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --pv8 --tables /w/tables/v2.tables --stream-blocks
++ n=v2-stall-depth2
++ t=1500
++ shift 2
++ echo '== v2-stall-depth2: --variant fasth3-v2 --model-dir /w/h3-8step --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --pv8 --tables /w/tables/v2.tables --stream-blocks'
+== v2-stall-depth2: --variant fasth3-v2 --model-dir /w/h3-8step --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --pv8 --tables /w/tables/v2.tables --stream-blocks
++ sp=9865
++ nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits -lms 500
++ rc=1
++ kill 9865
+++ sort -n /w/out/v2-stall-depth2.mem
+++ tail -1
++ echo 'peak VRAM MiB: 508; exit 1'
+peak VRAM MiB: 508; exit 1
++ grep -E '^cuda|^load|prompt:|^run |^prefetch|h2d probe|rror|panick|warning|real' /w/out/v2-stall-depth2.log
++ cut -c1-400
+cuda NVIDIA GeForce RTX 5090 (sm_120)
+Error: weights: /w/h3-8step/transformer/diffusion_pytorch_model-00008-of-00014.safetensors: incomplete metadata, file not fully covered
+real	0m6.140s
++ '[' -f /w/out/v2-stall-depth2.y4m ']'
++ '[' -f /w/out/v2-stall-depth2.y4m ']'
++ H3_STALL=1
++ H3_CUDA_NO_PIN=1
++ run v2-stall-nopin 1500 --variant fasth3-v2 --model-dir /w/h3-8step --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --pv8 --tables /w/tables/v2.tables --stream-blocks
++ n=v2-stall-nopin
++ t=1500
++ shift 2
++ echo '== v2-stall-nopin: --variant fasth3-v2 --model-dir /w/h3-8step --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --pv8 --tables /w/tables/v2.tables --stream-blocks'
+== v2-stall-nopin: --variant fasth3-v2 --model-dir /w/h3-8step --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --pv8 --tables /w/tables/v2.tables --stream-blocks
++ sp=9880
++ nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits -lms 500
++ rc=1
++ kill 9880
+++ sort -n /w/out/v2-stall-nopin.mem
+++ tail -1
++ echo 'peak VRAM MiB: 542; exit 1'
+peak VRAM MiB: 542; exit 1
++ grep -E '^cuda|^load|prompt:|^run |^prefetch|h2d probe|rror|panick|warning|real' /w/out/v2-stall-nopin.log
++ cut -c1-400
+cuda NVIDIA GeForce RTX 5090 (sm_120)
+Error: weights: /w/h3-8step/transformer/diffusion_pytorch_model-00008-of-00014.safetensors: incomplete metadata, file not fully covered
+real	0m6.142s
++ '[' -f /w/out/v2-stall-nopin.y4m ']'
++ '[' -f /w/out/v2-stall-nopin.y4m ']'
++ H3_STALL=1
++ run base2-stall 1500 --variant h3 --model-dir /w/h3-base --weights mxfp8 --decoder-weights mxfp8 --attention dense --stream-blocks --pv8 --steps 2 --tables /w/tables/base25.tables
++ n=base2-stall
++ t=1500
++ shift 2
++ echo '== base2-stall: --variant h3 --model-dir /w/h3-base --weights mxfp8 --decoder-weights mxfp8 --attention dense --stream-blocks --pv8 --steps 2 --tables /w/tables/base25.tables'
+== base2-stall: --variant h3 --model-dir /w/h3-base --weights mxfp8 --decoder-weights mxfp8 --attention dense --stream-blocks --pv8 --steps 2 --tables /w/tables/base25.tables
++ sp=9895
++ nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits -lms 500
++ rc=1
++ kill 9895
+++ sort -n /w/out/base2-stall.mem
+++ tail -1
++ echo 'peak VRAM MiB: 12628; exit 1'
+peak VRAM MiB: 12628; exit 1
++ grep -E '^cuda|^load|prompt:|^run |^prefetch|h2d probe|rror|panick|warning|real' /w/out/base2-stall.log
++ cut -c1-400
+cuda NVIDIA GeForce RTX 5090 (sm_120)
+load 114.1s
+prompt: 462 rows in 114.6s
+Error: config: the AdaLN table file lacks some of this run's timesteps ([0.0, 0.07692307, 0.25]); recompute it with `h3 adaln-tables`
+real	3m57.386s
++ '[' -f /w/out/base2-stall.y4m ']'
++ '[' -f /w/out/base2-stall.y4m ']'
++ H3_STALL=1
++ H3_PREFETCH_DEPTH=2
++ run base2-stall-depth2 1500 --variant h3 --model-dir /w/h3-base --weights mxfp8 --decoder-weights mxfp8 --attention dense --stream-blocks --pv8 --steps 2 --tables /w/tables/base25.tables
++ n=base2-stall-depth2
++ t=1500
++ shift 2
++ echo '== base2-stall-depth2: --variant h3 --model-dir /w/h3-base --weights mxfp8 --decoder-weights mxfp8 --attention dense --stream-blocks --pv8 --steps 2 --tables /w/tables/base25.tables'
+== base2-stall-depth2: --variant h3 --model-dir /w/h3-base --weights mxfp8 --decoder-weights mxfp8 --attention dense --stream-blocks --pv8 --steps 2 --tables /w/tables/base25.tables
++ sp=9976
++ nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits -lms 500
++ rc=1
++ kill 9976
+++ sort -n /w/out/base2-stall-depth2.mem
+++ tail -1
++ echo 'peak VRAM MiB: 12630; exit 1'
+peak VRAM MiB: 12630; exit 1
++ grep -E '^cuda|^load|prompt:|^run |^prefetch|h2d probe|rror|panick|warning|real' /w/out/base2-stall-depth2.log
++ cut -c1-400
+cuda NVIDIA GeForce RTX 5090 (sm_120)
+load 104.5s
+prompt: 462 rows in 114.6s
+Error: config: the AdaLN table file lacks some of this run's timesteps ([0.0, 0.07692307, 0.25]); recompute it with `h3 adaln-tables`
+real	3m47.872s
++ '[' -f /w/out/base2-stall-depth2.y4m ']'
++ '[' -f /w/out/base2-stall-depth2.y4m ']'
++ echo '== clips identical across depth / pin?'
+== clips identical across depth / pin?
++ psnr v2-stall-depth2 v2-stall
++ echo '== psnr v2-stall-depth2 vs v2-stall'
+== psnr v2-stall-depth2 vs v2-stall
++ ffmpeg -loglevel info -i /w/out/v2-stall-depth2.y4m -i /w/out/v2-stall.y4m -lavfi psnr -f null -
++ grep -E PSNR
++ psnr v2-stall-nopin v2-stall
++ echo '== psnr v2-stall-nopin vs v2-stall'
+== psnr v2-stall-nopin vs v2-stall
++ ffmpeg -loglevel info -i /w/out/v2-stall-nopin.y4m -i /w/out/v2-stall.y4m -lavfi psnr -f null -
++ grep -E PSNR
++ cmp /w/out/v2-stall.y4m /w/out/v2-stall-depth2.y4m
+cmp: /w/out/v2-stall.y4m: No such file or directory
++ rm -f '/w/out/base2-*.y4m' '/w/out/base2-*.wav' /w/out/v2-stall-nopin.y4m /w/out/v2-stall-nopin.wav
++ tar czf /root/cmd2.tgz -C /w/out '--exclude=*.y4m' '--exclude=*.wav' '--exclude=*.mp4' .
+++ date -u
++ echo 'cmd2 done Fri Nov 13 23:46:10 UTC 2026'
+cmd2 done Fri Nov 13 23:46:10 UTC 2026
+exit 0
+

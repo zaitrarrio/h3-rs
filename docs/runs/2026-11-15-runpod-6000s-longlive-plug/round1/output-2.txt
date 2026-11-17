@@ -1,0 +1,403 @@
++ O=/root/out
++ mkdir -p /root/out
++ cd /root
++ FOX='A red fox trots through fresh snow at dawn in a quiet pine forest; snow crunches softly under its paws and a light wind moves through the branches.'
++ A=/workspace/h3-rs/assets
++ PLUG='--variant h3-plug4 --model-dir /w/h3-base --variant-dir /root/plug4'
++ FAST='--weights mxfp8 --decoder-weights mxfp8 --pv8'
++ T='--tables /root/plug4.tables'
++ echo '== 1. the plug, bf16 weights and bf16 dense attention: the quality anchor (the 2026-11-08 base T2VA fox, seed 7, ran these settings at 49 forwards)'
+== 1. the plug, bf16 weights and bf16 dense attention: the quality anchor (the 2026-11-08 base T2VA fox, seed 7, ran these settings at 49 forwards)
++ run plug-bf16 1500 'A red fox trots through fresh snow at dawn in a quiet pine forest; snow crunches softly under its paws and a light wind moves through the branches.' 7 --variant h3-plug4 --model-dir /w/h3-base --variant-dir /root/plug4 --tables /root/plug4.tables
++ n=plug-bf16
++ t=1500
++ p='A red fox trots through fresh snow at dawn in a quiet pine forest; snow crunches softly under its paws and a light wind moves through the branches.'
++ sd=7
++ shift 4
++ echo '== plug-bf16: seed 7 --variant h3-plug4 --model-dir /w/h3-base --variant-dir /root/plug4 --tables /root/plug4.tables'
+== plug-bf16: seed 7 --variant h3-plug4 --model-dir /w/h3-base --variant-dir /root/plug4 --tables /root/plug4.tables
++ sp=23307
++ nvidia-smi --query-gpu=memory.used,clocks.sm,power.draw --format=csv,noheader,nounits -lms 500
++ rc=0
++ kill 23307
+++ cut -d, -f1 /root/out/plug-bf16.mem
+++ sort -n
+++ tail -1
+++ awk -F, '$3>300{print $2}' /root/out/plug-bf16.mem
+++ sort -n
+++ awk '{a[NR]=$1} END{print a[int(NR/2)+1]}'
++ echo 'peak VRAM MiB: 51581; median SM MHz under load: 2280; exit 0'
+peak VRAM MiB: 51581; median SM MHz under load: 2280; exit 0
++ grep -E '^cuda|^adapter|^load|prompt:|^run |rror|panick|warning|real|^mxfp8 n=' /root/out/plug-bf16.log
++ cut -c1-300
+adapter: /root/plug4/generator_lora.safetensors
+cuda NVIDIA RTX PRO 6000 Blackwell Server Edition (sm_120)
+load 82.0s
+prompt: 33 rows in 86.6s
+run 0: total 51.80s  prepare 0.03s  adaln 0.00s  denoise 42.89s (["10.65", "10.71", "10.75", "10.78"])  decode 8.60s  audio 0.19s
+real	3m48.210s
++ '[' -f /root/out/plug-bf16.y4m ']'
+++ stats /root/out/plug-bf16.y4m
+++ ffmpeg -v info -i /root/out/plug-bf16.y4m -frames:v 2 -vf signalstats,metadata=print:key=lavfi.signalstats.YAVG -f null -
+++ grep -o 'YAVG=[0-9.]*'
+++ head -2
+++ tr '\n' ' '
++ echo 'luma: YAVG=88.2698 YAVG=88.9313 '
+luma: YAVG=88.2698 YAVG=88.9313 
++ grid /root/out/plug-bf16.y4m /root/out/plug-bf16.grid.png
++ ffmpeg -loglevel error -y -i /root/out/plug-bf16.y4m -vf 'select='\''eq(n\,0)+eq(n\,40)+eq(n\,80)+eq(n\,120)'\'',scale=448:-1,tile=2x2' -vframes 1 /root/out/plug-bf16.grid.png
++ ffmpeg -loglevel error -y -i /root/out/plug-bf16.y4m -i /root/out/plug-bf16.wav -c:v libx264 -crf 18 -pix_fmt yuv420p -c:a aac -b:a 192k -shortest /root/out/plug-bf16.mp4
++ echo '== 2. the plug, fast recipe (MXFP8 weights quantized at load after the merge, MXFP8 decoder, INT8 Q·Kᵀ + FP8 P·V dense attention)'
+== 2. the plug, fast recipe (MXFP8 weights quantized at load after the merge, MXFP8 decoder, INT8 Q·Kᵀ + FP8 P·V dense attention)
++ run plug-fast 1500 'A red fox trots through fresh snow at dawn in a quiet pine forest; snow crunches softly under its paws and a light wind moves through the branches.' 7 --variant h3-plug4 --model-dir /w/h3-base --variant-dir /root/plug4 --tables /root/plug4.tables --weights mxfp8 --decoder-weights mxfp8 --pv8
++ n=plug-fast
++ t=1500
++ p='A red fox trots through fresh snow at dawn in a quiet pine forest; snow crunches softly under its paws and a light wind moves through the branches.'
++ sd=7
++ shift 4
++ echo '== plug-fast: seed 7 --variant h3-plug4 --model-dir /w/h3-base --variant-dir /root/plug4 --tables /root/plug4.tables --weights mxfp8 --decoder-weights mxfp8 --pv8'
+== plug-fast: seed 7 --variant h3-plug4 --model-dir /w/h3-base --variant-dir /root/plug4 --tables /root/plug4.tables --weights mxfp8 --decoder-weights mxfp8 --pv8
++ sp=32107
++ nvidia-smi --query-gpu=memory.used,clocks.sm,power.draw --format=csv,noheader,nounits -lms 500
++ rc=0
++ kill 32107
+++ cut -d, -f1 /root/out/plug-fast.mem
+++ sort -n
+++ tail -1
+++ awk -F, '$3>300{print $2}' /root/out/plug-fast.mem
+++ sort -n
+++ awk '{a[NR]=$1} END{print a[int(NR/2)+1]}'
++ echo 'peak VRAM MiB: 35743; median SM MHz under load: 2310; exit 0'
+peak VRAM MiB: 35743; median SM MHz under load: 2310; exit 0
++ grep -E '^cuda|^adapter|^load|prompt:|^run |rror|panick|warning|real|^mxfp8 n=' /root/out/plug-fast.log
++ cut -c1-300
+adapter: /root/plug4/generator_lora.safetensors
+cuda NVIDIA RTX PRO 6000 Blackwell Server Edition (sm_120)
+load 86.8s
+prompt: 33 rows in 90.2s
+run 0: total 32.82s  prepare 0.03s  adaln 0.00s  denoise 26.46s (["6.94", "6.49", "6.51", "6.52"])  decode 6.04s  audio 0.19s
+real	3m37.613s
++ '[' -f /root/out/plug-fast.y4m ']'
+++ stats /root/out/plug-fast.y4m
+++ ffmpeg -v info -i /root/out/plug-fast.y4m -frames:v 2 -vf signalstats,metadata=print:key=lavfi.signalstats.YAVG -f null -
+++ grep -o 'YAVG=[0-9.]*'
+++ head -2
+++ tr '\n' ' '
++ echo 'luma: YAVG=113.166 YAVG=112.167 '
+luma: YAVG=113.166 YAVG=112.167 
++ grid /root/out/plug-fast.y4m /root/out/plug-fast.grid.png
++ ffmpeg -loglevel error -y -i /root/out/plug-fast.y4m -vf 'select='\''eq(n\,0)+eq(n\,40)+eq(n\,80)+eq(n\,120)'\'',scale=448:-1,tile=2x2' -vframes 1 /root/out/plug-fast.grid.png
++ ffmpeg -loglevel error -y -i /root/out/plug-fast.y4m -i /root/out/plug-fast.wav -c:v libx264 -crf 18 -pix_fmt yuv420p -c:a aac -b:a 192k -shortest /root/out/plug-fast.mp4
++ same plug-fast plug-bf16
+++ cmp /root/out/plug-fast.y4m /root/out/plug-bf16.y4m
+++ ffmpeg -loglevel info -i /root/out/plug-fast.y4m -i /root/out/plug-bf16.y4m -lavfi psnr -f null -
+++ grep -oE 'PSNR.*'
++ echo '== compare plug-fast vs plug-bf16: PSNR y:9.231556 u:19.766575 v:21.040904 average:13.379444 min:13.206958 max:13.686248'
+== compare plug-fast vs plug-bf16: PSNR y:9.231556 u:19.766575 v:21.040904 average:13.379444 min:13.206958 max:13.686248
++ echo '== 3. the same under H3_STALL=1: byte-identical, with the GEMM decision lines'
+== 3. the same under H3_STALL=1: byte-identical, with the GEMM decision lines
++ H3_STALL=1
++ run plug-fast-stall 1500 'A red fox trots through fresh snow at dawn in a quiet pine forest; snow crunches softly under its paws and a light wind moves through the branches.' 7 --variant h3-plug4 --model-dir /w/h3-base --variant-dir /root/plug4 --tables /root/plug4.tables --weights mxfp8 --decoder-weights mxfp8 --pv8
++ n=plug-fast-stall
++ t=1500
++ p='A red fox trots through fresh snow at dawn in a quiet pine forest; snow crunches softly under its paws and a light wind moves through the branches.'
++ sd=7
++ shift 4
++ echo '== plug-fast-stall: seed 7 --variant h3-plug4 --model-dir /w/h3-base --variant-dir /root/plug4 --tables /root/plug4.tables --weights mxfp8 --decoder-weights mxfp8 --pv8'
+== plug-fast-stall: seed 7 --variant h3-plug4 --model-dir /w/h3-base --variant-dir /root/plug4 --tables /root/plug4.tables --weights mxfp8 --decoder-weights mxfp8 --pv8
++ sp=40931
++ nvidia-smi --query-gpu=memory.used,clocks.sm,power.draw --format=csv,noheader,nounits -lms 500
++ rc=0
++ kill 40931
+++ cut -d, -f1 /root/out/plug-fast-stall.mem
+++ sort -n
+++ tail -1
+++ awk -F, '$3>300{print $2}' /root/out/plug-fast-stall.mem
+++ sort -n
+++ awk '{a[NR]=$1} END{print a[int(NR/2)+1]}'
++ echo 'peak VRAM MiB: 35743; median SM MHz under load: 2310; exit 0'
+peak VRAM MiB: 35743; median SM MHz under load: 2310; exit 0
++ grep -E '^cuda|^adapter|^load|prompt:|^run |rror|panick|warning|real|^mxfp8 n=' /root/out/plug-fast-stall.log
++ cut -c1-300
+adapter: /root/plug4/generator_lora.safetensors
+cuda NVIDIA RTX PRO 6000 Blackwell Server Edition (sm_120)
+load 88.8s
+prompt: 33 rows in 85.1s
+mxfp8 n=21504 k=5376 rows=37743: whole 12.32 ms, ×2 12.39 ms → whole; plain fp8 (per-tensor scale) 11.47 ms
+mxfp8 n=28672 k=5376 rows=37743: whole 32.76 ms, ×2 15.44 ms → ×2; plain fp8 (per-tensor scale) 15.48 ms
+mxfp8 n=16384 k=2048 rows=1797: whole 0.20 ms, ×2 0.22 ms → whole; plain fp8 (per-tensor scale) 0.18 ms
+run 0: total 32.98s  prepare 0.03s  adaln 0.00s  denoise 26.73s (["7.19", "6.50", "6.51", "6.52"])  decode 5.95s  audio 0.19s
+real	3m35.036s
++ '[' -f /root/out/plug-fast-stall.y4m ']'
+++ stats /root/out/plug-fast-stall.y4m
+++ ffmpeg -v info -i /root/out/plug-fast-stall.y4m -frames:v 2 -vf signalstats,metadata=print:key=lavfi.signalstats.YAVG -f null -
+++ grep -o 'YAVG=[0-9.]*'
+++ head -2
+++ tr '\n' ' '
++ echo 'luma: YAVG=113.166 YAVG=112.167 '
+luma: YAVG=113.166 YAVG=112.167 
++ grid /root/out/plug-fast-stall.y4m /root/out/plug-fast-stall.grid.png
++ ffmpeg -loglevel error -y -i /root/out/plug-fast-stall.y4m -vf 'select='\''eq(n\,0)+eq(n\,40)+eq(n\,80)+eq(n\,120)'\'',scale=448:-1,tile=2x2' -vframes 1 /root/out/plug-fast-stall.grid.png
++ ffmpeg -loglevel error -y -i /root/out/plug-fast-stall.y4m -i /root/out/plug-fast-stall.wav -c:v libx264 -crf 18 -pix_fmt yuv420p -c:a aac -b:a 192k -shortest /root/out/plug-fast-stall.mp4
++ same plug-fast-stall plug-fast
+++ cmp /root/out/plug-fast-stall.y4m /root/out/plug-fast.y4m
+++ echo byte-identical
++ echo '== compare plug-fast-stall vs plug-fast: byte-identical'
+== compare plug-fast-stall vs plug-fast: byte-identical
++ echo '== 4. FL2VA (transfer), the 2026-11-08 keyframes'
+== 4. FL2VA (transfer), the 2026-11-08 keyframes
++ run plug-fl2va 1500 'A red fox trots through fresh snow at dawn in a quiet pine forest; snow crunches softly under its paws and a light wind moves through the branches.' 7 --variant h3-plug4 --model-dir /w/h3-base --variant-dir /root/plug4 --tables /root/plug4.tables --weights mxfp8 --decoder-weights mxfp8 --pv8 --task fl2va --first-image /workspace/h3-rs/assets/first.png --last-image /workspace/h3-rs/assets/last.png
++ n=plug-fl2va
++ t=1500
++ p='A red fox trots through fresh snow at dawn in a quiet pine forest; snow crunches softly under its paws and a light wind moves through the branches.'
++ sd=7
++ shift 4
++ echo '== plug-fl2va: seed 7 --variant h3-plug4 --model-dir /w/h3-base --variant-dir /root/plug4 --tables /root/plug4.tables --weights mxfp8 --decoder-weights mxfp8 --pv8 --task fl2va --first-image /workspace/h3-rs/assets/first.png --last-image /workspace/h3-rs/assets/last.png'
+== plug-fl2va: seed 7 --variant h3-plug4 --model-dir /w/h3-base --variant-dir /root/plug4 --tables /root/plug4.tables --weights mxfp8 --decoder-weights mxfp8 --pv8 --task fl2va --first-image /workspace/h3-rs/assets/first.png --last-image /workspace/h3-rs/assets/last.png
++ sp=49730
++ nvidia-smi --query-gpu=memory.used,clocks.sm,power.draw --format=csv,noheader,nounits -lms 500
++ rc=0
++ kill 49730
+++ cut -d, -f1 /root/out/plug-fl2va.mem
+++ sort -n
+++ tail -1
+++ awk -F, '$3>300{print $2}' /root/out/plug-fl2va.mem
+++ sort -n
+++ awk '{a[NR]=$1} END{print a[int(NR/2)+1]}'
++ echo 'peak VRAM MiB: 37249; median SM MHz under load: 2310; exit 0'
+peak VRAM MiB: 37249; median SM MHz under load: 2310; exit 0
++ grep -E '^cuda|^adapter|^load|prompt:|^run |rror|panick|warning|real|^mxfp8 n=' /root/out/plug-fl2va.log
++ cut -c1-300
+adapter: /root/plug4/generator_lora.safetensors
+cuda NVIDIA RTX PRO 6000 Blackwell Server Edition (sm_120)
+load 86.3s
+prompt: 2065 rows in 90.2s
+run 0: total 40.30s  prepare 0.05s  adaln 0.00s  denoise 31.14s (["8.19", "7.63", "7.65", "7.67"])  decode 5.82s  audio 0.19s
+real	3m44.728s
++ '[' -f /root/out/plug-fl2va.y4m ']'
+++ stats /root/out/plug-fl2va.y4m
+++ ffmpeg -v info -i /root/out/plug-fl2va.y4m -frames:v 2 -vf signalstats,metadata=print:key=lavfi.signalstats.YAVG -f null -
+++ grep -o 'YAVG=[0-9.]*'
+++ head -2
+++ tr '\n' ' '
++ echo 'luma: YAVG=102.152 YAVG=105.076 '
+luma: YAVG=102.152 YAVG=105.076 
++ grid /root/out/plug-fl2va.y4m /root/out/plug-fl2va.grid.png
++ ffmpeg -loglevel error -y -i /root/out/plug-fl2va.y4m -vf 'select='\''eq(n\,0)+eq(n\,40)+eq(n\,80)+eq(n\,120)'\'',scale=448:-1,tile=2x2' -vframes 1 /root/out/plug-fl2va.grid.png
++ ffmpeg -loglevel error -y -i /root/out/plug-fl2va.y4m -i /root/out/plug-fl2va.wav -c:v libx264 -crf 18 -pix_fmt yuv420p -c:a aac -b:a 192k -shortest /root/out/plug-fl2va.mp4
++ echo '== 5. Ref2VA (transfer): the base tree on the volume has no transformer_ref; stage it from h3-ref2va'
+== 5. Ref2VA (transfer): the base tree on the volume has no transformer_ref; stage it from h3-ref2va
++ ls /workspace/weights/h3-ref2va/
+LICENSE
+Minimax-h3-Turbo
+README.md
+SOURCE.json
+model_index.json
+processor
+sha256.txt
+transformer_ref
++ stage h3-ref2va transformer_ref
++ t=h3-ref2va
++ shift
++ src=/workspace/weights/h3-ref2va
++ dst=/root/w/h3-ref2va
++ mkdir -p /root/w/h3-ref2va
+++ date +%s
++ T0=1794700324
++ '[' 1 -eq 0 ']'
++ subs=transformer_ref
++ for e in "$src"/* "$src"/.[!.]*
++ '[' -e /workspace/weights/h3-ref2va/LICENSE ']'
+++ basename /workspace/weights/h3-ref2va/LICENSE
++ ln -sfn /workspace/weights/h3-ref2va/LICENSE /root/w/h3-ref2va/LICENSE
++ for e in "$src"/* "$src"/.[!.]*
++ '[' -e /workspace/weights/h3-ref2va/Minimax-h3-Turbo ']'
+++ basename /workspace/weights/h3-ref2va/Minimax-h3-Turbo
++ ln -sfn /workspace/weights/h3-ref2va/Minimax-h3-Turbo /root/w/h3-ref2va/Minimax-h3-Turbo
++ for e in "$src"/* "$src"/.[!.]*
++ '[' -e /workspace/weights/h3-ref2va/README.md ']'
+++ basename /workspace/weights/h3-ref2va/README.md
++ ln -sfn /workspace/weights/h3-ref2va/README.md /root/w/h3-ref2va/README.md
++ for e in "$src"/* "$src"/.[!.]*
++ '[' -e /workspace/weights/h3-ref2va/SOURCE.json ']'
+++ basename /workspace/weights/h3-ref2va/SOURCE.json
++ ln -sfn /workspace/weights/h3-ref2va/SOURCE.json /root/w/h3-ref2va/SOURCE.json
++ for e in "$src"/* "$src"/.[!.]*
++ '[' -e /workspace/weights/h3-ref2va/model_index.json ']'
+++ basename /workspace/weights/h3-ref2va/model_index.json
++ ln -sfn /workspace/weights/h3-ref2va/model_index.json /root/w/h3-ref2va/model_index.json
++ for e in "$src"/* "$src"/.[!.]*
++ '[' -e /workspace/weights/h3-ref2va/processor ']'
+++ basename /workspace/weights/h3-ref2va/processor
++ ln -sfn /workspace/weights/h3-ref2va/processor /root/w/h3-ref2va/processor
++ for e in "$src"/* "$src"/.[!.]*
++ '[' -e /workspace/weights/h3-ref2va/sha256.txt ']'
+++ basename /workspace/weights/h3-ref2va/sha256.txt
++ ln -sfn /workspace/weights/h3-ref2va/sha256.txt /root/w/h3-ref2va/sha256.txt
++ for e in "$src"/* "$src"/.[!.]*
++ '[' -e /workspace/weights/h3-ref2va/transformer_ref ']'
+++ basename /workspace/weights/h3-ref2va/transformer_ref
++ ln -sfn /workspace/weights/h3-ref2va/transformer_ref /root/w/h3-ref2va/transformer_ref
++ for e in "$src"/* "$src"/.[!.]*
++ '[' -e /workspace/weights/h3-ref2va/.complete ']'
+++ basename /workspace/weights/h3-ref2va/.complete
++ ln -sfn /workspace/weights/h3-ref2va/.complete /root/w/h3-ref2va/.complete
++ for e in "$src"/* "$src"/.[!.]*
++ '[' -e /workspace/weights/h3-ref2va/.fv-manifest.json ']'
+++ basename /workspace/weights/h3-ref2va/.fv-manifest.json
++ ln -sfn /workspace/weights/h3-ref2va/.fv-manifest.json /root/w/h3-ref2va/.fv-manifest.json
++ for e in "$src"/* "$src"/.[!.]*
++ '[' -e /workspace/weights/h3-ref2va/.fv-revision ']'
+++ basename /workspace/weights/h3-ref2va/.fv-revision
++ ln -sfn /workspace/weights/h3-ref2va/.fv-revision /root/w/h3-ref2va/.fv-revision
++ for e in "$src"/* "$src"/.[!.]*
++ '[' -e /workspace/weights/h3-ref2va/.fv-sha256.txt ']'
+++ basename /workspace/weights/h3-ref2va/.fv-sha256.txt
++ ln -sfn /workspace/weights/h3-ref2va/.fv-sha256.txt /root/w/h3-ref2va/.fv-sha256.txt
++ for e in "$src"/* "$src"/.[!.]*
++ '[' -e /workspace/weights/h3-ref2va/.fv-source ']'
+++ basename /workspace/weights/h3-ref2va/.fv-source
++ ln -sfn /workspace/weights/h3-ref2va/.fv-source /root/w/h3-ref2va/.fv-source
++ for sub in $subs
++ '[' -L /root/w/h3-ref2va/transformer_ref ']'
++ rm -f /root/w/h3-ref2va/transformer_ref
++ cd /workspace/weights/h3-ref2va
++ find transformer_ref -type d -exec mkdir -p '/root/w/h3-ref2va/{}' ';'
++ find transformer_ref -type f -print0
++ xargs -0 -P 8 -n 2 cp --update=none --parents -t /root/w/h3-ref2va
+++ cd /workspace/weights/h3-ref2va
+++ du -sbL transformer_ref
+++ awk '{s+=$1} END {print s}'
++ b=66280569250
+++ date +%s
++ dt=22
+++ cd /workspace/weights/h3-ref2va
+++ find transformer_ref -type f -printf '%s %p\n'
+++ read z f
+++ wc -l
++++ stat -c %s /root/w/h3-ref2va/transformer_ref/diffusion_pytorch_model.safetensors.index.json
+++ '[' 64488 = 64488 ']'
+++ read z f
++++ stat -c %s /root/w/h3-ref2va/transformer_ref/diffusion_pytorch_model-00014-of-00014.safetensors
+++ '[' 4644161920 = 4644161920 ']'
+++ read z f
++++ stat -c %s /root/w/h3-ref2va/transformer_ref/diffusion_pytorch_model-00013-of-00014.safetensors
+++ '[' 4567069608 = 4567069608 ']'
+++ read z f
++++ stat -c %s /root/w/h3-ref2va/transformer_ref/diffusion_pytorch_model-00012-of-00014.safetensors
+++ '[' 4933368232 = 4933368232 ']'
+++ read z f
++++ stat -c %s /root/w/h3-ref2va/transformer_ref/diffusion_pytorch_model-00011-of-00014.safetensors
+++ '[' 4702158080 = 4702158080 ']'
+++ read z f
++++ stat -c %s /root/w/h3-ref2va/transformer_ref/diffusion_pytorch_model-00010-of-00014.safetensors
+++ '[' 4567069608 = 4567069608 ']'
+++ read z f
++++ stat -c %s /root/w/h3-ref2va/transformer_ref/diffusion_pytorch_model-00009-of-00014.safetensors
+++ '[' 4933368232 = 4933368232 ']'
+++ read z f
++++ stat -c %s /root/w/h3-ref2va/transformer_ref/diffusion_pytorch_model-00008-of-00014.safetensors
+++ '[' 4702158080 = 4702158080 ']'
+++ read z f
++++ stat -c %s /root/w/h3-ref2va/transformer_ref/diffusion_pytorch_model-00007-of-00014.safetensors
+++ '[' 4567069608 = 4567069608 ']'
+++ read z f
++++ stat -c %s /root/w/h3-ref2va/transformer_ref/diffusion_pytorch_model-00006-of-00014.safetensors
+++ '[' 4933368232 = 4933368232 ']'
+++ read z f
++++ stat -c %s /root/w/h3-ref2va/transformer_ref/diffusion_pytorch_model-00005-of-00014.safetensors
+++ '[' 4702158080 = 4702158080 ']'
+++ read z f
++++ stat -c %s /root/w/h3-ref2va/transformer_ref/diffusion_pytorch_model-00004-of-00014.safetensors
+++ '[' 4567069608 = 4567069608 ']'
+++ read z f
++++ stat -c %s /root/w/h3-ref2va/transformer_ref/diffusion_pytorch_model-00003-of-00014.safetensors
+++ '[' 4933368192 = 4933368192 ']'
+++ read z f
++++ stat -c %s /root/w/h3-ref2va/transformer_ref/diffusion_pytorch_model-00002-of-00014.safetensors
+++ '[' 4702158032 = 4702158032 ']'
+++ read z f
++++ stat -c %s /root/w/h3-ref2va/transformer_ref/diffusion_pytorch_model-00001-of-00014.safetensors
+++ '[' 4825958704 = 4825958704 ']'
+++ read z f
++++ stat -c %s /root/w/h3-ref2va/transformer_ref/config.json
+++ '[' 546 = 546 ']'
+++ read z f
++ bad=0
++ echo 'staged h3-ref2va [transformer_ref]: 66280569250 bytes in 22 s (3012 MB/s), 0 files wrong'
+staged h3-ref2va [transformer_ref]: 66280569250 bytes in 22 s (3012 MB/s), 0 files wrong
++ ln -sfn /root/w/h3-ref2va /w/h3-ref2va
++ ls -la /w/h3-ref2va/
+total 8
+drwx------ 3 root root 4096 Nov 14 23:52 .
+drwx------ 5 root root   76 Nov 14 23:52 ..
+lrwxrwxrwx 1 root root   38 Nov 14 23:52 .complete -> /workspace/weights/h3-ref2va/.complete
+lrwxrwxrwx 1 root root   46 Nov 14 23:52 .fv-manifest.json -> /workspace/weights/h3-ref2va/.fv-manifest.json
+lrwxrwxrwx 1 root root   41 Nov 14 23:52 .fv-revision -> /workspace/weights/h3-ref2va/.fv-revision
+lrwxrwxrwx 1 root root   43 Nov 14 23:52 .fv-sha256.txt -> /workspace/weights/h3-ref2va/.fv-sha256.txt
+lrwxrwxrwx 1 root root   39 Nov 14 23:52 .fv-source -> /workspace/weights/h3-ref2va/.fv-source
+lrwxrwxrwx 1 root root   36 Nov 14 23:52 LICENSE -> /workspace/weights/h3-ref2va/LICENSE
+lrwxrwxrwx 1 root root   45 Nov 14 23:52 Minimax-h3-Turbo -> /workspace/weights/h3-ref2va/Minimax-h3-Turbo
+lrwxrwxrwx 1 root root   38 Nov 14 23:52 README.md -> /workspace/weights/h3-ref2va/README.md
+lrwxrwxrwx 1 root root   40 Nov 14 23:52 SOURCE.json -> /workspace/weights/h3-ref2va/SOURCE.json
+lrwxrwxrwx 1 root root   45 Nov 14 23:52 model_index.json -> /workspace/weights/h3-ref2va/model_index.json
+lrwxrwxrwx 1 root root   38 Nov 14 23:52 processor -> /workspace/weights/h3-ref2va/processor
+lrwxrwxrwx 1 root root   39 Nov 14 23:52 sha256.txt -> /workspace/weights/h3-ref2va/sha256.txt
+drwx------ 2 root root 4096 Nov 14 23:52 transformer_ref
++ df -h /
++ cat
+Filesystem      Size  Used Avail Use% Mounted on
+overlay         400G  297G  104G  75% /
++ RT=/w/h3-ref2va/transformer_ref
++ tail -4
+
+real	2m54.316s
+user	4m49.790s
+sys	1m25.139s
++ '[' -e /workspace/h3-rs/plug4/plug4-ref.tables ']'
++ cp /root/plug4-ref.tables /workspace/h3-rs/plug4/
++ run plug-ref2va 1500 'A red fox trots through fresh snow at dawn in a quiet pine forest; snow crunches softly under its paws and a light wind moves through the branches.' 7 --variant h3-plug4 --model-dir /w/h3-base --variant-dir /root/plug4 --transformer /w/h3-ref2va/transformer_ref --tables /root/plug4-ref.tables --weights mxfp8 --decoder-weights mxfp8 --pv8 --task ref2va --ref image:/workspace/h3-rs/assets/first.png
++ n=plug-ref2va
++ t=1500
++ p='A red fox trots through fresh snow at dawn in a quiet pine forest; snow crunches softly under its paws and a light wind moves through the branches.'
++ sd=7
++ shift 4
++ echo '== plug-ref2va: seed 7 --variant h3-plug4 --model-dir /w/h3-base --variant-dir /root/plug4 --transformer /w/h3-ref2va/transformer_ref --tables /root/plug4-ref.tables --weights mxfp8 --decoder-weights mxfp8 --pv8 --task ref2va --ref image:/workspace/h3-rs/assets/first.png'
+== plug-ref2va: seed 7 --variant h3-plug4 --model-dir /w/h3-base --variant-dir /root/plug4 --transformer /w/h3-ref2va/transformer_ref --tables /root/plug4-ref.tables --weights mxfp8 --decoder-weights mxfp8 --pv8 --task ref2va --ref image:/workspace/h3-rs/assets/first.png
++ sp=67106
++ nvidia-smi --query-gpu=memory.used,clocks.sm,power.draw --format=csv,noheader,nounits -lms 500
++ rc=0
++ kill 67106
+++ cut -d, -f1 /root/out/plug-ref2va.mem
+++ sort -n
+++ tail -1
+++ awk -F, '$3>300{print $2}' /root/out/plug-ref2va.mem
+++ sort -n
+++ awk '{a[NR]=$1} END{print a[int(NR/2)+1]}'
++ echo 'peak VRAM MiB: 40097; median SM MHz under load: 2325; exit 0'
+peak VRAM MiB: 40097; median SM MHz under load: 2325; exit 0
++ grep -E '^cuda|^adapter|^load|prompt:|^run |rror|panick|warning|real|^mxfp8 n=' /root/out/plug-ref2va.log
++ cut -c1-300
+adapter: /root/plug4/generator_lora.safetensors
+cuda NVIDIA RTX PRO 6000 Blackwell Server Edition (sm_120)
+load 72.1s
+prompt: 7209 rows in 118.9s
+run 0: total 61.70s  prepare 0.11s  adaln 0.00s  denoise 44.29s (["11.55", "10.89", "10.91", "10.94"])  decode 5.76s  audio 0.19s
+real	4m20.536s
++ '[' -f /root/out/plug-ref2va.y4m ']'
+++ stats /root/out/plug-ref2va.y4m
+++ ffmpeg -v info -i /root/out/plug-ref2va.y4m -frames:v 2 -vf signalstats,metadata=print:key=lavfi.signalstats.YAVG -f null -
+++ grep -o 'YAVG=[0-9.]*'
+++ head -2
+++ tr '\n' ' '
++ echo 'luma: YAVG=110.724 YAVG=110.637 '
+luma: YAVG=110.724 YAVG=110.637 
++ grid /root/out/plug-ref2va.y4m /root/out/plug-ref2va.grid.png
++ ffmpeg -loglevel error -y -i /root/out/plug-ref2va.y4m -vf 'select='\''eq(n\,0)+eq(n\,40)+eq(n\,80)+eq(n\,120)'\'',scale=448:-1,tile=2x2' -vframes 1 /root/out/plug-ref2va.grid.png
++ ffmpeg -loglevel error -y -i /root/out/plug-ref2va.y4m -i /root/out/plug-ref2va.wav -c:v libx264 -crf 18 -pix_fmt yuv420p -c:a aac -b:a 192k -shortest /root/out/plug-ref2va.mp4
++ tar czf /root/cmd2.tgz -C /root/out '--exclude=*.y4m' '--exclude=*.wav' '--exclude=*.mp4' .
+++ date -u
++ echo 'cmd2 done Sat Nov 14 23:59:43 UTC 2026'
+cmd2 done Sat Nov 14 23:59:43 UTC 2026
+exit 0
+

@@ -1,0 +1,24 @@
++ psnr base25-both base25-ref
++ echo '== psnr base25-both vs base25-ref'
+== psnr base25-both vs base25-ref
++ ffmpeg -loglevel info -i /w/out/base25-both.y4m -i /w/out/base25-ref.y4m -lavfi psnr -f null -
++ grep -E PSNR
+[Parsed_psnr_0 @ 0x5ea9b3406200] PSNR y:15.572046 u:35.599185 v:35.511561 average:20.256925 min:17.448996 max:21.734260
++ psnr v2-allblocks v2-stall
++ echo '== psnr v2-allblocks vs v2-stall'
+== psnr v2-allblocks vs v2-stall
++ ffmpeg -loglevel info -i /w/out/v2-allblocks.y4m -i /w/out/v2-stall.y4m -lavfi psnr -f null -
++ grep -E PSNR
+[Parsed_psnr_0 @ 0x6204e3e26200] PSNR y:10.592919 u:24.241152 v:20.608050 average:14.784347 min:12.560697 max:16.225728
++ psnr v2-both v2-stall
++ echo '== psnr v2-both vs v2-stall'
+== psnr v2-both vs v2-stall
++ ffmpeg -loglevel info -i /w/out/v2-both.y4m -i /w/out/v2-stall.y4m -lavfi psnr -f null -
++ grep -E PSNR
+[Parsed_psnr_0 @ 0x5c26e9c7d200] PSNR y:12.599517 u:27.519926 v:28.906125 average:17.135677 min:16.001131 max:17.756592
++ psnr v2-qkvsplit v2-stall
++ echo '== psnr v2-qkvsplit vs v2-stall'
+== psnr v2-qkvsplit vs v2-stall
++ ffmpeg -loglevel info -i /w/out/v2-qkvsplit.y4m -i /w/out/v2-stall.y4m -lavfi psnr -f null -
++ grep -E PSNR
+[Parsed_psnr_0 @ 0x5d8033405200] PSNR y:16.104615 u:32.164821 v:34.001289 average:20.701306 min:19.714935 max:21.664616

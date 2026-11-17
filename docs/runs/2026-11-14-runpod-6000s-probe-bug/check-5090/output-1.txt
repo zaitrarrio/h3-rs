@@ -1,0 +1,93 @@
++ O=/root/out
++ mkdir -p /root/out
++ cd /root
++ nvidia-smi --query-gpu=name,driver_version,power.limit --format=csv,noheader
+NVIDIA GeForce RTX 5090, 595.91.07, 575.00 W
++ chmod +x /root/old
++ echo '== the previous binary (881e276) under H3_STALL=1 and H3_PROFILE=1: the new split-decided cases do not exist in it, so its own checker passes; the new binary'\''s cases are below'
+== the previous binary (881e276) under H3_STALL=1 and H3_PROFILE=1: the new split-decided cases do not exist in it, so its own checker passes; the new binary's cases are below
++ H3_STALL=1
++ timeout 1200 /root/old check --backend cuda
++ grep -E 'checks|FAIL' /root/out/old-stall.log
+all 168 checks pass (tolerance 3e-2)
++ echo '== the fixed binary with the split-decided cases: plain, H3_STALL=1, H3_PROFILE=1, H3_STREAM_STRESS=1'
+== the fixed binary with the split-decided cases: plain, H3_STALL=1, H3_PROFILE=1, H3_STREAM_STRESS=1
++ for m in plain H3_STALL=1 H3_PROFILE=1 H3_STREAM_STRESS=1
++ echo '-- plain'
+-- plain
+++ '[' plain = plain ']'
++ env timeout 1200 /w/h3-bin check --backend cuda
++ grep -E 'split-decided|second call|checks|FAIL|panick' /root/out/check-plain.log
+linear mxfp8 1024x64x16384 first call (split-decided) rel 3.20e-3  ok
+linear mxfp8 1024x64x16384 second call == first      rel 0.00e0  ok
+all 170 checks pass (tolerance 3e-2)
++ for m in plain H3_STALL=1 H3_PROFILE=1 H3_STREAM_STRESS=1
++ echo '-- H3_STALL=1'
+-- H3_STALL=1
+++ '[' H3_STALL=1 = plain ']'
+++ echo H3_STALL=1
++ env H3_STALL=1 timeout 1200 /w/h3-bin check --backend cuda
++ grep -E 'split-decided|second call|checks|FAIL|panick' /root/out/check-H3_STALL=1.log
+linear mxfp8 1024x64x16384 first call (split-decided) rel 3.20e-3  ok
+linear mxfp8 1024x64x16384 second call == first      rel 0.00e0  ok
+all 170 checks pass (tolerance 3e-2)
++ for m in plain H3_STALL=1 H3_PROFILE=1 H3_STREAM_STRESS=1
++ echo '-- H3_PROFILE=1'
+-- H3_PROFILE=1
+++ '[' H3_PROFILE=1 = plain ']'
+++ echo H3_PROFILE=1
++ env H3_PROFILE=1 timeout 1200 /w/h3-bin check --backend cuda
++ grep -E 'split-decided|second call|checks|FAIL|panick' /root/out/check-H3_PROFILE=1.log
+linear mxfp8 1024x64x16384 first call (split-decided) rel 3.20e-3  ok
+linear mxfp8 1024x64x16384 second call == first      rel 0.00e0  ok
+all 170 checks pass (tolerance 3e-2)
++ for m in plain H3_STALL=1 H3_PROFILE=1 H3_STREAM_STRESS=1
++ echo '-- H3_STREAM_STRESS=1'
+-- H3_STREAM_STRESS=1
+++ '[' H3_STREAM_STRESS=1 = plain ']'
+++ echo H3_STREAM_STRESS=1
++ env H3_STREAM_STRESS=1 timeout 1200 /w/h3-bin check --backend cuda
++ grep -E 'split-decided|second call|checks|FAIL|panick' /root/out/check-H3_STREAM_STRESS=1.log
+linear mxfp8 1024x64x16384 first call (split-decided) rel 3.20e-3  ok
+linear mxfp8 1024x64x16384 second call == first      rel 0.00e0  ok
+all 170 checks pass (tolerance 3e-2)
++ echo '== the new checker with the previous CUDA code (881e276): the split-decided cases under H3_STALL=1 / H3_PROFILE=1 should fail, plain should pass (the first call returns the split plan'\''s rounding, within tolerance)'
+== the new checker with the previous CUDA code (881e276): the split-decided cases under H3_STALL=1 / H3_PROFILE=1 should fail, plain should pass (the first call returns the split plan's rounding, within tolerance)
++ chmod +x /root/bug
++ for m in plain H3_STALL=1 H3_PROFILE=1
++ echo '-- bug plain'
+-- bug plain
+++ '[' plain = plain ']'
++ env timeout 1200 /root/bug check --backend cuda
++ grep -E 'split-decided|second call|checks|FAIL|panick' /root/out/bug-plain.log
+linear mxfp8 1024x64x16384 first call (split-decided) rel 3.20e-3  ok
+linear mxfp8 1024x64x16384 second call == first      rel 0.00e0  ok
+all 170 checks pass (tolerance 3e-2)
++ for m in plain H3_STALL=1 H3_PROFILE=1
++ echo '-- bug H3_STALL=1'
+-- bug H3_STALL=1
+++ '[' H3_STALL=1 = plain ']'
+++ echo H3_STALL=1
++ env H3_STALL=1 timeout 1200 /root/bug check --backend cuda
++ grep -E 'split-decided|second call|checks|FAIL|panick' /root/out/bug-H3_STALL=1.log
+linear mxfp8 1024x64x16384 first call (split-decided) rel 2.34e5  FAIL
+linear mxfp8 1024x64x16384 second call == first      rel 1.00e0  FAIL
+Error: 2 of 170 checks failed (tolerance 3e-2)
++ for m in plain H3_STALL=1 H3_PROFILE=1
++ echo '-- bug H3_PROFILE=1'
+-- bug H3_PROFILE=1
+++ '[' H3_PROFILE=1 = plain ']'
+++ echo H3_PROFILE=1
++ env H3_PROFILE=1 timeout 1200 /root/bug check --backend cuda
++ grep -E 'split-decided|second call|checks|FAIL|panick' /root/out/bug-H3_PROFILE=1.log
+linear mxfp8 1024x64x16384 first call (split-decided) rel 2.34e5  FAIL
+linear mxfp8 1024x64x16384 second call == first      rel 1.00e0  FAIL
+Error: 2 of 170 checks failed (tolerance 3e-2)
++ tar czf /root/cmd1.tgz -C /root/out .
+++ date -u
++ echo 'cmd1 done Sat Nov 14 19:11:00 UTC 2026'
+cmd1 done Sat Nov 14 19:11:00 UTC 2026
++ terminate
++ curl -sS -X DELETE -A h3-rs-pod/1 -H @/root/.rp-auth https://rest.runpod.io/v1/pods/szbg537jokftxf
+exit 0
+

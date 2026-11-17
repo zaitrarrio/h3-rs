@@ -1,0 +1,20 @@
++ timeout 1500 /w/h3-bin generate --backend cuda --seed 7 --width 1344 --height 768 --frames 124 --prompt 'A red fox trots through fresh snow at dawn in a quiet pine forest; snow crunches softly under its paws and a light wind moves through the branches.' --out /root/out/plug-fast-stall.y4m --variant h3-plug4 --model-dir /w/h3-base --variant-dir /root/plug4 --tables /root/plug4.tables --weights mxfp8 --decoder-weights mxfp8 --pv8
+adapter: /root/plug4/generator_lora.safetensors
+h2d probe (256 MB): pageable 27.4 GB/s pinned 57.9 GB/s
+cuda NVIDIA RTX PRO 6000 Blackwell Server Edition (sm_120)
+load 88.8s
+prompt: 33 rows in 85.1s
+mxfp8 n=21504 k=5376 rows=37743: whole 12.32 ms, ×2 12.39 ms → whole; plain fp8 (per-tensor scale) 11.47 ms
+mxfp8 n=28672 k=5376 rows=37743: whole 32.76 ms, ×2 15.44 ms → ×2; plain fp8 (per-tensor scale) 15.48 ms
+step 1/4 7.19s
+step 2/4 6.50s
+step 3/4 6.51s
+step 4/4 6.52s
+mxfp8 n=16384 k=2048 rows=1797: whole 0.20 ms, ×2 0.22 ms → whole; plain fp8 (per-tensor scale) 0.18 ms
+run 0: total 32.98s  prepare 0.03s  adaln 0.00s  denoise 26.73s (["7.19", "6.50", "6.51", "6.52"])  decode 5.95s  audio 0.19s
+wrote /root/out/plug-fast-stall.y4m (124 frames 1344x768) and /root/out/plug-fast-stall.wav
+mux: ffmpeg -i /root/out/plug-fast-stall.y4m -i /root/out/plug-fast-stall.wav -c:v libx264 -pix_fmt yuv420p -c:a aac /root/out/plug-fast-stall.mp4
+
+real	3m35.036s
+user	7m37.004s
+sys	2m2.755s

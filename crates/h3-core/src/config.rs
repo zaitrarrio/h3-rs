@@ -93,8 +93,8 @@ impl H3Config {
             layers: 42,
             adaln_rank: Some(16),
             kept_block_indices: Some(vec![
-                0, 1, 2, 3, 4, 5, 8, 10, 11, 12, 14, 17, 18, 19, 20, 21, 24, 25, 26, 27, 28, 29, 30, 31,
-                32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49,
+                0, 1, 2, 3, 4, 5, 8, 10, 11, 12, 14, 17, 18, 19, 20, 21, 24, 25, 26, 27, 28, 29,
+                30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49,
             ]),
             ..Self::h3()
         }
@@ -163,7 +163,11 @@ impl H3Config {
             .get("patch_size")
             .and_then(|p| p.as_array())
             .map(|p| {
-                let x: Vec<usize> = p.iter().filter_map(|a| a.as_u64()).map(|a| a as usize).collect();
+                let x: Vec<usize> = p
+                    .iter()
+                    .filter_map(|a| a.as_u64())
+                    .map(|a| a as usize)
+                    .collect();
                 (x[0], x[1], x[2])
             })
             .unwrap_or((1, 2, 2));
@@ -179,18 +183,31 @@ impl H3Config {
             patch,
             text_dim: g("text_dim")?,
             freq_dim: g("freq_dim").or_else(|_| g("timestep_input_dim"))?,
-            time_embed_hidden: g("time_embed_hidden_dim").or_else(|_| g("time_embed_hidden_size"))?,
+            time_embed_hidden: g("time_embed_hidden_dim")
+                .or_else(|_| g("time_embed_hidden_size"))?,
             time_embed_dim: g("time_embed_dim")?,
             rope_freq_dim: g("rope_freq_dim").or_else(|_| g("rope_inv_freq_len"))?,
             rope_theta: f("rope_theta", 10000.0),
             norm_eps: f("norm_eps", 1e-5) as f32,
             qk_norm_eps: f("qk_norm_eps", 1e-5) as f32,
             final_norm_eps: f("final_norm_eps", 1e-5) as f32,
-            adaln_rank: v.get("adaln_rank").and_then(|x| x.as_u64()).map(|x| x as usize),
-            pdd_steps: v.get("pdd_steps").and_then(|x| x.as_u64()).map(|x| x as usize),
-            kept_block_indices: v.get("kept_block_indices").and_then(|x| x.as_array()).map(|a| {
-                a.iter().filter_map(|x| x.as_u64()).map(|x| x as usize).collect()
-            }),
+            adaln_rank: v
+                .get("adaln_rank")
+                .and_then(|x| x.as_u64())
+                .map(|x| x as usize),
+            pdd_steps: v
+                .get("pdd_steps")
+                .and_then(|x| x.as_u64())
+                .map(|x| x as usize),
+            kept_block_indices: v
+                .get("kept_block_indices")
+                .and_then(|x| x.as_array())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|x| x.as_u64())
+                        .map(|x| x as usize)
+                        .collect()
+                }),
         };
         if c.rotary_dim() > c.head_dim || c.rotary_dim() % 2 != 0 {
             return Err(Error::Config(format!(
@@ -247,18 +264,56 @@ pub struct VideoVaeConfig {
 }
 
 pub const H3_LATENTS_MEAN: [f32; 24] = [
-    0.858090341091156, -0.9606591463088989, 1.0661640167236328, -0.5090325474739075, -0.2727581858634949,
-    -1.3675414323806763, -0.2553254961967468, -0.26907554268836975, -0.5376840829849243, -0.0464097298681736,
-    0.6657370328903198, 0.19690127670764923, -0.5460608005523682, -0.4035342037677765, -0.23683024942874908,
-    0.25928452610969543, -0.30133944749832153, 0.211341992020607, -1.1206848621368408, 0.3581933379173279,
-    -0.04225143790245056, 0.2604829967021942, 0.22864092886447906, 0.7056031823158264,
+    0.858090341091156,
+    -0.9606591463088989,
+    1.0661640167236328,
+    -0.5090325474739075,
+    -0.2727581858634949,
+    -1.3675414323806763,
+    -0.2553254961967468,
+    -0.26907554268836975,
+    -0.5376840829849243,
+    -0.0464097298681736,
+    0.6657370328903198,
+    0.19690127670764923,
+    -0.5460608005523682,
+    -0.4035342037677765,
+    -0.23683024942874908,
+    0.25928452610969543,
+    -0.30133944749832153,
+    0.211341992020607,
+    -1.1206848621368408,
+    0.3581933379173279,
+    -0.04225143790245056,
+    0.2604829967021942,
+    0.22864092886447906,
+    0.7056031823158264,
 ];
 pub const H3_LATENTS_STD: [f32; 24] = [
-    1.2223774194717407, 1.2767263650894165, 1.6831774711608887, 1.7549455165863037, 1.5636216402053833,
-    2.194143533706665, 0.9653137922286987, 1.0569885969161987, 0.841948926448822, 0.7729952931404114,
-    1.8955937623977661, 0.946841835975647, 0.7996809482574463, 0.44988900423049927, 0.7197399735450745,
-    0.6936293244361877, 2.961095094680786, 2.7694199085235596, 3.0496184825897217, 2.1088054180145264,
-    3.276226282119751, 3.1627357006073, 2.2816812992095947, 2.6127843856811523,
+    1.2223774194717407,
+    1.2767263650894165,
+    1.6831774711608887,
+    1.7549455165863037,
+    1.5636216402053833,
+    2.194143533706665,
+    0.9653137922286987,
+    1.0569885969161987,
+    0.841948926448822,
+    0.7729952931404114,
+    1.8955937623977661,
+    0.946841835975647,
+    0.7996809482574463,
+    0.44988900423049927,
+    0.7197399735450745,
+    0.6936293244361877,
+    2.961095094680786,
+    2.7694199085235596,
+    3.0496184825897217,
+    2.1088054180145264,
+    3.276226282119751,
+    3.1627357006073,
+    2.2816812992095947,
+    2.6127843856811523,
 ];
 /// ImageNet pixel statistics the VAE normalises with.
 pub const PIXEL_MEAN: [f32; 3] = [0.485, 0.456, 0.406];
@@ -327,34 +382,76 @@ impl VideoVaeConfig {
         let mut c = Self::h3();
         let g = |k: &str| v.get(k).and_then(|x| x.as_u64()).map(|x| x as usize);
         let arr = |k: &str| -> Option<Vec<usize>> {
-            v.get(k)
-                .and_then(|x| x.as_array())
-                .map(|a| a.iter().filter_map(|x| x.as_u64()).map(|x| x as usize).collect())
+            v.get(k).and_then(|x| x.as_array()).map(|a| {
+                a.iter()
+                    .filter_map(|x| x.as_u64())
+                    .map(|x| x as usize)
+                    .collect()
+            })
         };
         let farr = |k: &str| -> Option<Vec<f32>> {
-            v.get(k)
-                .and_then(|x| x.as_array())
-                .map(|a| a.iter().filter_map(|x| x.as_f64()).map(|x| x as f32).collect())
+            v.get(k).and_then(|x| x.as_array()).map(|a| {
+                a.iter()
+                    .filter_map(|x| x.as_f64())
+                    .map(|x| x as f32)
+                    .collect()
+            })
         };
-        if let Some(x) = g("latent_channels") { c.latent_channels = x; }
-        if let Some(x) = arr("block_out_channels") { c.block_out_channels = x; }
-        if let Some(x) = g("layers_per_block") { c.layers_per_block = x; }
-        if let Some(x) = arr("spatial_downsample_factors") { c.spatial_down = x; }
-        if let Some(x) = arr("temporal_downsample_factors") { c.temporal_down = x; }
-        if let Some(x) = g("norm_num_groups") { c.norm_groups = x; }
-        if let Some(x) = g("decoder_num_layers") { c.decoder_layers = x; }
-        if let Some(x) = g("decoder_num_attention_heads") { c.decoder_heads = x; }
-        if let Some(x) = g("decoder_attention_head_dim") { c.decoder_head_dim = x; }
-        if let Some(x) = g("decoder_num_register_tokens") { c.decoder_register_tokens = x; }
-        if let Some(x) = g("decoder_ffn_mult") { c.decoder_ffn_mult = x; }
-        if let Some(x) = g("clip_length") { c.clip_length = x; }
-        if let Some(x) = g("token_drop") { c.token_drop = x; }
-        if let Some(x) = v.get("decoder_rope_theta").and_then(|x| x.as_f64()) { c.decoder_rope_theta = x; }
-        if let Some(x) = v.get("decoder_rope_dim_ratio").and_then(|x| x.as_f64()) { c.decoder_rope_dim_ratio = x; }
-        if let Some(x) = farr("latents_mean") { c.latents_mean = x; }
-        if let Some(x) = farr("latents_std") { c.latents_std = x; }
+        if let Some(x) = g("latent_channels") {
+            c.latent_channels = x;
+        }
+        if let Some(x) = arr("block_out_channels") {
+            c.block_out_channels = x;
+        }
+        if let Some(x) = g("layers_per_block") {
+            c.layers_per_block = x;
+        }
+        if let Some(x) = arr("spatial_downsample_factors") {
+            c.spatial_down = x;
+        }
+        if let Some(x) = arr("temporal_downsample_factors") {
+            c.temporal_down = x;
+        }
+        if let Some(x) = g("norm_num_groups") {
+            c.norm_groups = x;
+        }
+        if let Some(x) = g("decoder_num_layers") {
+            c.decoder_layers = x;
+        }
+        if let Some(x) = g("decoder_num_attention_heads") {
+            c.decoder_heads = x;
+        }
+        if let Some(x) = g("decoder_attention_head_dim") {
+            c.decoder_head_dim = x;
+        }
+        if let Some(x) = g("decoder_num_register_tokens") {
+            c.decoder_register_tokens = x;
+        }
+        if let Some(x) = g("decoder_ffn_mult") {
+            c.decoder_ffn_mult = x;
+        }
+        if let Some(x) = g("clip_length") {
+            c.clip_length = x;
+        }
+        if let Some(x) = g("token_drop") {
+            c.token_drop = x;
+        }
+        if let Some(x) = v.get("decoder_rope_theta").and_then(|x| x.as_f64()) {
+            c.decoder_rope_theta = x;
+        }
+        if let Some(x) = v.get("decoder_rope_dim_ratio").and_then(|x| x.as_f64()) {
+            c.decoder_rope_dim_ratio = x;
+        }
+        if let Some(x) = farr("latents_mean") {
+            c.latents_mean = x;
+        }
+        if let Some(x) = farr("latents_std") {
+            c.latents_std = x;
+        }
         if c.latents_mean.len() != c.latent_channels || c.latents_std.len() != c.latent_channels {
-            return Err(Error::Config("vae latents_mean/std do not match latent_channels".into()));
+            return Err(Error::Config(
+                "vae latents_mean/std do not match latent_channels".into(),
+            ));
         }
         Ok(c)
     }
@@ -410,22 +507,72 @@ pub struct AudioVaeConfig {
 }
 
 pub const AUDIO_LATENTS_MEAN: [f32; 32] = [
-    -0.020211687488382354, 0.3876466479950502, -0.04398279799186767, -0.28591514936373, 0.08179686214561671,
-    -0.35782641352446604, 0.040623809960919084, -0.01552534501956604, -0.223362481667332, 0.1821006842509091,
-    0.2941778783780663, -0.07901167601970885, -0.056815072777201, -0.3699028221860095, -0.31616315591624855,
-    0.5905951377425391, -0.052139568068853864, 0.013673160263486295, -0.03691647864630577, 0.09732660653298163,
-    -0.3394662328788498, -0.30685677538541667, -0.24504598907458763, -0.034698524462007344, 0.02868032184767538,
-    -0.21217779266454084, -0.1678263169941987, 0.3221287889040614, -0.1223055851554907, 0.4356604928128464,
-    -0.0502599202236253, 0.3979258376211797,
+    -0.020211687488382354,
+    0.3876466479950502,
+    -0.04398279799186767,
+    -0.28591514936373,
+    0.08179686214561671,
+    -0.35782641352446604,
+    0.040623809960919084,
+    -0.01552534501956604,
+    -0.223362481667332,
+    0.1821006842509091,
+    0.2941778783780663,
+    -0.07901167601970885,
+    -0.056815072777201,
+    -0.3699028221860095,
+    -0.31616315591624855,
+    0.5905951377425391,
+    -0.052139568068853864,
+    0.013673160263486295,
+    -0.03691647864630577,
+    0.09732660653298163,
+    -0.3394662328788498,
+    -0.30685677538541667,
+    -0.24504598907458763,
+    -0.034698524462007344,
+    0.02868032184767538,
+    -0.21217779266454084,
+    -0.1678263169941987,
+    0.3221287889040614,
+    -0.1223055851554907,
+    0.4356604928128464,
+    -0.0502599202236253,
+    0.3979258376211797,
 ];
 pub const AUDIO_LATENTS_STD: [f32; 32] = [
-    1.6895524230479284, 2.76263727217653, 1.7945344281264435, 1.6801681847309828, 1.6390226546605453,
-    2.7788298348882177, 1.7659090095747236, 1.6199757612137327, 2.6336525640336896, 1.8539356672817833,
-    2.5056497896915633, 1.811019237886178, 1.9579657790720237, 1.6685498243529284, 1.4922469314453364,
-    3.298670198067373, 1.9491804496832168, 1.8720003270431442, 1.8334080103291832, 1.6488070416529093,
-    1.6176957696319716, 1.9131449234774398, 1.5695245398428617, 1.6943659940415912, 1.8318420762504692,
-    1.5540637421583379, 1.9344930328968526, 1.599198216109855, 1.718045989838149, 1.6307219190837705,
-    1.8661226051202384, 1.5613768203168363,
+    1.6895524230479284,
+    2.76263727217653,
+    1.7945344281264435,
+    1.6801681847309828,
+    1.6390226546605453,
+    2.7788298348882177,
+    1.7659090095747236,
+    1.6199757612137327,
+    2.6336525640336896,
+    1.8539356672817833,
+    2.5056497896915633,
+    1.811019237886178,
+    1.9579657790720237,
+    1.6685498243529284,
+    1.4922469314453364,
+    3.298670198067373,
+    1.9491804496832168,
+    1.8720003270431442,
+    1.8334080103291832,
+    1.6488070416529093,
+    1.6176957696319716,
+    1.9131449234774398,
+    1.5695245398428617,
+    1.6943659940415912,
+    1.8318420762504692,
+    1.5540637421583379,
+    1.9344930328968526,
+    1.599198216109855,
+    1.718045989838149,
+    1.6307219190837705,
+    1.8661226051202384,
+    1.5613768203168363,
 ];
 
 impl AudioVaeConfig {
@@ -451,7 +598,7 @@ impl AudioVaeConfig {
         Self {
             encoder_dim: 4,
             encoder_rates: vec![2, 5],
-            latent_dim: 16,
+            latent_dim: 24,
             latent_channels: 6,
             decoder_dim: 8,
             decoder_rates: vec![5, 2],
@@ -654,16 +801,16 @@ impl Qwen3VlConfig {
             vision_hidden: 16,
             vision_intermediate: 24,
             vision_heads: 2,
-            vision_patch: 4,
+            vision_patch: 16,
             vision_merge: 2,
             vision_temporal_patch: 2,
             vision_out_hidden: 32,
             vision_num_position_embeddings: 16,
-            vision_deepstack: vec![0],
-            image_token_id: 60,
-            video_token_id: 61,
-            vision_start_id: 58,
-            vision_end_id: 59,
+            vision_deepstack: vec![0, 1],
+            image_token_id: 62,
+            video_token_id: 63,
+            vision_start_id: 60,
+            vision_end_id: 61,
             text_len: 64,
         }
     }
@@ -704,8 +851,14 @@ mod tests {
         assert_eq!(d.in_channels, VideoVaeConfig::tiny().latent_channels);
         assert_eq!(d.in_channels, TaeH3Config::tiny().latent_channels);
         assert_eq!(d.audio_in_channels, AudioVaeConfig::tiny().latent_channels);
-        assert_eq!(H3Config::h3().in_channels, VideoVaeConfig::h3().latent_channels);
-        assert_eq!(H3Config::h3().audio_in_channels, AudioVaeConfig::h3().latent_channels);
+        assert_eq!(
+            H3Config::h3().in_channels,
+            VideoVaeConfig::h3().latent_channels
+        );
+        assert_eq!(
+            H3Config::h3().audio_in_channels,
+            AudioVaeConfig::h3().latent_channels
+        );
     }
 
     #[test]

@@ -1,0 +1,68 @@
+v1 adapters: --adapter /w/FastH3-4-step-Preview-v1-LoRA/dense-datafree/adapter_model.safetensors --adapter /w/FastH3-4-step-Preview-v1-LoRA/vsa-datafree/adapter_model.safetensors
+/w/FastH3-4-step-Preview-v1-LoRA/:
+total 24
+drwxr-xr-x 4 root root  178 Nov 13 04:03 .
+drwxr-xr-x 6 root root  116 Nov 13 04:03 ..
+-rw-r--r-- 1 root root   30 Nov 13 04:03 .complete
+-rw-r--r-- 1 root root 7949 Nov 13 04:03 .fv-manifest.json
+-rw-r--r-- 1 root root   40 Nov 13 04:03 .fv-revision
+-rw-r--r-- 1 root root    3 Nov 13 04:03 .fv-source
+drwxr-xr-x 2 root root   47 Nov 13 04:03 dense-datafree
+-rw-r--r-- 1 root root  212 Nov 13 04:03 sha256.txt
+drwxr-xr-x 2 root root   47 Nov 13 04:03 vsa-datafree
+/w/FastH3-4-step-Preview-v1-LoRA/dense-datafree:
+total 1450808
+drwxr-xr-x 2 root root         47 Nov 13 04:03 .
+drwxr-xr-x 4 root root        178 Nov 13 04:03 ..
+-rw-r--r-- 1 root root 1485626152 Nov 13 04:03 adapter_model.safetensors
+/w/FastH3-4-step-Preview-v1-LoRA/vsa-datafree:
+total 5213984
+drwxr-xr-x 2 root root         47 Nov 13 04:03 .
+drwxr-xr-x 4 root root        178 Nov 13 04:03 ..
+-rw-r--r-- 1 root root 5339117712 Nov 13 04:03 adapter_model.safetensors
+v1 VSA adapters: --adapter /w/FastH3-4-step-Preview-v1-LoRA/vsa-datafree/adapter_model.safetensors
+== V1 AdaLN tables (VSA adapter only)
+real	2m35.420s
+user	3m44.476s
+sys	1m9.780s
+== v1-vsa: --variant fasth3-v1 --model-dir /w/h3-base --adapter /w/FastH3-4-step-Preview-v1-LoRA/vsa-datafree/adapter_model.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --stream-blocks --tables /workspace/h3-rs/tables/v1-vsa.tables --frames 124
+peak VRAM MiB: 17068; exit 0
+cuda NVIDIA GeForce RTX 5090 (sm_120)
+load 86.4s
+prompt: 462 rows in 76.5s
+run 0: total 64.52s  prepare 0.22s  adaln 0.00s  denoise 57.86s (["14.68", "14.40", "14.41", "14.36"])  decode 6.19s  audio 0.18s
+real	3m53.877s
+== base 25-step AdaLN tables
+real	2m7.558s
+user	1m6.390s
+sys	1m1.110s
+== base25: --variant h3 --steps 25 --model-dir /w/h3-base --weights mxfp8 --decoder-weights mxfp8 --attention dense --stream-blocks --tables /workspace/h3-rs/tables/base25.tables --frames 124
+peak VRAM MiB: 15084; exit 0
+cuda NVIDIA GeForce RTX 5090 (sm_120)
+load 58.8s
+prompt: 462 rows in 66.4s
+run 0: total 537.28s  prepare 0.02s  adaln 0.00s  denoise 530.80s (["21.25", "21.40", "21.39", "21.42", "21.51", "21.42", "21.56", "21.46", "21.24", "21.18", "20.68", "20.70", "21.18", "21.65", "21.43", "21.35", "21.35", "21.33", "21.27", "20.95", "21.04", "21.03", "20.99", "21.03", "20.99"])  decode 6.21s  audio 0.18s
+real	11m8.726s
+== trim: --variant fasth3-trim --model-dir /w/h3-base --transformer /w/fasth3-trim-8step-nvfp4/diffusion_models/fastvideo_fasth3_trim_8step_nvfp4.safetensors --vsa-qk8 --frames 124
+peak VRAM MiB: 26922; exit 0
+cuda NVIDIA GeForce RTX 5090 (sm_120)
+load 85.0s
+prompt: 462 rows in 55.2s
+run 0: total 79.45s  prepare 0.22s  adaln 3.03s  denoise 63.61s (["7.90", "7.93", "7.94", "7.95", "7.96", "7.96", "7.98", "7.98"])  decode 12.35s  audio 0.18s
+real	3m45.146s
+== v2-15s: --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --tables /workspace/h3-rs/tables/v2.tables --frames 124 --stream-blocks --frames 362 --ffn-chunk 16384
+peak VRAM MiB: ; exit 2
+error: the argument '--frames <FRAMES>' cannot be used multiple times
+real	0m0.003s
+total 2070570
+drwxrwxrwx 2 root root   3000196 Nov 13 04:28 .
+drwxrwxrwx 5 root root   3000215 Nov 12 02:20 ..
+-rw-rw-rw- 1 root root 960136844 Nov 12 01:47 base.tables
+-rw-rw-rw- 1 root root 494618052 Nov 13 04:28 base25.tables
+-rw-rw-rw- 1 root root 164875540 Nov 12 18:07 omni.tables
+-rw-rw-rw- 1 root root 126082292 Nov 12 01:40 pika.tables
+-rw-rw-rw- 1 root root  96987336 Nov 13 04:22 v1-vsa.tables
+-rw-rw-rw- 1 root root  96987336 Nov 13 04:16 v1.tables
+-rw-rw-rw- 1 root root 174573856 Nov 12 17:58 v2.tables
+690G	/workspace
+5090 round done; terminating pod nmvicb3scqaun8

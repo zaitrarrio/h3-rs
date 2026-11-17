@@ -1,0 +1,25 @@
++ O=/root/out
++ mkdir -p /root/out
++ ls -la /w/fasth3-trim-8step-nvfp4
+lrwxrwxrwx 1 root root 42 Nov 12 19:40 /w/fasth3-trim-8step-nvfp4 -> /workspace/weights/fasth3-trim-8step-nvfp4
+++ head -1
+++ ls '/w/fasth3-trim-8step-nvfp4/*.safetensors'
+ls: cannot access '/w/fasth3-trim-8step-nvfp4/*.safetensors': No such file or directory
++ F=
++ echo 'trim file: '
+trim file: 
++ echo '== Trim NVFP4 clip from the ComfyUI single file'
+== Trim NVFP4 clip from the ComfyUI single file
++ grep -E '^run |^load|prompt:|rror|panick|layout' /root/out/trim.log
+error: a value is required for '--transformer <TRANSFORMER>' but none was supplied
++ grid /root/out/trim.y4m /root/out/trim-grid.png
++ ffmpeg -loglevel error -y -i /root/out/trim.y4m -vf 'select='\''eq(n\,0)+eq(n\,40)+eq(n\,80)+eq(n\,120)'\'',scale=448:-1,tile=2x2' -vframes 1 /root/out/trim-grid.png
+[in#0 @ 0x557a853cb380] Error opening input: No such file or directory
+Error opening input file /root/out/trim.y4m.
+Error opening input files: No such file or directory
++ curl -s -X PUT --upload-file /root/out/trim.log 'https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/runpod-20261112-1632/results/trim.log?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261112%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261112T193755Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=1f913342bdcbfd5014e4def8d66296e87cf5fe913c4ccb42afa68f4eb3e9c2d0'
++ curl -s -X PUT --upload-file /root/out/trim-grid.png 'https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/runpod-20261112-1632/results/trim-grid.png?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261112%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261112T193755Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=42f699a4ae428cb15cf3faa42f622301a684d42d91fa1a4977b6b11d8e42e225'
+curl: Can't open '/root/out/trim-grid.png'
+curl: try 'curl --help' or 'curl --manual' for more information
+exit 26
+

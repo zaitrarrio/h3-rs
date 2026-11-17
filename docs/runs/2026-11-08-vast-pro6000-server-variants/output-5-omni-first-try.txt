@@ -1,0 +1,44 @@
+66G	/w/omni
+{
+  "attention_backend": "VIDEO_SPARSE_ATTN_H3",
+  "audio_scheduler_shift": 3.0,
+  "base_model_revision": "hf://MiniMaxAI/MiniMax-H3@9bfb6693f2cf6de171db46d1aa586f67d773a1da",
+  "conditioning": "fixed_ordered_references_target_only_flow",
+  "grid_max_t": 0.999,
+  "guidance_scale": 1.0,
+  "model_type": "ref2va",
+  "num_inference_steps": 8,
+  "pdd_step_indices": [
+    0,
+    4,
+    8,
+    12,
+    16,
+    20,
+    24,
+    28,
+    32
+  ],
+  "pdd_steps": 32,
+  "schema": "fasth3-inference-contract-v1",
+  "schema_version": "fasth3-inference-contract-v1",
+  "transformer_component": "transformer_ref",
+ + echo
+
+== Omni AdaLN tables (PDD ladder)
+contract: /w/omni/fastvideo_inference.json
+17 timesteps [0.0009999871, 0.01275295, 0.027999997, 0.04640907, 0.048571408, 0.07784617, 0.100899994, 0.12282926, 0.16750002, 0.2008, 0.25075, 0.3577857, 0.36905265, 0.50049996, 0.7003, 0.999, 1.0] → /w/omni.tables (164.9 MB) in 182.2s
+
+real	3m9.785s
+user	1m24.006s
+sys	1m9.796s
+== Omni Ref2VA, 124 frames, one image reference, VSA 0.9 tile 128
+load 79.2s
+thread 'main' (21925) panicked at crates/h3-cuda/src/lib.rs:862:9:
+[in#0 @ 0x5afcfbf6d380] Error opening input: No such file or directory
+Error opening input file /w/omni.y4m.
+Error opening input files: No such file or directory
+curl: Can't open '/w/omni-grid.png'
+curl: try 'curl --help' or 'curl --manual' for more information
+exit 26
+

@@ -1,0 +1,16 @@
++ timeout 1500 /w/h3-bin generate --backend cuda --seed 7 --width 1344 --height 768 --frames 124 --prompt 'A red fox trots through fresh snow at dawn in a quiet pine forest; snow crunches softly under its paws and a light wind moves through the branches.' --out /root/out/plug-bf16b.y4m --variant h3-plug4 --model-dir /w/h3-base --variant-dir /workspace/h3-rs/plug4 --tables /workspace/h3-rs/plug4/plug4.tables
+adapter: /workspace/h3-rs/plug4/generator_lora.safetensors
+cuda NVIDIA RTX PRO 6000 Blackwell Server Edition (sm_120)
+load 116.1s
+prompt: 33 rows in 80.5s
+step 1/4 10.65s
+step 2/4 10.71s
+step 3/4 10.75s
+step 4/4 10.78s
+run 0: total 51.59s  prepare 0.03s  adaln 0.00s  denoise 42.88s (["10.65", "10.71", "10.75", "10.78"])  decode 8.40s  audio 0.19s
+wrote /root/out/plug-bf16b.y4m (124 frames 1344x768) and /root/out/plug-bf16b.wav
+mux: ffmpeg -i /root/out/plug-bf16b.y4m -i /root/out/plug-bf16b.wav -c:v libx264 -pix_fmt yuv420p -c:a aac /root/out/plug-bf16b.mp4
+
+real	4m16.246s
+user	5m28.019s
+sys	1m55.645s

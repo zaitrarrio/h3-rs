@@ -12,12 +12,53 @@ is a `--variant`:
 | `--variant` | checkpoint | forwards | attention |
 |---|---|---|---|
 | `h3` | `MiniMaxAI/MiniMax-H3` (T2VA, FL2VA, Ref2VA) | 49 | dense |
+| `h3-plug4` | the base plus `Efficient-Large-Model/LongLive-Plug-MiniMax-H3-few-step` (LoRA; T2VA, FL2VA and Ref2VA by transfer) | 4 | dense |
 | `fasth3-v1` | `FastVideo/FastVideo-FastH3-4-step-Preview-v1-VSA-DataFree` | 4 | VSA 0.9 |
 | `fasth3-v2` | `FastVideo/FastVideo-FastH3-8-Step-V2` | 8 | VSA 0.8 |
-| `fasth3-trim` | `FastVideo/FastVideo-FastH3-Trim-8-Step-NVFP4` (42 blocks, NVFP4) | 8 | VSA 0.8 |
+| `fasth3-trim` | `FastVideo/FastVideo-FastH3-Trim-8-Step` (42 blocks; bf16 HF tree or the ComfyUI single-file NVFP4) | 8 | VSA 0.8 |
 | `fasth3-omni` | `FastVideo/FastVideo-FastH3-Omni-8-Step-V1` (Ref2VA, PDD) | 8 | VSA 0.9, tile 128 |
 | `pika-flex` | `Pika-Labs/Pika-H3-Flex` (FL2VA / Ref2VA LoRA, 480p / 768p) | 6 | dense |
 | `regen-2k` | `Efficient-Large-Model/Open-H3-Regenerate-2K` (`h3 regen2k`) | 3 | dense / VSA |
+
+Run with the released weights on an RTX PRO 6000 Server Edition
+(`docs/runs/2026-11-08-vast-pro6000-server-variants`): `h3` T2VA / FL2VA /
+Ref2VA, `fasth3-omni` Ref2VA, and `fasth3-v2` / `fasth3-trim` (earlier
+records). `pika-flex` FL2VA / Ref2VA and `regen-2k` ran on RunPod's Server Edition
+after two fixes (renoise noise rows, the Regen decoder choice;
+`docs/runs/2026-11-12-runpod-pro6000-variants`). Every variant of the
+table has produced a coherent clip from the released weights. The RunPod
+volume now holds every variant's weights (V2, Omni and the Trim NVFP4 file
+added 2026-11-12, plus a stored MXFP8 V2 and the AdaLN tables), and the
+fastest recipe reproduces from it: V2 denoise 37.9 s, decode 5.8 s,
+44.3 s after load on a Server Edition (36.6 / 5.7 / 42.9 s with FP8 P·V,
+`docs/runs/2026-11-14-runpod-6000s-probe-bug`); Omni Ref2VA 8 × 14.2 s and Trim
+NVFP4 8 × 5.5 s there (`docs/runs/2026-11-12-runpod-pro6000-v2-omni-trim`).
+
+On a 32 GB RTX 5090 (RunPod, 600 W) against ComfyUI's H3 template as the
+[h3-speedups page](https://plox-1.github.io/h3-speedups/) times it on the
+same card class, prompt, canvas and seed
+(`docs/runs/2026-11-13-runpod-5090-vs-comfy`; weights streamed, the
+resident recipe needs more than 32 GB):
+
+| 1344×768, seed 1 | ComfyUI total / sampler | h3-rs denoise + decode / denoise |
+|---|---|---|
+| FastH3-V2, 8 steps, 124 frames | 54.1 s / 45.2 s | **48.9 s / 42.6 s** (`--pv8`; 45.5 / 39.2 s with every block MXFP8) |
+| FastH3 v1, 4 steps, 124 frames | 33.3 s / 23.9 s | 30.1 s / 24.0 s |
+| FastH3-V2, 362 frames (15 s) | 213.6 s / 185.6 s | 208.9 s / 190.8 s |
+| raw H3, 25 euler steps, dense | 181.7 s / 169.0 s | **199.4 s / 193.0 s** (`--qk8 --pv8`; 189.9 / 183.5 s with every block MXFP8; 328 s bf16 attention) |
+| raw H3, 25 steps, block-sparse keep 10 %, 5 dense first steps | 131.4 s / 122.7 s | **130.9 s / 123.9 s** (`--attention vsa --vsa-sparsity 0.9 --dense-first-steps 5 --pv8`) |
+| raw H3, 25 steps, block-sparse keep 10 %, 3 dense first steps | 118.0 s / 109.6 s | 124.0 s / 116.8 s |
+
+Both rows run INT8 Q·Kᵀ + FP8 P·V attention (`--qk8 --pv8`,
+SageAttention2's recipe) against ComfyUI's Kitchen int8, with the
+blocks streamed from page-locked host memory and the MXFP8 GEMMs
+row-split where the card prefers it; the V2 recipe is ahead of
+ComfyUI's row on both of the page's numbers, the dense base 1.13×
+behind on the step (the attention call is 82 ms, what ComfyUI's step
+implies; the rest is the GEMM side and the recipe's five bf16 edge
+blocks). Measured on a 600 W RTX 5090 of the faster kind, clips byte
+for byte the released binary's (`docs/runs/2026-11-13-vast-5090-streaming-gemm`);
+the slower pod kind is ~8 % behind on everything.
 
 The MLX recipes of the cookbook use the same checkpoints; on Apple GPUs the
 WebGPU backend runs them through Metal.
@@ -32,20 +73,62 @@ Measured on a vast.ai **RTX A6000** (48 GB, 300 W, driver 570.195.03),
 1344×768×124 (5.2 s), VSA 0.8, int8 weights, precomputed AdaLN tables
 (`docs/runs/2026-11-06-vast-a6000-first-gpu`):
 
-| | FastH3-8-Step-V2 | FastH3-Trim-8-Step |
-|---|---|---|
-| denoise, 8 forwards | 201 s (25.1 s / forward) | 162 s (20.3 s / forward) |
-| decode | 44 s | 36 s |
-| prompt (Qwen3-VL, streamed from disk) | 290 s cold / 159 s warm | |
-| load with int8 quantization at load | 280 s | 241 s |
+| | FastH3-V2, A6000, int8 | FastH3-V2, **RTX PRO 6000 Max-Q**, bf16 | FastH3-Trim NVFP4 (ComfyUI file), PRO 6000 | FastH3 4-step V1, PRO 6000, int8 |
+|---|---|---|---|---|
+| denoise | 201 s (25.1 s / forward) | 79.5 s (9.6–10.1 s / forward) | 67.8 s (8.2–8.6 s) | 35.0 s (4 forwards) |
+| decode | 44 s | **11.9 s** (was 20.5) | 17.4 s | 20.4 s |
+| audio decode | | **0.24 s** (was 0.46) | 0.46 s | 0.46 s |
+| peak device memory | | 56.2 GB | 24.4 GB | 37.0 GB |
 
-Per block at that geometry: 470 ms VSA / 815 ms dense; GEMMs at 121 TFLOP/s,
-the VSA fine stage is a third of the time and the next kernel to optimize.
-No PyTorch parity number yet (`scripts/reference/make_fixtures.py` needs a
-machine with torch); the clips themselves match their prompts
-(`docs/runs/2026-11-06-vast-a6000-first-gpu/*.png`). The ComfyUI single-file
-NVFP4 Trim checkpoint is not loadable yet (different layout from the
-FastVideo HF one).
+(`docs/runs/2026-11-07-vast-pro6000-clips`, decode and audio from
+`…-pro6000-decode`; the Max-Q is the 300 W card and runs the denoise
+power-capped at ~1.4 GHz, not its 3.09 GHz boost.)
+
+On the **RTX PRO 6000 Server Edition (600 W)**, fastvideo-rs's gold GPU
+(`docs/runs/2026-11-07-vast-pro6000-server-mxfp8`), the same V2 clip:
+
+| | h3-rs bf16 | h3-rs stored `mxfp8` + `--decoder-weights mxfp8` | + `--vsa-qk8` | + `--pv8` (2026-11-14, RunPod's Server Edition) | fastvideo-rs (MXFP8) |
+|---|---|---|---|---|---|
+| denoise | 50.0 s | **38.9 s** | **37.2 s** | **36.6 s** (37.1 s streamed) | 45.8 s |
+| video decode | 8.2 s | **5.6 s** (51 dB against the bf16 decode) | 5.8 s | 5.7 s | 4.7 s MXFP8 / 6.3 s bf16 |
+| total after load | 58.7 s | **45.0 s** | **43.6 s** | **42.9 s** | |
+| load | 76 s | **37 s** (25.6 GB checkpoint) | 84 s (quantized at load) | 31 s (stored, staged) | |
+| peak device memory | 56.2 GB | **37.9 GB** | | 39.6 GB (18.7 GB streamed) | 61.0 GiB |
+
+`--vsa-qk8` runs the VSA fine stage's Q·Kᵀ in INT8 (SageAttention's
+recipe; `docs/runs/2026-11-08-vast-pro6000-server-variants`): the fine
+stage goes 35.4 → 30.6 ms per call including its helpers, the clip keeps
+the scene (17.5 dB against bf16 attention, the same band as MXFP8 against
+bf16 weights). `--pv8` adds FP8 P·V (SageAttention2's second half: E4M3
+V and P, the row maximum rounded up to an integer so the CPU oracle
+reproduces the kernel's rounding): on an RTX 5090 the fine stage goes
+34.2 → 27.6 ms per call and the V2 denoise 51.5 → 49.2 s, the dense base
+attention call 112–120 → 82 ms and its step 9.5–10.4 → 7.8–8.7 s, at the
+same ~22 dB band against the INT8-only clips
+(`docs/runs/2026-11-13-runpod-5090-fp8-pv`). Unmeasured on the Server
+Edition.
+
+`--weights mxfp8` runs blocks 2–46 as W8A8 on the FP8 tensor cores
+(cuBLASLt `VEC32_UE8M0`, sm_100+; emulated in bf16 elsewhere); the clip
+keeps the scene (17 dB PSNR against bf16, as int8's 18.5 dB: the DMD
+sampler turns weight rounding into texture). `h3 quantize --weights mxfp8
+--skip-adaln` stores it once (65 GiB → 25.6 GB in 117 s, loads in 104 s
+instead of 202 s). `--decoder-weights mxfp8` does the same for the video
+decoder's block linears and is visually the bf16 decode
+(`docs/runs/2026-11-08-vast-pro6000-ws-mxfp8-stored`,
+`…-server-best`).
+
+Per block at that geometry: 470 ms VSA / 815 ms dense on the A6000, 230 /
+354 ms on the L40S. The VSA phases on the L40S after the kernel work in
+`docs/runs/2026-11-07-vast-l40s-vsa-phases`: fine stage 66.5 ms (was 87),
+coarse + top-k 3.6 ms (was 6.4), pool 2.8 ms; the fine stage is still
+~2.7× its tensor-core floor and the record says what to try next.
+Parity with PyTorch at the tiny scale: the fixtures from
+`scripts/reference/make_fixtures.py` (FastVideo b4faeae, transformers 5.23.0,
+2026-11-14) hold the DiT, both VAEs and the Qwen3-VL conditioner within 2e-3
+of the reference (`cargo test -p h3-model --test parity`, `-p h3-text --test
+parity`); the clips themselves match their prompts
+(`docs/runs/2026-11-06-vast-a6000-first-gpu/*.png`).
 
 ## Use
 
@@ -84,9 +167,15 @@ h3 quantize --variant fasth3-v2 --model-dir h3 --variant-dir fasth3-v2 \
     --weights int4-hqq-g64 --skip-adaln --out fasth3-v2-int4.safetensors
 ```
 
+ComfyUI single-file checkpoints (`fastvideo_fasth3_trim_8step_nvfp4.safetensors`
+and the like) are read directly: `--transformer <file>`; their NVFP4 linears
+are dequantized to bf16 on the device at load.
+
 `--weights int8 | int4[-hqq][-gN][-ffn] | nvfp4` quantizes at load as well;
 `--stream-blocks` keeps the block weights in host memory and uploads them per
-step; `h3 plan` tells what fits.
+step; `h3 plan` tells what fits. On a 24 GB RTX 4090 (450 W) FastH3-V2 at
+1344×768×124 streams in 19.1 GB: denoise 107 s, 125.7 s with decode, with
+bf16 weights and `--vsa-qk8 --pv8` (`docs/runs/2026-11-14-vast-4090-24gb`).
 
 ### One clip
 
@@ -101,10 +190,56 @@ ffmpeg -i fox.y4m -i fox.wav -c:v libx264 -pix_fmt yuv420p -c:a aac fox.mp4
 Keyframes: `--first-image a.png --last-image b.png` (FL2VA; `--variant pika-flex`
 for Pika). References: `--task ref2va --ref image:a.png --ref video:clip.y4m,audio=clip.wav
 --ref audio:song.wav` in presentation order; `--continue tail.y4m` for a
-continuation clip. Omni: `--variant fasth3-omni`. The prompt is encoded by
+continuation clip. Omni: `--variant fasth3-omni`. LongLive-Plug's
+four-step adapter ships as a torch pickle; convert it once and point
+`--variant-dir` at its download:
+
+```bash
+huggingface-cli download Efficient-Large-Model/LongLive-Plug-MiniMax-H3-few-step --local-dir plug4
+python scripts/reference/convert_longlive_plug.py plug4      # writes plug4/generator_lora.safetensors
+h3 generate --variant h3-plug4 --model-dir h3 --variant-dir plug4 --prompt "…" --out clip.y4m
+```
+
+On the 600 W Server Edition with `--weights mxfp8 --decoder-weights mxfp8
+--pv8` it makes a photographic 1344×768×124 clip in 34.7 s after load
+(denoise 28.4 s), the fastest clip h3-rs makes on that card (FastH3-V2's
+best: 43.3 s), and FL2VA / Ref2VA work through the same adapter. Its LoRA
+runs as an unmerged branch: merged, its delta (2·10⁻⁴ of the weights)
+rounds away in bf16 and MXFP8 and the clips change
+(`docs/runs/2026-11-15-runpod-6000s-longlive-plug`).
+
+The prompt is encoded by
 the native Qwen3-VL port on the chosen backend, streaming its layers from the
 mmapped checkpoint; `h3 encode` stores text-only prompts in a gallery so
 `--embeds` and `serve --gallery` need no text encoder at all.
+
+### Draft tier
+
+A fast LongLive-Plug draft (4 forwards), then a 2K refinement of the one you keep:
+
+```bash
+h3 adaln-tables --variant draft --variant-dir plug4 --model-dir h3 --out draft.tables
+h3 generate --variant draft --variant-dir plug4 --model-dir h3 --tables draft.tables \
+    --tier 480p --weights mxfp8 --decoder-weights mxfp8 --pv8 --preview --tae taeh3.safetensors \
+    --prompt "..." --out draft.y4m
+h3 regen2k --regen-dir regen --model-dir h3 --draft draft.y4m --prompt "..." \
+    --adaln-table adaln_t_table.bin --out final-2k.y4m
+```
+
+`--tier 272p` (480×272, rendered at 480×288 and centre-cropped), `480p`
+(832×480) or `768p` (1344×768) works for every variant, at any `--aspect`.
+`--upscale realesr-animevideov3.safetensors` (Real-ESRGAN ×4, fastwan-rs's
+network, `https://weights.fastwan.dev/v1/realesr-animevideov3.safetensors`)
+upscales the finished frames at any size, `--upscale-factor 2 | 3` resampling
+the ×4 output; `h3 regen2k` takes a draft of any aspect (a 9:16 draft becomes
+1440×2560). On a
+600 W RTX PRO 6000 Server Edition a 480p draft takes 8.6 s after load and
+Regen-2K 446 s; the 2K clip keeps the draft's composition
+(`docs/runs/2026-11-17-vast-pro6000-turbo-cfg-draft`). A 272p draft takes
+4.0 s and its ×4 upscale to 1920×1088 1.7 s, but 272p is below H3's
+trained tiers and can ghost; a Ref2VA draft (`--task ref2va --ref
+image:a.png`, tables from `h3 adaln-tables --task ref2va`) takes 19.4 s of
+denoise at 480p (`docs/runs/2026-11-17-vast-pro6000-ref2va-upscale`).
 
 ### Regenerate at 2K
 
@@ -115,6 +250,10 @@ huggingface-cli download Efficient-Large-Model/Open-H3-Regenerate-2K --local-dir
 h3 regen2k --regen-dir regen --model-dir h3 --draft fox.y4m --prompt "..." \
     --adaln-table adaln_t_table.bin --out fox-2k.y4m
 ```
+
+The 2K latents are decoded by the base model's VAE, as in FastVideo's
+pipeline; the release's `vae_fast/` Sol decoder (windowed attention) is not
+used.
 
 ### Prompt-to-clip demo
 
@@ -129,6 +268,13 @@ length, seed; the steps and the decode land as they finish, frames play as
 they arrive and the soundtrack plays with them. `--synthetic` runs a tiny
 random model for trying the page without weights. The engine listens on
 127.0.0.1 and answers CORS for one `--allow-origin` only.
+
+`--upscale realesr-animevideov3.safetensors` adds an "Upscale after
+decoding" box: the clip plays at its own size as soon as it decodes, then
+Real-ESRGAN runs on the engine and the page switches to the upscaled frames
+(×4 for 480×272 → 1920×1088, ×3 for 480p → 2496×1440, ×2 above; a button
+flips back to the original size). The size menu also offers 480×272 and
+272×480, rendered at 480×288 / 288×480 and centre-cropped.
 
 ## Layout
 

@@ -1,0 +1,285 @@
++ O=/root/out
++ mkdir -p /root/out
++ cd /root
++ FOX='A red fox trots through fresh snow at dawn in a quiet pine forest; snow crunches softly under its paws and a light wind moves through the branches.'
++ A=/workspace/h3-rs/assets
++ PLUG='--variant h3-plug4 --model-dir /w/h3-base --variant-dir /workspace/h3-rs/plug4'
++ FAST='--weights mxfp8 --decoder-weights mxfp8 --pv8'
++ T='--tables /workspace/h3-rs/plug4/plug4.tables'
++ cat
++ echo '== 5. the samurai (seed 1), fast recipe with the branch'
+== 5. the samurai (seed 1), fast recipe with the branch
+++ cat /root/samurai.txt
++ run plug-samurai-branch 1500 'integrated_multimodal_description: [Shot 1] Live-action, cinematic, a medium-wide shot frames an elderly Japanese samurai standing in the open stone courtyard of a temple in light, steady rain, facing the camera squarely under grey overcast daylight, framed from the knees up. He is around seventy, with a deeply lined, weathered face, a thin white beard and mustache, and a full head of thick, long, loose grey-white hair falling from the crown of his head past his shoulders, damp strands lifting and swaying in the wind; he wears a dark indigo kimono over grey hakama, with a katana and a shorter sword tucked through the sash at his left hip. Fine rain streaks fall through the whole frame and small droplets splash on the wet flagstones, while the dark wooden pillars and pale paper shoji screens of the temple hall stand behind him. Keeping his eyes on the lens, he raises both forearms and crosses them firmly at the wrists in an X in front of his chest, open hands flat with fingers together, the wide wet sleeves sliding back along his forearms, as the elderly samurai with a low, gravelly, unhurried voice (S1) says: <d>[English] No.</d> The camera pans right with small amplitude at slow speed while he holds the crossed arms, the pillars drifting across the background behind the falling rain. He lowers his arms to his sides, and the camera pushes in with large amplitude toward his face, ending on a tight close-up in which the wrinkles around his eyes, the individual white beard hairs, wet strands of long hair clinging to his cheek, and raindrops running down his skin are sharply visible, as he (S1) continues, lips moving clearly: <d>[English] A blade drawn in anger cuts its owner first.</d> He holds a steady gaze into the lens as the rain keeps falling.
+
+overall_soundscape: Light, steady rain patters on the stone courtyard and the temple roof tiles, with water trickling from the eaves and a low wind passing through. Heavy damp fabric rustles as the sleeves slide back and the forearms cross, and small droplets splash on the flagstones.
+
+non_diegetic_music: N/A' 1 --variant h3-plug4 --model-dir /w/h3-base --variant-dir /workspace/h3-rs/plug4 --tables /workspace/h3-rs/plug4/plug4.tables --weights mxfp8 --decoder-weights mxfp8 --pv8
++ n=plug-samurai-branch
++ t=1500
++ p='integrated_multimodal_description: [Shot 1] Live-action, cinematic, a medium-wide shot frames an elderly Japanese samurai standing in the open stone courtyard of a temple in light, steady rain, facing the camera squarely under grey overcast daylight, framed from the knees up. He is around seventy, with a deeply lined, weathered face, a thin white beard and mustache, and a full head of thick, long, loose grey-white hair falling from the crown of his head past his shoulders, damp strands lifting and swaying in the wind; he wears a dark indigo kimono over grey hakama, with a katana and a shorter sword tucked through the sash at his left hip. Fine rain streaks fall through the whole frame and small droplets splash on the wet flagstones, while the dark wooden pillars and pale paper shoji screens of the temple hall stand behind him. Keeping his eyes on the lens, he raises both forearms and crosses them firmly at the wrists in an X in front of his chest, open hands flat with fingers together, the wide wet sleeves sliding back along his forearms, as the elderly samurai with a low, gravelly, unhurried voice (S1) says: <d>[English] No.</d> The camera pans right with small amplitude at slow speed while he holds the crossed arms, the pillars drifting across the background behind the falling rain. He lowers his arms to his sides, and the camera pushes in with large amplitude toward his face, ending on a tight close-up in which the wrinkles around his eyes, the individual white beard hairs, wet strands of long hair clinging to his cheek, and raindrops running down his skin are sharply visible, as he (S1) continues, lips moving clearly: <d>[English] A blade drawn in anger cuts its owner first.</d> He holds a steady gaze into the lens as the rain keeps falling.
+
+overall_soundscape: Light, steady rain patters on the stone courtyard and the temple roof tiles, with water trickling from the eaves and a low wind passing through. Heavy damp fabric rustles as the sleeves slide back and the forearms cross, and small droplets splash on the flagstones.
+
+non_diegetic_music: N/A'
++ sd=1
++ shift 4
++ echo '== plug-samurai-branch: seed 1 --variant h3-plug4 --model-dir /w/h3-base --variant-dir /workspace/h3-rs/plug4 --tables /workspace/h3-rs/plug4/plug4.tables --weights mxfp8 --decoder-weights mxfp8 --pv8'
+== plug-samurai-branch: seed 1 --variant h3-plug4 --model-dir /w/h3-base --variant-dir /workspace/h3-rs/plug4 --tables /workspace/h3-rs/plug4/plug4.tables --weights mxfp8 --decoder-weights mxfp8 --pv8
++ sp=26562
++ nvidia-smi --query-gpu=memory.used,clocks.sm,power.draw --format=csv,noheader,nounits -lms 500
++ rc=0
++ kill 26562
+++ cut -d, -f1 /root/out/plug-samurai-branch.mem
+++ sort -n
+++ tail -1
+++ awk -F, '$3>300{print $2}' /root/out/plug-samurai-branch.mem
+++ sort -n
+++ awk '{a[NR]=$1} END{print a[int(NR/2)+1]}'
++ echo 'peak VRAM MiB: 37727; median SM MHz under load: 2332; exit 0'
+peak VRAM MiB: 37727; median SM MHz under load: 2332; exit 0
++ grep -E '^cuda|^adapter|^load|prompt:|^run |rror|panick|warning|real|^mxfp8 n=' /root/out/plug-samurai-branch.log
++ cut -c1-300
+adapter: /workspace/h3-rs/plug4/generator_lora.safetensors
+cuda NVIDIA RTX PRO 6000 Blackwell Server Edition (sm_120)
+load 102.1s
+prompt: 462 rows in 78.4s
+run 0: total 35.30s  prepare 0.05s  adaln 0.00s  denoise 28.98s (["7.57", "7.12", "7.14", "7.14"])  decode 6.00s  audio 0.19s
+real	3m43.837s
++ '[' -f /root/out/plug-samurai-branch.y4m ']'
+++ stats /root/out/plug-samurai-branch.y4m
+++ ffmpeg -v info -i /root/out/plug-samurai-branch.y4m -frames:v 2 -vf signalstats,metadata=print:key=lavfi.signalstats.YAVG -f null -
+++ grep -o 'YAVG=[0-9.]*'
+++ head -2
+++ tr '\n' ' '
++ echo 'luma: YAVG=66.1692 YAVG=66.6031 '
+luma: YAVG=66.1692 YAVG=66.6031 
++ grid /root/out/plug-samurai-branch.y4m /root/out/plug-samurai-branch.grid.png
++ ffmpeg -loglevel error -y -i /root/out/plug-samurai-branch.y4m -vf 'select='\''eq(n\,0)+eq(n\,40)+eq(n\,80)+eq(n\,120)'\'',scale=448:-1,tile=2x2' -vframes 1 /root/out/plug-samurai-branch.grid.png
++ ffmpeg -loglevel error -y -i /root/out/plug-samurai-branch.y4m -i /root/out/plug-samurai-branch.wav -c:v libx264 -crf 18 -pix_fmt yuv420p -c:a aac -b:a 192k -shortest /root/out/plug-samurai-branch.mp4
++ echo '== 6. FL2VA (transfer), fast recipe with the branch'
+== 6. FL2VA (transfer), fast recipe with the branch
++ run plug-fl2va-branch 1500 'A red fox trots through fresh snow at dawn in a quiet pine forest; snow crunches softly under its paws and a light wind moves through the branches.' 7 --variant h3-plug4 --model-dir /w/h3-base --variant-dir /workspace/h3-rs/plug4 --tables /workspace/h3-rs/plug4/plug4.tables --weights mxfp8 --decoder-weights mxfp8 --pv8 --task fl2va --first-image /workspace/h3-rs/assets/first.png --last-image /workspace/h3-rs/assets/last.png
++ n=plug-fl2va-branch
++ t=1500
++ p='A red fox trots through fresh snow at dawn in a quiet pine forest; snow crunches softly under its paws and a light wind moves through the branches.'
++ sd=7
++ shift 4
++ echo '== plug-fl2va-branch: seed 7 --variant h3-plug4 --model-dir /w/h3-base --variant-dir /workspace/h3-rs/plug4 --tables /workspace/h3-rs/plug4/plug4.tables --weights mxfp8 --decoder-weights mxfp8 --pv8 --task fl2va --first-image /workspace/h3-rs/assets/first.png --last-image /workspace/h3-rs/assets/last.png'
+== plug-fl2va-branch: seed 7 --variant h3-plug4 --model-dir /w/h3-base --variant-dir /workspace/h3-rs/plug4 --tables /workspace/h3-rs/plug4/plug4.tables --weights mxfp8 --decoder-weights mxfp8 --pv8 --task fl2va --first-image /workspace/h3-rs/assets/first.png --last-image /workspace/h3-rs/assets/last.png
++ sp=26938
++ nvidia-smi --query-gpu=memory.used,clocks.sm,power.draw --format=csv,noheader,nounits -lms 500
++ rc=0
++ kill 26938
+++ cut -d, -f1 /root/out/plug-fl2va-branch.mem
+++ sort -n
+++ tail -1
+++ sort -n
+++ awk -F, '$3>300{print $2}' /root/out/plug-fl2va-branch.mem
+++ awk '{a[NR]=$1} END{print a[int(NR/2)+1]}'
++ echo 'peak VRAM MiB: 39969; median SM MHz under load: 2325; exit 0'
+peak VRAM MiB: 39969; median SM MHz under load: 2325; exit 0
++ grep -E '^cuda|^adapter|^load|prompt:|^run |rror|panick|warning|real|^mxfp8 n=' /root/out/plug-fl2va-branch.log
++ cut -c1-300
+adapter: /workspace/h3-rs/plug4/generator_lora.safetensors
+cuda NVIDIA RTX PRO 6000 Blackwell Server Edition (sm_120)
+load 92.8s
+prompt: 2065 rows in 74.4s
+run 0: total 42.31s  prepare 0.05s  adaln 0.00s  denoise 33.24s (["8.67", "8.18", "8.19", "8.20"])  decode 5.73s  audio 0.19s
+real	3m37.777s
++ '[' -f /root/out/plug-fl2va-branch.y4m ']'
+++ stats /root/out/plug-fl2va-branch.y4m
+++ ffmpeg -v info -i /root/out/plug-fl2va-branch.y4m -frames:v 2 -vf signalstats,metadata=print:key=lavfi.signalstats.YAVG -f null -
+++ grep -o 'YAVG=[0-9.]*'
+++ head -2
+++ tr '\n' ' '
++ echo 'luma: YAVG=102.369 YAVG=103.378 '
+luma: YAVG=102.369 YAVG=103.378 
++ grid /root/out/plug-fl2va-branch.y4m /root/out/plug-fl2va-branch.grid.png
++ ffmpeg -loglevel error -y -i /root/out/plug-fl2va-branch.y4m -vf 'select='\''eq(n\,0)+eq(n\,40)+eq(n\,80)+eq(n\,120)'\'',scale=448:-1,tile=2x2' -vframes 1 /root/out/plug-fl2va-branch.grid.png
++ ffmpeg -loglevel error -y -i /root/out/plug-fl2va-branch.y4m -i /root/out/plug-fl2va-branch.wav -c:v libx264 -crf 18 -pix_fmt yuv420p -c:a aac -b:a 192k -shortest /root/out/plug-fl2va-branch.mp4
++ echo '== 7. the branch'\''s cost: H3_PROFILE=1 on the fast recipe'
+== 7. the branch's cost: H3_PROFILE=1 on the fast recipe
++ H3_PROFILE=1
++ run plug-fast-prof 1500 'A red fox trots through fresh snow at dawn in a quiet pine forest; snow crunches softly under its paws and a light wind moves through the branches.' 7 --variant h3-plug4 --model-dir /w/h3-base --variant-dir /workspace/h3-rs/plug4 --tables /workspace/h3-rs/plug4/plug4.tables --weights mxfp8 --decoder-weights mxfp8 --pv8
++ n=plug-fast-prof
++ t=1500
++ p='A red fox trots through fresh snow at dawn in a quiet pine forest; snow crunches softly under its paws and a light wind moves through the branches.'
++ sd=7
++ shift 4
++ echo '== plug-fast-prof: seed 7 --variant h3-plug4 --model-dir /w/h3-base --variant-dir /workspace/h3-rs/plug4 --tables /workspace/h3-rs/plug4/plug4.tables --weights mxfp8 --decoder-weights mxfp8 --pv8'
+== plug-fast-prof: seed 7 --variant h3-plug4 --model-dir /w/h3-base --variant-dir /workspace/h3-rs/plug4 --tables /workspace/h3-rs/plug4/plug4.tables --weights mxfp8 --decoder-weights mxfp8 --pv8
++ sp=27311
++ nvidia-smi --query-gpu=memory.used,clocks.sm,power.draw --format=csv,noheader,nounits -lms 500
++ rc=0
++ kill 27311
+++ cut -d, -f1 /root/out/plug-fast-prof.mem
+++ sort -n
+++ tail -1
+++ awk -F, '$3>300{print $2}' /root/out/plug-fast-prof.mem
+++ sort -n
+++ awk '{a[NR]=$1} END{print a[int(NR/2)+1]}'
++ echo 'peak VRAM MiB: 37631; median SM MHz under load: 2325; exit 0'
+peak VRAM MiB: 37631; median SM MHz under load: 2325; exit 0
++ grep -E '^cuda|^adapter|^load|prompt:|^run |rror|panick|warning|real|^mxfp8 n=' /root/out/plug-fast-prof.log
++ cut -c1-300
+adapter: /workspace/h3-rs/plug4/generator_lora.safetensors
+cuda NVIDIA RTX PRO 6000 Blackwell Server Edition (sm_120)
+load 92.9s
+prompt: 33 rows in 74.0s
+mxfp8 n=21504 k=5376 rows=37743: whole 12.33 ms, ×2 12.40 ms → whole; plain fp8 (per-tensor scale) 11.65 ms
+mxfp8 n=28672 k=5376 rows=37743: whole 32.87 ms, ×2 15.42 ms → ×2; plain fp8 (per-tensor scale) 15.48 ms
+mxfp8 n=16384 k=2048 rows=1797: whole 0.20 ms, ×2 0.22 ms → whole; plain fp8 (per-tensor scale) 0.18 ms
+run 0: total 36.68s  prepare 0.03s  adaln 0.00s  denoise 28.86s (["7.74", "7.05", "7.06", "7.01"])  decode 7.49s  audio 0.21s
+real	3m31.670s
++ '[' -f /root/out/plug-fast-prof.y4m ']'
+++ stats /root/out/plug-fast-prof.y4m
+++ ffmpeg -v info -i /root/out/plug-fast-prof.y4m -frames:v 2 -vf signalstats,metadata=print:key=lavfi.signalstats.YAVG -f null -
+++ grep -o 'YAVG=[0-9.]*'
+++ head -2
+++ tr '\n' ' '
++ echo 'luma: YAVG=89.7399 YAVG=90.5419 '
+luma: YAVG=89.7399 YAVG=90.5419 
++ grid /root/out/plug-fast-prof.y4m /root/out/plug-fast-prof.grid.png
++ ffmpeg -loglevel error -y -i /root/out/plug-fast-prof.y4m -vf 'select='\''eq(n\,0)+eq(n\,40)+eq(n\,80)+eq(n\,120)'\'',scale=448:-1,tile=2x2' -vframes 1 /root/out/plug-fast-prof.grid.png
++ ffmpeg -loglevel error -y -i /root/out/plug-fast-prof.y4m -i /root/out/plug-fast-prof.wav -c:v libx264 -crf 18 -pix_fmt yuv420p -c:a aac -b:a 192k -shortest /root/out/plug-fast-prof.mp4
++ vs plug-fast-prof plug-fast-branch
+++ ffmpeg -loglevel info -i /root/out/plug-fast-prof.mp4 -i /root/out/plug-fast-branch.mp4 -lavfi psnr -f null -
+++ grep -oE 'PSNR.*'
+++ cmp -s /root/out/plug-fast-prof.mp4 /root/out/plug-fast-branch.mp4
+++ echo ' (mp4 byte-identical)'
++ echo '== plug-fast-prof vs plug-fast-branch (mp4): PSNR y:inf u:inf v:inf average:inf min:inf max:inf (mp4 byte-identical)'
+== plug-fast-prof vs plug-fast-branch (mp4): PSNR y:inf u:inf v:inf average:inf min:inf max:inf (mp4 byte-identical)
++ grep -A30 'profile: denoise' /root/out/plug-fast-prof.log
++ head -34
+== profile: denoise
+profile (CUDA, synced per op): 27913.6 ms in ops; GEMMs 11002.2 ms at 554.6 TFLOP/s
+  attention (int8 qk + fp8 pv, d128)         14237.8 ms  51.0%     200 calls    71.189 ms/call
+  gemm mxfp8 n=28672 k=5376 (×2)              2961.3 ms  10.6%     179 calls    16.544 ms/call
+  gemm mxfp8 n=21504 k=5376                   2269.2 ms   8.1%     180 calls    12.607 ms/call
+  gemm mxfp8 n=5376 k=14336                   1506.1 ms   5.4%     180 calls     8.367 ms/call
+  gemm mxfp8 n=5376 k=7168                     751.2 ms   2.7%     180 calls     4.174 ms/call
+  gemm+acc n=28672 k=128                       750.4 ms   2.7%     200 calls     3.752 ms/call
+  gemm+acc n=21504 k=384                       604.4 ms   2.2%     200 calls     3.022 ms/call
+  gemm n=28672 k=5376                          573.0 ms   2.1%      20 calls    28.648 ms/call
+  head_split (qk-norm + rope)                  457.9 ms   1.6%     600 calls     0.763 ms/call
+  swiglu                                       457.2 ms   1.6%     200 calls     2.286 ms/call
+  mx quant (activations)                       445.7 ms   1.6%     720 calls     0.619 ms/call
+  gemm n=21504 k=5376                          430.4 ms   1.5%      20 calls    21.521 ms/call
+  rms_norm (+residual, modulation)             402.8 ms   1.4%     404 calls     0.997 ms/call
+  gemm n=5376 k=14336                          290.0 ms   1.0%      20 calls    14.499 ms/call
+  gemm+acc n=5376 k=128                        274.7 ms   1.0%     400 calls     0.687 ms/call
+  gate_residual                                241.4 ms   0.9%     200 calls     1.207 ms/call
+  attention int8 q/k quant                     216.2 ms   0.8%     400 calls     0.540 ms/call
+  attention fp8 v quant                        207.3 ms   0.7%     200 calls     1.036 ms/call
+  vsa k mean                                   166.7 ms   0.6%     400 calls     0.417 ms/call
+  gemm n=128 k=14336                           155.4 ms   0.6%     200 calls     0.777 ms/call
+  gemm n=5376 k=7168                           144.1 ms   0.5%      20 calls     7.207 ms/call
+  gemm n=384 k=5376                             99.0 ms   0.4%     200 calls     0.495 ms/call
+  gemm n=128 k=7168                             88.3 ms   0.3%     200 calls     0.442 ms/call
+  attention fp8 v max                           72.4 ms   0.3%     200 calls     0.362 ms/call
+  gemm n=128 k=5376                             68.4 ms   0.2%     200 calls     0.342 ms/call
+  gemm mxfp8 n=28672 k=5376                     33.0 ms   0.1%       1 calls    32.963 ms/call
+  vsa k mean (fold)                              5.9 ms   0.0%     400 calls     0.015 ms/call
+  gemm+bias n=96 k=5376                          1.4 ms   0.0%       4 calls     0.349 ms/call
+  gemm+bias n=5376 k=96                          1.4 ms   0.0%       4 calls     0.345 ms/call
++ echo '== 8. Pika Flex FL2VA (its rank-128 LoRA), bf16: branch against the old merge'
+== 8. Pika Flex FL2VA (its rank-128 LoRA), bf16: branch against the old merge
++ PK='--variant pika-flex --model-dir /w/h3-base --variant-dir /workspace/weights/pika-h3-flex --tables /workspace/h3-rs/tables/pika.tables --task fl2va --first-image /workspace/h3-rs/assets/first.png --last-image /workspace/h3-rs/assets/last.png'
++ run pika-branch 1500 'A red fox trots through fresh snow at dawn in a quiet pine forest; snow crunches softly under its paws and a light wind moves through the branches.' 7 --variant pika-flex --model-dir /w/h3-base --variant-dir /workspace/weights/pika-h3-flex --tables /workspace/h3-rs/tables/pika.tables --task fl2va --first-image /workspace/h3-rs/assets/first.png --last-image /workspace/h3-rs/assets/last.png
++ n=pika-branch
++ t=1500
++ p='A red fox trots through fresh snow at dawn in a quiet pine forest; snow crunches softly under its paws and a light wind moves through the branches.'
++ sd=7
++ shift 4
++ echo '== pika-branch: seed 7 --variant pika-flex --model-dir /w/h3-base --variant-dir /workspace/weights/pika-h3-flex --tables /workspace/h3-rs/tables/pika.tables --task fl2va --first-image /workspace/h3-rs/assets/first.png --last-image /workspace/h3-rs/assets/last.png'
+== pika-branch: seed 7 --variant pika-flex --model-dir /w/h3-base --variant-dir /workspace/weights/pika-h3-flex --tables /workspace/h3-rs/tables/pika.tables --task fl2va --first-image /workspace/h3-rs/assets/first.png --last-image /workspace/h3-rs/assets/last.png
++ sp=27762
++ nvidia-smi --query-gpu=memory.used,clocks.sm,power.draw --format=csv,noheader,nounits -lms 500
++ rc=0
++ kill 27762
+++ cut -d, -f1 /root/out/pika-branch.mem
+++ sort -n
+++ tail -1
+++ awk -F, '$3>300{print $2}' /root/out/pika-branch.mem
+++ sort -n
+++ awk '{a[NR]=$1} END{print a[int(NR/2)+1]}'
++ echo 'peak VRAM MiB: 54783; median SM MHz under load: 2280; exit 0'
+peak VRAM MiB: 54783; median SM MHz under load: 2280; exit 0
++ grep -E '^cuda|^adapter|^load|prompt:|^run |rror|panick|warning|real|^mxfp8 n=' /root/out/pika-branch.log
++ cut -c1-300
+adapter: /workspace/weights/pika-h3-flex/fl2va/adapter.safetensors
+cuda NVIDIA RTX PRO 6000 Blackwell Server Edition (sm_120)
+load 104.6s
+prompt: 2065 rows in 84.9s
+run 0: total 93.31s  prepare 0.05s  adaln 0.00s  denoise 81.44s (["14.85", "13.26", "13.29", "13.33", "13.35", "13.36"])  decode 8.51s  audio 0.19s
+real	4m50.895s
++ '[' -f /root/out/pika-branch.y4m ']'
+++ stats /root/out/pika-branch.y4m
+++ ffmpeg -v info -i /root/out/pika-branch.y4m -frames:v 2 -vf signalstats,metadata=print:key=lavfi.signalstats.YAVG -f null -
+++ grep -o 'YAVG=[0-9.]*'
+++ head -2
+++ tr '\n' ' '
++ echo 'luma: YAVG=102.356 YAVG=102.904 '
+luma: YAVG=102.356 YAVG=102.904 
++ grid /root/out/pika-branch.y4m /root/out/pika-branch.grid.png
++ ffmpeg -loglevel error -y -i /root/out/pika-branch.y4m -vf 'select='\''eq(n\,0)+eq(n\,40)+eq(n\,80)+eq(n\,120)'\'',scale=448:-1,tile=2x2' -vframes 1 /root/out/pika-branch.grid.png
++ ffmpeg -loglevel error -y -i /root/out/pika-branch.y4m -i /root/out/pika-branch.wav -c:v libx264 -crf 18 -pix_fmt yuv420p -c:a aac -b:a 192k -shortest /root/out/pika-branch.mp4
++ H3_LORA_MERGE=1
++ run pika-merge 1500 'A red fox trots through fresh snow at dawn in a quiet pine forest; snow crunches softly under its paws and a light wind moves through the branches.' 7 --variant pika-flex --model-dir /w/h3-base --variant-dir /workspace/weights/pika-h3-flex --tables /workspace/h3-rs/tables/pika.tables --task fl2va --first-image /workspace/h3-rs/assets/first.png --last-image /workspace/h3-rs/assets/last.png
++ n=pika-merge
++ t=1500
++ p='A red fox trots through fresh snow at dawn in a quiet pine forest; snow crunches softly under its paws and a light wind moves through the branches.'
++ sd=7
++ shift 4
++ echo '== pika-merge: seed 7 --variant pika-flex --model-dir /w/h3-base --variant-dir /workspace/weights/pika-h3-flex --tables /workspace/h3-rs/tables/pika.tables --task fl2va --first-image /workspace/h3-rs/assets/first.png --last-image /workspace/h3-rs/assets/last.png'
+== pika-merge: seed 7 --variant pika-flex --model-dir /w/h3-base --variant-dir /workspace/weights/pika-h3-flex --tables /workspace/h3-rs/tables/pika.tables --task fl2va --first-image /workspace/h3-rs/assets/first.png --last-image /workspace/h3-rs/assets/last.png
++ sp=28147
++ nvidia-smi --query-gpu=memory.used,clocks.sm,power.draw --format=csv,noheader,nounits -lms 500
++ rc=0
++ kill 28147
+++ cut -d, -f1 /root/out/pika-merge.mem
+++ sort -n
+++ tail -1
+++ awk -F, '$3>300{print $2}' /root/out/pika-merge.mem
+++ sort -n
+++ awk '{a[NR]=$1} END{print a[int(NR/2)+1]}'
++ echo 'peak VRAM MiB: 52863; median SM MHz under load: 2272; exit 0'
+peak VRAM MiB: 52863; median SM MHz under load: 2272; exit 0
++ grep -E '^cuda|^adapter|^load|prompt:|^run |rror|panick|warning|real|^mxfp8 n=' /root/out/pika-merge.log
++ cut -c1-300
+adapter: /workspace/weights/pika-h3-flex/fl2va/adapter.safetensors
+cuda NVIDIA RTX PRO 6000 Blackwell Server Edition (sm_120)
+load 115.8s
+prompt: 2065 rows in 82.7s
+run 0: total 88.40s  prepare 0.04s  adaln 0.00s  denoise 76.52s (["12.69", "12.69", "12.75", "12.78", "12.80", "12.81"])  decode 8.53s  audio 0.19s
+real	4m55.771s
++ '[' -f /root/out/pika-merge.y4m ']'
+++ stats /root/out/pika-merge.y4m
+++ ffmpeg -v info -i /root/out/pika-merge.y4m -frames:v 2 -vf signalstats,metadata=print:key=lavfi.signalstats.YAVG -f null -
+++ grep -o 'YAVG=[0-9.]*'
+++ head -2
+++ tr '\n' ' '
++ echo 'luma: YAVG=102.446 YAVG=103.007 '
+luma: YAVG=102.446 YAVG=103.007 
++ grid /root/out/pika-merge.y4m /root/out/pika-merge.grid.png
++ ffmpeg -loglevel error -y -i /root/out/pika-merge.y4m -vf 'select='\''eq(n\,0)+eq(n\,40)+eq(n\,80)+eq(n\,120)'\'',scale=448:-1,tile=2x2' -vframes 1 /root/out/pika-merge.grid.png
++ ffmpeg -loglevel error -y -i /root/out/pika-merge.y4m -i /root/out/pika-merge.wav -c:v libx264 -crf 18 -pix_fmt yuv420p -c:a aac -b:a 192k -shortest /root/out/pika-merge.mp4
++ vs pika-branch pika-merge
+++ ffmpeg -loglevel info -i /root/out/pika-branch.mp4 -i /root/out/pika-merge.mp4 -lavfi psnr -f null -
+++ grep -oE 'PSNR.*'
+++ cmp -s /root/out/pika-branch.mp4 /root/out/pika-merge.mp4
++ echo '== pika-branch vs pika-merge (mp4): PSNR y:28.579252 u:45.462747 v:46.675493 average:30.301257 min:26.041954 max:41.281746'
+== pika-branch vs pika-merge (mp4): PSNR y:28.579252 u:45.462747 v:46.675493 average:30.301257 min:26.041954 max:41.281746
++ tar czf /root/cmd2.tgz -C /root/out '--exclude=*.y4m' '--exclude=*.wav' '--exclude=*.mp4' .
+++ cd /root/out
+++ grep -v '^r1-'
+++ ls pika-branch.mp4 pika-merge.mp4 plug-bf16-branch.mp4 plug-bf16-merge.mp4 plug-fast-branch.mp4 plug-fast-prof.mp4 plug-fl2va-branch.mp4 plug-mx-branch.mp4 plug-samurai-branch.mp4 r1-plug-bf16.mp4 r1-plug-fast.mp4
++ tar czf /root/mp4.tgz -C /root/out pika-branch.mp4 pika-merge.mp4 plug-bf16-branch.mp4 plug-bf16-merge.mp4 plug-fast-branch.mp4 plug-fast-prof.mp4 plug-fl2va-branch.mp4 plug-mx-branch.mp4 plug-samurai-branch.mp4
+++ date -u
++ echo 'cmd2 done Sun Nov 15 01:30:13 UTC 2026'
+cmd2 done Sun Nov 15 01:30:13 UTC 2026
++ echo 'terminating pod'
+terminating pod
++ terminate
+

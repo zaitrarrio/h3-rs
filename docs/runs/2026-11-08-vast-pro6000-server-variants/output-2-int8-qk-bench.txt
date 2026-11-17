@@ -1,0 +1,37 @@
+-rwxr-xr-x 1 root root 20158936 Nov  9 00:56 /w/h3-bin2
+== check (INT8 QK path + emulation)
+vsa tile64 d32 qk8 gate                              rel 1.29e-2  ok
+vsa tile64 d32 qk8 no-gate                           rel 1.69e-2  ok
+vsa tile128 d64 qk8 gate                             rel 7.21e-3  ok
+vsa tile128 d64 qk8 no-gate                          rel 1.18e-2  ok
+vsa tile64 d128 qk8 gate                             rel 9.86e-3  ok
+vsa tile64 d128 qk8 no-gate                          rel 1.19e-2  ok
+dit tiny Vsa { sparsity: 0.5, tile: 64, ref_sparsity: 0.5, qk8: false } native rel 5.15e-3  ok
+dit tiny Vsa { sparsity: 0.5, tile: 64, ref_sparsity: 0.5, qk8: false } int8 rel 4.66e-3  ok
+dit tiny Vsa { sparsity: 0.5, tile: 64, ref_sparsity: 0.5, qk8: false } int4-hqq-g32 rel 5.60e-3  ok
+all 115 checks pass (tolerance 3e-2)
+== bench mxfp8 bf16 attention (reference)
+forward 0: 5.019s (100.4 ms/block; ×50/50 blocks ≈ 5.02s)
+forward 1: 4.792s (95.8 ms/block; ×50/50 blocks ≈ 4.79s)
+  vsa fine (3d, d128)                         3543.4 ms  36.9%     100 calls    35.434 ms/call
+  vsa coarse + top-k (4 query tiles)           208.9 ms   2.2%     100 calls     2.089 ms/call
+  vsa pool                                     119.0 ms   1.2%     100 calls     1.190 ms/call
+== bench mxfp8 --vsa-qk8 (fine3e, 3 blocks/SM)
+forward 0: 4.868s (97.4 ms/block; ×50/50 blocks ≈ 4.87s)
+forward 1: 4.612s (92.2 ms/block; ×50/50 blocks ≈ 4.61s)
+  vsa fine (3e int8 qk, d128)                 2915.8 ms  31.5%     100 calls    29.158 ms/call
+  vsa coarse + top-k (4 query tiles)           209.1 ms   2.3%     100 calls     2.091 ms/call
+  vsa k mean                                   200.4 ms   2.2%     100 calls     2.004 ms/call
+  vsa int8 q/k quant                           126.8 ms   1.4%     100 calls     1.268 ms/call
+  vsa pool                                     119.3 ms   1.3%     100 calls     1.193 ms/call
+== bench mxfp8 --vsa-qk8 fine3f (4 blocks/SM)
+forward 0: 5.082s (101.6 ms/block; ×50/50 blocks ≈ 5.08s)
+forward 1: 4.839s (96.8 ms/block; ×50/50 blocks ≈ 4.84s)
+  vsa fine (3f int8 qk, d128)                 3454.1 ms  35.6%     100 calls    34.541 ms/call
+  vsa coarse + top-k (4 query tiles)           208.6 ms   2.1%     100 calls     2.086 ms/call
+  vsa k mean                                   199.9 ms   2.1%     100 calls     1.999 ms/call
+  vsa int8 q/k quant                           126.7 ms   1.3%     100 calls     1.267 ms/call
+  vsa pool                                     119.3 ms   1.2%     100 calls     1.193 ms/call
+== unprofiled: bf16 attention vs qk8
+exit 1
+

@@ -8,18 +8,31 @@
 
 use crate::{
     Error, Result,
-    config::{AudioVaeConfig, H3Config, Qwen3VlConfig, TaeH3Config, UpscalerConfig, VideoVaeConfig},
+    config::{
+        AudioVaeConfig, H3Config, Qwen3VlConfig, TaeH3Config, UpscalerConfig, VideoVaeConfig,
+    },
     quant::{Nvfp4, Q4, Q8, Stored},
     rng::Rng,
 };
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+/// ComfyUI's single-file H3 checkpoints carry `adaln_t_table [grid, rank]`
+/// instead of a time embedder (see [`ComfySource`]).
+pub const ADALN_TABLE_KEY: &str = "adaln_t_table";
+
 pub trait WeightSource {
     /// The tensor as f32, checked against `shape` (size-1 dims are ignored,
     /// so a Conv3d `[o, i, 1, 1, 1]` may be asked for as `[o, i]`).
     fn get(&self, name: &str, shape: &[usize]) -> Result<Vec<f32>>;
     fn contains(&self, name: &str) -> bool;
+    /// The stored shape of a tensor whose shape the model does not know in
+    /// advance (`adaln_t_table`).
+    fn shape(&self, name: &str) -> Result<Vec<usize>> {
+        Err(Error::Weights(format!(
+            "`{name}`: this source cannot report shapes"
+        )))
+    }
     /// The linear `key` (no `.weight`) if the checkpoint stores it quantized
     /// (`<key>.weight.q8` / `.q4` + `.scale` [+ `.zero`], see [`crate::export`],
     /// or the Trim NVFP4 triple `<nvfp4 module>::_nvfp4_weight` / `_scale` /
@@ -32,6 +45,7 @@ pub trait WeightSource {
         self.contains(&format!("{key}.weight"))
             || self.contains(&format!("{key}.weight.q8"))
             || self.contains(&format!("{key}.weight.q4"))
+            || self.contains(&format!("{key}.weight.mx8"))
             || self.contains(&format!("{}::_nvfp4_weight", nvfp4_module(key)))
     }
     /// A convolution weight that may be stored weight-normalised
@@ -48,7 +62,8 @@ pub trait WeightSource {
     }
     fn has_conv_weight(&self, key: &str) -> bool {
         self.contains(&format!("{key}.weight"))
-            || (self.contains(&format!("{key}.weight_g")) && self.contains(&format!("{key}.weight_v")))
+            || (self.contains(&format!("{key}.weight_g"))
+                && self.contains(&format!("{key}.weight_v")))
     }
 }
 
@@ -58,7 +73,11 @@ pub fn fold_weight_norm(g: &[f32], v: &[f32], cout: usize) -> Vec<f32> {
     let mut w = Vec::with_capacity(v.len());
     for o in 0..cout {
         let row = &v[o * per..(o + 1) * per];
-        let n = row.iter().map(|x| (*x as f64) * (*x as f64)).sum::<f64>().sqrt() as f32;
+        let n = row
+            .iter()
+            .map(|x| (*x as f64) * (*x as f64))
+            .sum::<f64>()
+            .sqrt() as f32;
         let s = if n > 0.0 { g[o] / n } else { 0.0 };
         w.extend(row.iter().map(|x| x * s));
     }
@@ -69,7 +88,9 @@ pub fn fold_weight_norm(g: &[f32], v: &[f32], cout: usize) -> Vec<f32> {
 /// infixes: `ff.net.0.proj → ff.fc_in`, `ff.net.2 → ff.fc_out`,
 /// `attn.to_out.0 → attn.to_out`.
 pub fn nvfp4_module(key: &str) -> String {
-    key.replace(".ff.net.0.proj", ".ff.fc_in").replace(".ff.net.2", ".ff.fc_out").replace(".attn.to_out.0", ".attn.to_out")
+    key.replace(".ff.net.0.proj", ".ff.fc_in")
+        .replace(".ff.net.2", ".ff.fc_out")
+        .replace(".attn.to_out.0", ".attn.to_out")
 }
 
 fn squeeze(s: &[usize]) -> Vec<usize> {
@@ -110,9 +131,17 @@ impl SafetensorsDir {
         }
         let mut maps = Vec::new();
         let mut index = HashMap::new();
+        // `H3_MADVISE=1`: MADV_SEQUENTIAL on each map and MADV_WILLNEED per tensor.
+        // Measured slower from RunPod's FUSE network volume (load 147-167 s vs
+        // 118 s without; `docs/runs/2026-11-13-runpod-pro6000-stage`), so it is
+        // opt-in; staging the files onto local disk is what pays there.
+        let advise = std::env::var_os("H3_MADVISE").is_some();
         for (i, f) in files.iter().enumerate() {
             let file = std::fs::File::open(f)?;
             let map = map_readonly(&file)?;
+            if advise {
+                let _ = map.advise(memmap2::Advice::Sequential);
+            }
             let st = safetensors::SafeTensors::deserialize(&map)
                 .map_err(|e| Error::Weights(format!("{}: {e}", f.display())))?;
             for name in st.names() {
@@ -125,10 +154,19 @@ impl SafetensorsDir {
 
     /// The stored bytes of a tensor, without conversion: `(dtype, shape, data)`.
     pub fn raw(&self, name: &str) -> Result<(safetensors::Dtype, Vec<usize>, &[u8])> {
-        let i = *self.index.get(name).ok_or_else(|| Error::Weights(format!("missing tensor `{name}`")))?;
-        let st = safetensors::SafeTensors::deserialize(&self.maps[i]).map_err(|e| Error::Weights(e.to_string()))?;
+        let i = *self
+            .index
+            .get(name)
+            .ok_or_else(|| Error::Weights(format!("missing tensor `{name}`")))?;
+        let st = safetensors::SafeTensors::deserialize(&self.maps[i])
+            .map_err(|e| Error::Weights(e.to_string()))?;
         let t = st.tensor(name).map_err(|e| Error::Weights(e.to_string()))?;
-        Ok((t.dtype(), t.shape().to_vec(), t.data()))
+        let data = t.data();
+        if std::env::var_os("H3_MADVISE").is_some() {
+            let off = data.as_ptr() as usize - self.maps[i].as_ptr() as usize;
+            let _ = self.maps[i].advise_range(memmap2::Advice::WillNeed, off, data.len());
+        }
+        Ok((t.dtype(), t.shape().to_vec(), data))
     }
 
     pub fn contains_raw(&self, name: &str) -> bool {
@@ -159,7 +197,9 @@ impl SafetensorsDir {
     pub fn scalar(&self, name: &str) -> Result<f32> {
         let (_, shape, _) = self.raw(name)?;
         let v = self.get(name, &shape)?;
-        v.first().copied().ok_or_else(|| Error::Weights(format!("`{name}` is empty")))
+        v.first()
+            .copied()
+            .ok_or_else(|| Error::Weights(format!("`{name}` is empty")))
     }
 }
 
@@ -173,21 +213,47 @@ fn map_readonly(file: &std::fs::File) -> Result<memmap2::Mmap> {
 pub fn bytes_to_f32(dt: safetensors::Dtype, b: &[u8], name: &str) -> Result<Vec<f32>> {
     use safetensors::Dtype;
     Ok(match dt {
-        Dtype::F32 => b.chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect(),
-        Dtype::F16 => b.chunks_exact(2).map(|c| half::f16::from_le_bytes([c[0], c[1]]).to_f32()).collect(),
-        Dtype::BF16 => b.chunks_exact(2).map(|c| half::bf16::from_le_bytes([c[0], c[1]]).to_f32()).collect(),
-        Dtype::F64 => b.chunks_exact(8).map(|c| f64::from_le_bytes(c.try_into().unwrap()) as f32).collect(),
+        Dtype::F32 => b
+            .chunks_exact(4)
+            .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+            .collect(),
+        Dtype::F16 => b
+            .chunks_exact(2)
+            .map(|c| half::f16::from_le_bytes([c[0], c[1]]).to_f32())
+            .collect(),
+        Dtype::BF16 => b
+            .chunks_exact(2)
+            .map(|c| half::bf16::from_le_bytes([c[0], c[1]]).to_f32())
+            .collect(),
+        Dtype::F64 => b
+            .chunks_exact(8)
+            .map(|c| f64::from_le_bytes(c.try_into().unwrap()) as f32)
+            .collect(),
         Dtype::I8 => b.iter().map(|&x| x as i8 as f32).collect(),
         Dtype::U8 => b.iter().map(|&x| x as f32).collect(),
-        Dtype::I32 => b.chunks_exact(4).map(|c| i32::from_le_bytes([c[0], c[1], c[2], c[3]]) as f32).collect(),
-        Dtype::I64 => b.chunks_exact(8).map(|c| i64::from_le_bytes(c.try_into().unwrap()) as f32).collect(),
-        other => return Err(Error::Weights(format!("`{name}`: unsupported dtype {other:?}"))),
+        Dtype::I32 => b
+            .chunks_exact(4)
+            .map(|c| i32::from_le_bytes([c[0], c[1], c[2], c[3]]) as f32)
+            .collect(),
+        Dtype::I64 => b
+            .chunks_exact(8)
+            .map(|c| i64::from_le_bytes(c.try_into().unwrap()) as f32)
+            .collect(),
+        other => {
+            return Err(Error::Weights(format!(
+                "`{name}`: unsupported dtype {other:?}"
+            )));
+        }
     })
 }
 
 impl WeightSource for SafetensorsDir {
     fn contains(&self, name: &str) -> bool {
         self.index.contains_key(name)
+    }
+
+    fn shape(&self, name: &str) -> Result<Vec<usize>> {
+        Ok(self.raw(name)?.1)
     }
 
     fn stored(&self, key: &str) -> Result<Option<Stored>> {
@@ -200,7 +266,27 @@ impl WeightSource for SafetensorsDir {
         let bad = |m: String| Error::Weights(format!("`{key}`: {m}"));
         let q8 = format!("{key}.weight.q8");
         let q4 = format!("{key}.weight.q4");
+        let mx8 = format!("{key}.weight.mx8");
         let nv = format!("{}::_nvfp4_weight", nvfp4_module(key));
+        if self.contains_raw(&mx8) {
+            // MXFP8: E4M3 codes [rows, cols] + the swizzled E8M0 scales as stored (crate::export).
+            let (dt, shape, data) = self.raw(&mx8)?;
+            if dt != Dtype::U8 || shape.len() != 2 {
+                return Err(bad(format!("mx8 is {dt:?} {shape:?}")));
+            }
+            let (sdt, sshape, sdata) = self.raw(&format!("{key}.weight.mxs"))?;
+            if sdt != Dtype::U8 || sdata.len() != crate::quant::mx_scale_len(shape[0], shape[1]) {
+                return Err(bad(format!(
+                    "mxs is {sdt:?} {sshape:?} for codes {shape:?}"
+                )));
+            }
+            return Ok(Some(Stored::Mxfp8(crate::quant::Mxfp8::from_stored(
+                data.to_vec(),
+                sdata.to_vec(),
+                shape[0],
+                shape[1],
+            ))));
+        }
         if self.contains_raw(&q8) {
             let (dt, shape, data) = self.raw(&q8)?;
             if dt != Dtype::I8 || shape.len() != 2 {
@@ -227,9 +313,13 @@ impl WeightSource for SafetensorsDir {
             let (sshape, scales) = f32s(&format!("{key}.weight.scale"))?;
             let (zshape, zeros) = f32s(&format!("{key}.weight.zero"))?;
             if sshape != zshape || sshape.len() != 2 || sshape[0] != rows || cols % sshape[1] != 0 {
-                return Err(bad(format!("scale {sshape:?} / zero {zshape:?} for codes {shape:?}")));
+                return Err(bad(format!(
+                    "scale {sshape:?} / zero {zshape:?} for codes {shape:?}"
+                )));
             }
-            return Ok(Some(Stored::Q4(Q4::from_packed(data, scales, zeros, rows, cols))));
+            return Ok(Some(Stored::Q4(Q4::from_packed(
+                data, scales, zeros, rows, cols,
+            ))));
         }
         if self.contains_raw(&nv) {
             let m = nvfp4_module(key);
@@ -240,10 +330,14 @@ impl WeightSource for SafetensorsDir {
             let (rows, cols) = (shape[0], 2 * shape[1]);
             let (sdt, sshape, sdata) = self.raw(&format!("{m}::_nvfp4_weight_scale"))?;
             if sdt != Dtype::U8 || sshape.len() != 2 || sshape[0] != rows.div_ceil(128) * 128 {
-                return Err(bad(format!("nvfp4 scales are {sdt:?} {sshape:?} for codes {shape:?}")));
+                return Err(bad(format!(
+                    "nvfp4 scales are {sdt:?} {sshape:?} for codes {shape:?}"
+                )));
             }
             let alpha = self.scalar(&format!("{m}::_nvfp4_alpha"))?;
-            return Ok(Some(Stored::Nvfp4(Nvfp4::from_stored(data, sdata, alpha, rows, cols))));
+            return Ok(Some(Stored::Nvfp4(Nvfp4::from_stored(
+                data, sdata, alpha, rows, cols, false,
+            ))));
         }
         Ok(None)
     }
@@ -251,7 +345,9 @@ impl WeightSource for SafetensorsDir {
     fn get(&self, name: &str, shape: &[usize]) -> Result<Vec<f32>> {
         let (dt, stored, data) = self.raw(name)?;
         if squeeze(&stored) != squeeze(shape) {
-            return Err(Error::Weights(format!("`{name}` is {stored:?}, expected {shape:?}")));
+            return Err(Error::Weights(format!(
+                "`{name}` is {stored:?}, expected {shape:?}"
+            )));
         }
         bytes_to_f32(dt, data, name)
     }
@@ -273,8 +369,198 @@ impl<S: WeightSource> WeightSource for Remapped<S> {
     fn contains(&self, name: &str) -> bool {
         self.inner.contains(&(self.map)(name))
     }
+    fn shape(&self, name: &str) -> Result<Vec<usize>> {
+        self.inner.shape(&(self.map)(name))
+    }
     fn stored(&self, key: &str) -> Result<Option<Stored>> {
         self.inner.stored(&(self.map)(key))
+    }
+}
+
+/// Which part of a ComfyUI tensor a Diffusers key names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ComfyPart {
+    Whole,
+    /// Row block `i` of 3 (`qkv_proj` → `to_q` / `to_k` / `to_v`).
+    Third(usize),
+    /// The two row halves exchanged (`mlp.fc1` is `[gate | value]`,
+    /// Diffusers' `ff.net.0.proj` is `[value | gate]`).
+    SwapHalves,
+}
+
+/// Diffusers DiT key → ComfyUI single-file key (`comfy/ldm/minimax/model.py`
+/// names) and the part of that tensor. `None` for keys the file never
+/// carries (`time_embedder.*`, `adaln_basis.weight`: the file holds
+/// `adaln_t_table` instead).
+pub fn comfy_h3_key(name: &str) -> Option<(String, ComfyPart)> {
+    use ComfyPart::*;
+    let whole = |k: String| Some((k, Whole));
+    if name.starts_with("time_embedder.") || name == "adaln_basis.weight" {
+        return None;
+    }
+    let fixed = [
+        ("proj_in.", "video_patch_proj."),
+        ("audio_proj_in.", "audio_patch_proj."),
+        ("context_embedder.", "condition_proj."),
+        ("proj_out.", "final_layer.video_out."),
+        ("audio_proj_out.", "final_layer.audio_out."),
+        ("norm_out.linear.", "final_layer.adaln_proj.linear."),
+        ("norm_out.norm.", "final_layer.norm."),
+    ];
+    for (d, c) in fixed {
+        if let Some(rest) = name.strip_prefix(d) {
+            return whole(format!("{c}{rest}"));
+        }
+    }
+    let (prefix, rest) = if let Some(r) = name.strip_prefix("transformer_blocks.") {
+        ("blocks.", r)
+    } else if let Some(r) = name.strip_prefix("token_refiner.refiner_blocks.") {
+        ("token_refiner.blocks.", r)
+    } else {
+        return whole(name.to_string());
+    };
+    let (n, field) = rest.split_once('.')?;
+    let p = format!("{prefix}{n}.");
+    Some(match field {
+        "attn.to_q.weight" => (format!("{p}attn.qkv_proj.weight"), Third(0)),
+        "attn.to_k.weight" => (format!("{p}attn.qkv_proj.weight"), Third(1)),
+        "attn.to_v.weight" => (format!("{p}attn.qkv_proj.weight"), Third(2)),
+        "attn.to_out.0.weight" => (format!("{p}attn.out_proj.weight"), Whole),
+        "attn.norm_q.weight" => (format!("{p}attn.q_norm.weight"), Whole),
+        "attn.norm_k.weight" => (format!("{p}attn.k_norm.weight"), Whole),
+        "ff.net.0.proj.weight" => (format!("{p}mlp.fc1.weight"), SwapHalves),
+        "ff.net.2.weight" => (format!("{p}mlp.fc2.weight"), Whole),
+        other => (format!("{p}{other}"), Whole),
+    })
+}
+
+/// A ComfyUI single-file H3 checkpoint (`video_patch_proj`, fused
+/// `qkv_proj`, `mlp.fc1/fc2`, optional `comfy_quant` NVFP4 triples `weight`
+/// U8 `[out, in/2]` first-code-high + `weight_scale` E4M3 swizzled 128×4 +
+/// `weight_scale_2` f32, `adaln_t_table`) read through Diffusers keys.
+pub struct ComfySource {
+    pub inner: SafetensorsDir,
+}
+
+impl ComfySource {
+    /// Whether a checkpoint is in this layout.
+    pub fn detect(src: &SafetensorsDir) -> bool {
+        src.contains("video_patch_proj.weight") && src.contains("blocks.0.attn.qkv_proj.weight")
+    }
+
+    fn is_nvfp4(&self, comfy_weight: &str) -> bool {
+        let base = comfy_weight.strip_suffix(".weight").unwrap_or(comfy_weight);
+        self.inner.contains_raw(&format!("{base}.weight_scale"))
+            && self.inner.contains_raw(&format!("{base}.comfy_quant"))
+    }
+
+    /// The whole NVFP4 tensor behind `<base>.weight`.
+    fn nvfp4(&self, comfy_weight: &str) -> Result<Nvfp4> {
+        use safetensors::Dtype;
+        let base = comfy_weight.strip_suffix(".weight").unwrap_or(comfy_weight);
+        let bad = |m: String| Error::Weights(format!("`{comfy_weight}`: {m}"));
+        let (dt, shape, data) = self.inner.raw(comfy_weight)?;
+        if dt != Dtype::U8 || shape.len() != 2 {
+            return Err(bad(format!("nvfp4 codes are {dt:?} {shape:?}")));
+        }
+        let (rows, cols) = (shape[0], 2 * shape[1]);
+        let (sdt, sshape, sdata) = self.inner.raw(&format!("{base}.weight_scale"))?;
+        if sdt != Dtype::F8_E4M3
+            || sshape.len() != 2
+            || sshape[0] != rows.div_ceil(128) * 128
+            || sshape[1] != (cols / 16).div_ceil(4) * 4
+        {
+            return Err(bad(format!(
+                "nvfp4 scales are {sdt:?} {sshape:?} for codes {shape:?}"
+            )));
+        }
+        let fmt = self.inner.raw(&format!("{base}.comfy_quant"))?.2;
+        if !std::str::from_utf8(fmt).unwrap_or("").contains("\"nvfp4\"") {
+            return Err(bad(format!(
+                "comfy_quant is {:?}, not nvfp4",
+                String::from_utf8_lossy(fmt)
+            )));
+        }
+        let alpha = self.inner.scalar(&format!("{base}.weight_scale_2"))?;
+        Ok(Nvfp4::from_stored(data, sdata, alpha, rows, cols, true))
+    }
+
+    fn part_of(q: Nvfp4, part: ComfyPart) -> Nvfp4 {
+        match part {
+            ComfyPart::Whole => q,
+            ComfyPart::Third(i) => {
+                let n = q.rows / 3;
+                q.rows(i * n, (i + 1) * n)
+            }
+            ComfyPart::SwapHalves => q.swap_halves(),
+        }
+    }
+
+    fn part_rows(v: &[f32], rows: usize, part: ComfyPart) -> Vec<f32> {
+        let per = v.len() / rows;
+        match part {
+            ComfyPart::Whole => v.to_vec(),
+            ComfyPart::Third(i) => {
+                let n = rows / 3;
+                v[i * n * per..(i + 1) * n * per].to_vec()
+            }
+            ComfyPart::SwapHalves => {
+                let h = rows / 2;
+                let mut out = v[h * per..].to_vec();
+                out.extend_from_slice(&v[..h * per]);
+                out
+            }
+        }
+    }
+}
+
+impl WeightSource for ComfySource {
+    fn contains(&self, name: &str) -> bool {
+        comfy_h3_key(name).is_some_and(|(k, _)| self.inner.contains(&k))
+    }
+
+    fn shape(&self, name: &str) -> Result<Vec<usize>> {
+        let (k, part) = comfy_h3_key(name)
+            .ok_or_else(|| Error::Weights(format!("`{name}` has no ComfyUI counterpart")))?;
+        let mut shape = self.inner.shape(&k)?;
+        if self.is_nvfp4(&k) && shape.len() == 2 {
+            shape[1] *= 2;
+        }
+        if let ComfyPart::Third(_) = part {
+            shape[0] /= 3;
+        }
+        Ok(shape)
+    }
+
+    fn get(&self, name: &str, shape: &[usize]) -> Result<Vec<f32>> {
+        let (k, part) = comfy_h3_key(name)
+            .ok_or_else(|| Error::Weights(format!("`{name}` has no ComfyUI counterpart")))?;
+        let stored = self.shape(name)?;
+        if squeeze(&stored) != squeeze(shape) {
+            return Err(Error::Weights(format!(
+                "`{name}` (`{k}`) is {stored:?}, expected {shape:?}"
+            )));
+        }
+        if self.is_nvfp4(&k) {
+            return Ok(Self::part_of(self.nvfp4(&k)?, part).dequantize());
+        }
+        let full = self.inner.shape(&k)?;
+        let v = self.inner.get(&k, &full)?;
+        Ok(Self::part_rows(&v, full[0], part))
+    }
+
+    fn stored(&self, key: &str) -> Result<Option<Stored>> {
+        let Some((k, part)) = comfy_h3_key(&format!("{key}.weight")) else {
+            return Ok(None);
+        };
+        if !self.is_nvfp4(&k) {
+            return Ok(None);
+        }
+        Ok(Some(Stored::Nvfp4(Self::part_of(self.nvfp4(&k)?, part))))
+    }
+
+    fn has_linear(&self, key: &str) -> bool {
+        self.contains(&format!("{key}.weight"))
     }
 }
 
@@ -290,7 +576,11 @@ pub fn vae_source_key(name: &str) -> String {
         .replace(".ff.net.0.proj.", ".ff.w1.")
         .replace(".ff.net.2.", ".ff.w2.")
         .replace("proj_in.", "x_embedder.");
-    if name.starts_with("decoder.") && n.starts_with("blocks.") { n } else { n }
+    if name.starts_with("decoder.") && n.starts_with("blocks.") {
+        n
+    } else {
+        n
+    }
 }
 
 /// Deterministic weights for every name a model asks for: `U(−a, a)` with
@@ -302,8 +592,10 @@ pub struct Synthetic {
 }
 
 impl WeightSource for Synthetic {
-    fn contains(&self, _name: &str) -> bool {
-        true
+    /// Everything but the ComfyUI table: the synthetic model follows the
+    /// Diffusers layout (time embedder + basis).
+    fn contains(&self, name: &str) -> bool {
+        name != ADALN_TABLE_KEY
     }
 
     fn get(&self, name: &str, shape: &[usize]) -> Result<Vec<f32>> {
@@ -313,10 +605,16 @@ impl WeightSource for Synthetic {
             h = (h ^ b as u64).wrapping_mul(0x100_0000_01B3);
         }
         let mut rng = Rng::new(h);
-        let is_norm = (name.contains("norm") && name.ends_with(".weight")) || name.ends_with("scale1") || name.ends_with("scale2");
+        let is_norm = (name.contains("norm") && name.ends_with(".weight"))
+            || name.ends_with("scale1")
+            || name.ends_with("scale2");
         Ok(if is_norm && shape.len() == 1 {
             rng.uniform(n, 0.1).into_iter().map(|v| 1.0 + v).collect()
-        } else if name.ends_with(".bias") || name.ends_with("alpha") || name.ends_with("beta") || name.contains("register_tokens") {
+        } else if name.ends_with(".bias")
+            || name.ends_with("alpha")
+            || name.ends_with("beta")
+            || name.contains("register_tokens")
+        {
             rng.uniform(n, 0.1)
         } else if name.contains("adaln_proj") || name.contains("norm_out.linear") {
             // Modulation rows: keep `1 + scale` positive and gates small.
@@ -357,33 +655,67 @@ pub fn h3_manifest(cfg: &H3Config, with_gate: bool) -> Manifest {
     let mut v: Manifest = vec![
         ("proj_in.weight".into(), vec![d, cfg.video_patch_dim()]),
         ("proj_in.bias".into(), vec![d]),
-        ("audio_proj_in.weight".into(), vec![d, cfg.audio_in_channels]),
+        (
+            "audio_proj_in.weight".into(),
+            vec![d, cfg.audio_in_channels],
+        ),
         ("audio_proj_in.bias".into(), vec![d]),
         ("context_embedder.weight".into(), vec![d, cfg.text_dim]),
         ("context_embedder.bias".into(), vec![d]),
-        ("time_embedder.linear_1.weight".into(), vec![cfg.time_embed_hidden, cfg.freq_dim]),
-        ("time_embedder.linear_1.bias".into(), vec![cfg.time_embed_hidden]),
-        ("time_embedder.linear_2.weight".into(), vec![cfg.time_embed_dim, cfg.time_embed_hidden]),
-        ("time_embedder.linear_2.bias".into(), vec![cfg.time_embed_dim]),
+        (
+            "time_embedder.linear_1.weight".into(),
+            vec![cfg.time_embed_hidden, cfg.freq_dim],
+        ),
+        (
+            "time_embedder.linear_1.bias".into(),
+            vec![cfg.time_embed_hidden],
+        ),
+        (
+            "time_embedder.linear_2.weight".into(),
+            vec![cfg.time_embed_dim, cfg.time_embed_hidden],
+        ),
+        (
+            "time_embedder.linear_2.bias".into(),
+            vec![cfg.time_embed_dim],
+        ),
         ("norm_out.linear.weight".into(), vec![2 * d, adaln_in]),
         ("norm_out.linear.bias".into(), vec![2 * d]),
         ("norm_out.norm.weight".into(), vec![d]),
-        ("proj_out.weight".into(), vec![heads * cfg.video_patch_dim(), d]),
+        (
+            "proj_out.weight".into(),
+            vec![heads * cfg.video_patch_dim(), d],
+        ),
         ("proj_out.bias".into(), vec![heads * cfg.video_patch_dim()]),
-        ("audio_proj_out.weight".into(), vec![heads * cfg.audio_in_channels, d]),
-        ("audio_proj_out.bias".into(), vec![heads * cfg.audio_in_channels]),
+        (
+            "audio_proj_out.weight".into(),
+            vec![heads * cfg.audio_in_channels, d],
+        ),
+        (
+            "audio_proj_out.bias".into(),
+            vec![heads * cfg.audio_in_channels],
+        ),
         ("token_refiner.final_norm.weight".into(), vec![d]),
     ];
     if let Some(r) = cfg.adaln_rank {
         v.push(("adaln_basis.weight".into(), vec![r, cfg.time_embed_dim]));
     }
     for l in 0..cfg.refiner_layers {
-        attn_ff(&mut v, &format!("token_refiner.refiner_blocks.{l}"), d, qkv, cfg.head_dim, cfg.ffn_dim);
+        attn_ff(
+            &mut v,
+            &format!("token_refiner.refiner_blocks.{l}"),
+            d,
+            qkv,
+            cfg.head_dim,
+            cfg.ffn_dim,
+        );
     }
     for l in 0..cfg.layers {
         let p = format!("transformer_blocks.{l}");
         attn_ff(&mut v, &p, d, qkv, cfg.head_dim, cfg.ffn_dim);
-        v.push((format!("{p}.adaln_proj.linear.weight"), vec![mods, adaln_in]));
+        v.push((
+            format!("{p}.adaln_proj.linear.weight"),
+            vec![mods, adaln_in],
+        ));
         v.push((format!("{p}.adaln_proj.linear.bias"), vec![mods]));
         if with_gate {
             v.push((format!("{p}.attn.to_gate_compress.weight"), vec![qkv, d]));
@@ -396,7 +728,10 @@ pub fn h3_manifest(cfg: &H3Config, with_gate: bool) -> Manifest {
 pub fn video_vae_manifest(cfg: &VideoVaeConfig) -> Manifest {
     let mut v: Manifest = Vec::new();
     let c0 = cfg.block_out_channels[0];
-    v.push(("encoder.conv_in.weight".into(), vec![c0, cfg.in_channels, 3, 3, 3]));
+    v.push((
+        "encoder.conv_in.weight".into(),
+        vec![c0, cfg.in_channels, 3, 3, 3],
+    ));
     v.push(("encoder.conv_in.bias".into(), vec![c0]));
     let mut cin = c0;
     for (i, &cout) in cfg.block_out_channels.iter().enumerate() {
@@ -417,8 +752,14 @@ pub fn video_vae_manifest(cfg: &VideoVaeConfig) -> Manifest {
             }
         }
         if cfg.spatial_down[i] > 1 || cfg.temporal_down[i] > 1 {
-            v.push((format!("encoder.down_blocks.{i}.downsamplers.0.conv.weight"), vec![cout, cout, 3, 3, 3]));
-            v.push((format!("encoder.down_blocks.{i}.downsamplers.0.conv.bias"), vec![cout]));
+            v.push((
+                format!("encoder.down_blocks.{i}.downsamplers.0.conv.weight"),
+                vec![cout, cout, 3, 3, 3],
+            ));
+            v.push((
+                format!("encoder.down_blocks.{i}.downsamplers.0.conv.bias"),
+                vec![cout],
+            ));
         }
         cin = cout;
     }
@@ -440,13 +781,30 @@ pub fn vae_decoder_manifest(cfg: &VideoVaeConfig) -> Manifest {
     let dd = cfg.decoder_dim();
     let ff = cfg.decoder_ffn_mult * dd;
     let mut v: Manifest = vec![
-        ("decoder.proj_in.weight".into(), vec![dd, cfg.latent_channels]),
+        (
+            "decoder.proj_in.weight".into(),
+            vec![dd, cfg.latent_channels],
+        ),
         ("decoder.proj_in.bias".into(), vec![dd]),
-        ("decoder.register_tokens".into(), vec![1, cfg.decoder_register_tokens, dd]),
+        (
+            "decoder.register_tokens".into(),
+            vec![1, cfg.decoder_register_tokens, dd],
+        ),
         ("decoder.norm_out.weight".into(), vec![dd]),
         ("decoder.norm_out.bias".into(), vec![dd]),
-        ("decoder.proj_out.weight".into(), vec![cfg.in_channels * cfg.temporal_ratio() * cfg.spatial_ratio() * cfg.spatial_ratio(), dd]),
-        ("decoder.proj_out.bias".into(), vec![cfg.in_channels * cfg.temporal_ratio() * cfg.spatial_ratio() * cfg.spatial_ratio()]),
+        (
+            "decoder.proj_out.weight".into(),
+            vec![
+                cfg.in_channels * cfg.temporal_ratio() * cfg.spatial_ratio() * cfg.spatial_ratio(),
+                dd,
+            ],
+        ),
+        (
+            "decoder.proj_out.bias".into(),
+            vec![
+                cfg.in_channels * cfg.temporal_ratio() * cfg.spatial_ratio() * cfg.spatial_ratio(),
+            ],
+        ),
     ];
     for l in 0..cfg.decoder_layers {
         let p = format!("decoder.transformer_blocks.{l}");
@@ -494,8 +852,14 @@ pub fn audio_vae_manifest(cfg: &AudioVaeConfig) -> Manifest {
     }
     let n = cfg.encoder_rates.len() + 1;
     v.push((format!("encoder.block.{n}.alpha"), vec![1, c, 1]));
-    v.push((format!("encoder.block.{}.weight", n + 1), vec![cfg.latent_dim, c, 3]));
-    v.push((format!("encoder.block.{}.bias", n + 1), vec![cfg.latent_dim]));
+    v.push((
+        format!("encoder.block.{}.weight", n + 1),
+        vec![cfg.latent_dim, c, 3],
+    ));
+    v.push((
+        format!("encoder.block.{}.bias", n + 1),
+        vec![cfg.latent_dim],
+    ));
     let (ld, lc) = (cfg.latent_dim, cfg.latent_channels);
     for (k, s) in [
         ("pre_block.norm1.weight", vec![ld]),
@@ -534,7 +898,12 @@ pub fn audio_vae_manifest(cfg: &AudioVaeConfig) -> Manifest {
     v.push(("decoder.conv_pre.bias".into(), vec![dd]));
     let mut c = dd;
     let nk = cfg.resblock_kernels.len();
-    for (i, (&rate, &k)) in cfg.decoder_rates.iter().zip(&cfg.decoder_kernels).enumerate() {
+    for (i, (&rate, &k)) in cfg
+        .decoder_rates
+        .iter()
+        .zip(&cfg.decoder_kernels)
+        .enumerate()
+    {
         v.push((format!("decoder.ups.{i}.0.weight"), vec![c, c / 2, k]));
         v.push((format!("decoder.ups.{i}.0.bias"), vec![c / 2]));
         let _ = rate;
@@ -550,15 +919,27 @@ pub fn audio_vae_manifest(cfg: &AudioVaeConfig) -> Manifest {
             for a in 0..2 * cfg.resblock_dilations[j].len() {
                 v.push((format!("{p}.activations.{a}.act.alpha"), vec![c]));
                 v.push((format!("{p}.activations.{a}.act.beta"), vec![c]));
-                v.push((format!("{p}.activations.{a}.upsample.filter"), vec![1, 1, 12]));
-                v.push((format!("{p}.activations.{a}.downsample.lowpass.filter"), vec![1, 1, 12]));
+                v.push((
+                    format!("{p}.activations.{a}.upsample.filter"),
+                    vec![1, 1, 12],
+                ));
+                v.push((
+                    format!("{p}.activations.{a}.downsample.lowpass.filter"),
+                    vec![1, 1, 12],
+                ));
             }
         }
     }
     v.push(("decoder.activation_post.act.alpha".into(), vec![c]));
     v.push(("decoder.activation_post.act.beta".into(), vec![c]));
-    v.push(("decoder.activation_post.upsample.filter".into(), vec![1, 1, 12]));
-    v.push(("decoder.activation_post.downsample.lowpass.filter".into(), vec![1, 1, 12]));
+    v.push((
+        "decoder.activation_post.upsample.filter".into(),
+        vec![1, 1, 12],
+    ));
+    v.push((
+        "decoder.activation_post.downsample.lowpass.filter".into(),
+        vec![1, 1, 12],
+    ));
     v.push(("decoder.conv_post.weight".into(), vec![1, c, 7]));
     v
 }
@@ -568,7 +949,10 @@ pub fn audio_vae_manifest(cfg: &AudioVaeConfig) -> Manifest {
 pub fn taeh3_manifest(cfg: &TaeH3Config) -> Manifest {
     let nf = cfg.widths;
     let mut v = vec![
-        ("decoder.1.weight".to_string(), vec![nf[0], cfg.latent_channels, 3, 3]),
+        (
+            "decoder.1.weight".to_string(),
+            vec![nf[0], cfg.latent_channels, 3, 3],
+        ),
         ("decoder.1.bias".to_string(), vec![nf[0]]),
     ];
     for s in 0..3 {
@@ -582,10 +966,19 @@ pub fn taeh3_manifest(cfg: &TaeH3Config) -> Manifest {
             v.push((format!("{p}.conv.4.weight"), vec![nf[s], nf[s], 3, 3]));
             v.push((format!("{p}.conv.4.bias"), vec![nf[s]]));
         }
-        v.push((format!("decoder.{}.conv.weight", base + 4), vec![nf[s] * cfg.tgrow[s], nf[s], 1, 1]));
-        v.push((format!("decoder.{}.weight", base + 5), vec![nf[s + 1], nf[s], 3, 3]));
+        v.push((
+            format!("decoder.{}.conv.weight", base + 4),
+            vec![nf[s] * cfg.tgrow[s], nf[s], 1, 1],
+        ));
+        v.push((
+            format!("decoder.{}.weight", base + 5),
+            vec![nf[s + 1], nf[s], 3, 3],
+        ));
     }
-    v.push(("decoder.22.weight".into(), vec![cfg.out_channels(), nf[3], 3, 3]));
+    v.push((
+        "decoder.22.weight".into(),
+        vec![cfg.out_channels(), nf[3], 3, 3],
+    ));
     v.push(("decoder.22.bias".into(), vec![cfg.out_channels()]));
     v
 }
@@ -611,7 +1004,10 @@ pub fn upscaler_manifest(cfg: &UpscalerConfig) -> Manifest {
             if temporal {
                 v.push((format!("{p}.norm.weight"), vec![c]));
                 v.push((format!("{p}.norm.bias"), vec![c]));
-                v.push((format!("{p}.dwconv.weight"), vec![c, 1, cfg.temporal_kernel, 1, 1]));
+                v.push((
+                    format!("{p}.dwconv.weight"),
+                    vec![c, 1, cfg.temporal_kernel, 1, 1],
+                ));
                 v.push((format!("{p}.dwconv.bias"), vec![c]));
                 v.push((format!("{p}.pwconv.weight"), vec![c, c, 1, 1, 1]));
                 v.push((format!("{p}.pwconv.bias"), vec![c]));
@@ -636,26 +1032,59 @@ pub fn upscaler_manifest(cfg: &UpscalerConfig) -> Manifest {
 /// output layer, and the vision tower with its DeepStack mergers.
 pub fn qwen3vl_manifest(cfg: &Qwen3VlConfig) -> Manifest {
     let h = cfg.hidden;
-    let mut v: Manifest = vec![("model.language_model.embed_tokens.weight".into(), vec![cfg.vocab, h])];
+    let mut v: Manifest = vec![(
+        "model.language_model.embed_tokens.weight".into(),
+        vec![cfg.vocab, h],
+    )];
     for l in 0..cfg.output_layer {
         let p = format!("model.language_model.layers.{l}");
         v.push((format!("{p}.input_layernorm.weight"), vec![h]));
         v.push((format!("{p}.post_attention_layernorm.weight"), vec![h]));
-        v.push((format!("{p}.self_attn.q_proj.weight"), vec![cfg.heads * cfg.head_dim, h]));
-        v.push((format!("{p}.self_attn.k_proj.weight"), vec![cfg.kv_heads * cfg.head_dim, h]));
-        v.push((format!("{p}.self_attn.v_proj.weight"), vec![cfg.kv_heads * cfg.head_dim, h]));
-        v.push((format!("{p}.self_attn.o_proj.weight"), vec![h, cfg.heads * cfg.head_dim]));
+        v.push((
+            format!("{p}.self_attn.q_proj.weight"),
+            vec![cfg.heads * cfg.head_dim, h],
+        ));
+        v.push((
+            format!("{p}.self_attn.k_proj.weight"),
+            vec![cfg.kv_heads * cfg.head_dim, h],
+        ));
+        v.push((
+            format!("{p}.self_attn.v_proj.weight"),
+            vec![cfg.kv_heads * cfg.head_dim, h],
+        ));
+        v.push((
+            format!("{p}.self_attn.o_proj.weight"),
+            vec![h, cfg.heads * cfg.head_dim],
+        ));
         v.push((format!("{p}.self_attn.q_norm.weight"), vec![cfg.head_dim]));
         v.push((format!("{p}.self_attn.k_norm.weight"), vec![cfg.head_dim]));
-        v.push((format!("{p}.mlp.gate_proj.weight"), vec![cfg.intermediate, h]));
+        v.push((
+            format!("{p}.mlp.gate_proj.weight"),
+            vec![cfg.intermediate, h],
+        ));
         v.push((format!("{p}.mlp.up_proj.weight"), vec![cfg.intermediate, h]));
-        v.push((format!("{p}.mlp.down_proj.weight"), vec![h, cfg.intermediate]));
+        v.push((
+            format!("{p}.mlp.down_proj.weight"),
+            vec![h, cfg.intermediate],
+        ));
     }
     let vh = cfg.vision_hidden;
     let vm = vh * cfg.vision_merge * cfg.vision_merge;
-    v.push(("model.visual.patch_embed.proj.weight".into(), vec![vh, 3, cfg.vision_temporal_patch, cfg.vision_patch, cfg.vision_patch]));
+    v.push((
+        "model.visual.patch_embed.proj.weight".into(),
+        vec![
+            vh,
+            3,
+            cfg.vision_temporal_patch,
+            cfg.vision_patch,
+            cfg.vision_patch,
+        ],
+    ));
     v.push(("model.visual.patch_embed.proj.bias".into(), vec![vh]));
-    v.push(("model.visual.pos_embed.weight".into(), vec![cfg.vision_num_position_embeddings, vh]));
+    v.push((
+        "model.visual.pos_embed.weight".into(),
+        vec![cfg.vision_num_position_embeddings, vh],
+    ));
     for b in 0..cfg.vision_depth {
         let p = format!("model.visual.blocks.{b}");
         for n in ["norm1", "norm2"] {
@@ -666,24 +1095,42 @@ pub fn qwen3vl_manifest(cfg: &Qwen3VlConfig) -> Manifest {
         v.push((format!("{p}.attn.qkv.bias"), vec![3 * vh]));
         v.push((format!("{p}.attn.proj.weight"), vec![vh, vh]));
         v.push((format!("{p}.attn.proj.bias"), vec![vh]));
-        v.push((format!("{p}.mlp.linear_fc1.weight"), vec![cfg.vision_intermediate, vh]));
-        v.push((format!("{p}.mlp.linear_fc1.bias"), vec![cfg.vision_intermediate]));
-        v.push((format!("{p}.mlp.linear_fc2.weight"), vec![vh, cfg.vision_intermediate]));
+        v.push((
+            format!("{p}.mlp.linear_fc1.weight"),
+            vec![cfg.vision_intermediate, vh],
+        ));
+        v.push((
+            format!("{p}.mlp.linear_fc1.bias"),
+            vec![cfg.vision_intermediate],
+        ));
+        v.push((
+            format!("{p}.mlp.linear_fc2.weight"),
+            vec![vh, cfg.vision_intermediate],
+        ));
         v.push((format!("{p}.mlp.linear_fc2.bias"), vec![vh]));
     }
     v.push(("model.visual.merger.norm.weight".into(), vec![vh]));
     v.push(("model.visual.merger.norm.bias".into(), vec![vh]));
     v.push(("model.visual.merger.linear_fc1.weight".into(), vec![vm, vm]));
     v.push(("model.visual.merger.linear_fc1.bias".into(), vec![vm]));
-    v.push(("model.visual.merger.linear_fc2.weight".into(), vec![cfg.vision_out_hidden, vm]));
-    v.push(("model.visual.merger.linear_fc2.bias".into(), vec![cfg.vision_out_hidden]));
+    v.push((
+        "model.visual.merger.linear_fc2.weight".into(),
+        vec![cfg.vision_out_hidden, vm],
+    ));
+    v.push((
+        "model.visual.merger.linear_fc2.bias".into(),
+        vec![cfg.vision_out_hidden],
+    ));
     for i in 0..cfg.vision_deepstack.len() {
         let p = format!("model.visual.deepstack_merger_list.{i}");
         v.push((format!("{p}.norm.weight"), vec![vm]));
         v.push((format!("{p}.norm.bias"), vec![vm]));
         v.push((format!("{p}.linear_fc1.weight"), vec![vm, vm]));
         v.push((format!("{p}.linear_fc1.bias"), vec![vm]));
-        v.push((format!("{p}.linear_fc2.weight"), vec![cfg.vision_out_hidden, vm]));
+        v.push((
+            format!("{p}.linear_fc2.weight"),
+            vec![cfg.vision_out_hidden, vm],
+        ));
         v.push((format!("{p}.linear_fc2.bias"), vec![cfg.vision_out_hidden]));
     }
     v
@@ -691,10 +1138,14 @@ pub fn qwen3vl_manifest(cfg: &Qwen3VlConfig) -> Manifest {
 
 /// Names in `manifest` that `src` lacks (plain, quantized or weight-normed).
 pub fn missing(src: &dyn WeightSource, manifest: &[(String, Vec<usize>)]) -> Vec<String> {
+    let table = src.contains(ADALN_TABLE_KEY);
     manifest
         .iter()
         .filter(|(n, _)| {
             if src.contains(n) {
+                return false;
+            }
+            if table && (n.starts_with("time_embedder.") || n == "adaln_basis.weight") {
                 return false;
             }
             if let Some(k) = n.strip_suffix(".weight") {
@@ -720,27 +1171,59 @@ mod tests {
         assert_eq!(manifest_params(&h3_manifest(&cfg, false)), cfg.params());
         let trim = H3Config::fasth3_trim();
         let m = h3_manifest(&trim, true);
-        assert!(m.iter().any(|(n, s)| n == "adaln_basis.weight" && s == &vec![16, 2688]));
-        assert!(m.iter().any(|(n, s)| n == "transformer_blocks.41.adaln_proj.linear.weight" && s == &vec![96768, 16]));
-        assert!(m.iter().any(|(n, s)| n == "transformer_blocks.0.attn.to_gate_compress.weight" && s == &vec![7168, 5376]));
+        assert!(
+            m.iter()
+                .any(|(n, s)| n == "adaln_basis.weight" && s == &vec![16, 2688])
+        );
+        assert!(m.iter().any(
+            |(n, s)| n == "transformer_blocks.41.adaln_proj.linear.weight" && s == &vec![96768, 16]
+        ));
+        assert!(m.iter().any(
+            |(n, s)| n == "transformer_blocks.0.attn.to_gate_compress.weight"
+                && s == &vec![7168, 5376]
+        ));
         let omni = H3Config::fasth3_omni();
         let m = h3_manifest(&omni, true);
-        assert!(m.iter().any(|(n, s)| n == "proj_out.weight" && s == &vec![32 * 96, 5376]));
-        assert!(m.iter().any(|(n, s)| n == "audio_proj_out.bias" && s == &vec![32 * 32]));
+        assert!(
+            m.iter()
+                .any(|(n, s)| n == "proj_out.weight" && s == &vec![32 * 96, 5376])
+        );
+        assert!(
+            m.iter()
+                .any(|(n, s)| n == "audio_proj_out.bias" && s == &vec![32 * 32])
+        );
     }
 
     #[test]
     fn vae_manifests_have_the_checkpoint_shapes() {
         let m = video_vae_manifest(&VideoVaeConfig::h3());
         let has = |n: &str, s: &[usize]| m.iter().any(|(k, v)| k == n && v == s);
-        assert!(has("encoder.down_blocks.1.resnets.0.conv_shortcut.weight", &[256, 128, 1, 1, 1]));
-        assert!(has("encoder.down_blocks.3.downsamplers.0.conv.weight", &[512, 512, 3, 3, 3]));
-        assert!(!m.iter().any(|(k, _)| k.starts_with("encoder.down_blocks.4.downsamplers")));
+        assert!(has(
+            "encoder.down_blocks.1.resnets.0.conv_shortcut.weight",
+            &[256, 128, 1, 1, 1]
+        ));
+        assert!(has(
+            "encoder.down_blocks.3.downsamplers.0.conv.weight",
+            &[512, 512, 3, 3, 3]
+        ));
+        assert!(
+            !m.iter()
+                .any(|(k, _)| k.starts_with("encoder.down_blocks.4.downsamplers"))
+        );
         assert!(has("encoder.conv_out.weight", &[48, 1024, 3, 3, 3]));
         assert!(has("decoder.proj_out.weight", &[3072, 2048]));
-        assert!(has("decoder.transformer_blocks.35.ff.net.0.proj.weight", &[16384, 2048]));
-        assert!(has("decoder.transformer_blocks.35.ff.net.2.weight", &[2048, 8192]));
-        assert!(!m.iter().any(|(k, _)| k.starts_with("decoder.transformer_blocks.36.")));
+        assert!(has(
+            "decoder.transformer_blocks.35.ff.net.0.proj.weight",
+            &[16384, 2048]
+        ));
+        assert!(has(
+            "decoder.transformer_blocks.35.ff.net.2.weight",
+            &[2048, 8192]
+        ));
+        assert!(
+            !m.iter()
+                .any(|(k, _)| k.starts_with("decoder.transformer_blocks.36."))
+        );
 
         let a = audio_vae_manifest(&AudioVaeConfig::h3());
         let has = |n: &str, s: &[usize]| a.iter().any(|(k, v)| k == n && v == s);
@@ -755,31 +1238,139 @@ mod tests {
         assert!(has("pre_block.attn.proj.weight", &[32, 32]));
 
         let t = taeh3_manifest(&TaeH3Config::taeh3());
-        assert!(t.iter().any(|(n, s)| n == "decoder.22.weight" && s == &vec![12, 64, 3, 3]));
-        assert!(t.iter().any(|(n, s)| n == "decoder.13.conv.weight" && s == &vec![256, 128, 1, 1]));
+        assert!(
+            t.iter()
+                .any(|(n, s)| n == "decoder.22.weight" && s == &vec![12, 64, 3, 3])
+        );
+        assert!(
+            t.iter()
+                .any(|(n, s)| n == "decoder.13.conv.weight" && s == &vec![256, 128, 1, 1])
+        );
 
         let u = upscaler_manifest(&UpscalerConfig::regen_2k());
-        assert!(u.iter().any(|(n, s)| n == "in_blocks.1.dwconv.weight" && s == &vec![512, 1, 5, 1, 1]));
-        assert!(u.iter().any(|(n, s)| n == "out_blocks.17.out_layers.2.weight" && s == &vec![512, 512, 3, 3, 3]));
+        assert!(
+            u.iter()
+                .any(|(n, s)| n == "in_blocks.1.dwconv.weight" && s == &vec![512, 1, 5, 1, 1])
+        );
+        assert!(u.iter().any(
+            |(n, s)| n == "out_blocks.17.out_layers.2.weight" && s == &vec![512, 512, 3, 3, 3]
+        ));
         assert!(!u.iter().any(|(n, _)| n.starts_with("in_blocks.18.")));
-        assert!(u.iter().any(|(n, s)| n == "in_blocks.0.emb_layers.1.weight" && s == &vec![1024, 64]));
+        assert!(
+            u.iter()
+                .any(|(n, s)| n == "in_blocks.0.emb_layers.1.weight" && s == &vec![1024, 64])
+        );
 
         let q = qwen3vl_manifest(&Qwen3VlConfig::h3());
-        assert!(q.iter().any(|(n, s)| n == "model.language_model.layers.49.mlp.down_proj.weight" && s == &vec![5120, 25600]));
-        assert!(!q.iter().any(|(n, _)| n.starts_with("model.language_model.layers.50.")));
-        assert!(q.iter().any(|(n, s)| n == "model.visual.deepstack_merger_list.2.norm.weight" && s == &vec![4608]));
-        assert!(q.iter().any(|(n, s)| n == "model.visual.patch_embed.proj.weight" && s == &vec![1152, 3, 2, 16, 16]));
+        assert!(q.iter().any(
+            |(n, s)| n == "model.language_model.layers.49.mlp.down_proj.weight"
+                && s == &vec![5120, 25600]
+        ));
+        assert!(
+            !q.iter()
+                .any(|(n, _)| n.starts_with("model.language_model.layers.50."))
+        );
+        assert!(q.iter().any(
+            |(n, s)| n == "model.visual.deepstack_merger_list.2.norm.weight" && s == &vec![4608]
+        ));
+        assert!(
+            q.iter()
+                .any(|(n, s)| n == "model.visual.patch_embed.proj.weight"
+                    && s == &vec![1152, 3, 2, 16, 16])
+        );
+    }
+
+    #[test]
+    fn comfy_keys_map_to_the_single_file_layout() {
+        use ComfyPart::*;
+        let k = |n: &str| comfy_h3_key(n);
+        assert_eq!(
+            k("transformer_blocks.3.attn.to_k.weight"),
+            Some(("blocks.3.attn.qkv_proj.weight".into(), Third(1)))
+        );
+        assert_eq!(
+            k("transformer_blocks.3.ff.net.0.proj.weight"),
+            Some(("blocks.3.mlp.fc1.weight".into(), SwapHalves))
+        );
+        assert_eq!(
+            k("transformer_blocks.3.ff.net.2.weight"),
+            Some(("blocks.3.mlp.fc2.weight".into(), Whole))
+        );
+        assert_eq!(
+            k("transformer_blocks.3.attn.to_out.0.weight"),
+            Some(("blocks.3.attn.out_proj.weight".into(), Whole))
+        );
+        assert_eq!(
+            k("transformer_blocks.3.attn.norm_q.weight"),
+            Some(("blocks.3.attn.q_norm.weight".into(), Whole))
+        );
+        assert_eq!(
+            k("transformer_blocks.3.adaln_proj.linear.bias"),
+            Some(("blocks.3.adaln_proj.linear.bias".into(), Whole))
+        );
+        assert_eq!(
+            k("token_refiner.refiner_blocks.1.attn.to_v.weight"),
+            Some((
+                "token_refiner.blocks.1.attn.qkv_proj.weight".into(),
+                Third(2)
+            ))
+        );
+        assert_eq!(
+            k("token_refiner.final_norm.weight"),
+            Some(("token_refiner.final_norm.weight".into(), Whole))
+        );
+        assert_eq!(
+            k("proj_in.bias"),
+            Some(("video_patch_proj.bias".into(), Whole))
+        );
+        assert_eq!(
+            k("audio_proj_out.weight"),
+            Some(("final_layer.audio_out.weight".into(), Whole))
+        );
+        assert_eq!(
+            k("norm_out.linear.weight"),
+            Some(("final_layer.adaln_proj.linear.weight".into(), Whole))
+        );
+        assert_eq!(
+            k("norm_out.norm.weight"),
+            Some(("final_layer.norm.weight".into(), Whole))
+        );
+        assert_eq!(
+            k("context_embedder.weight"),
+            Some(("condition_proj.weight".into(), Whole))
+        );
+        assert_eq!(k(ADALN_TABLE_KEY), Some((ADALN_TABLE_KEY.into(), Whole)));
+        assert_eq!(k("time_embedder.linear_1.weight"), None);
+        assert_eq!(k("adaln_basis.weight"), None);
     }
 
     #[test]
     fn nvfp4_module_names() {
-        assert_eq!(nvfp4_module("transformer_blocks.3.ff.net.0.proj"), "transformer_blocks.3.ff.fc_in");
-        assert_eq!(nvfp4_module("transformer_blocks.3.ff.net.2"), "transformer_blocks.3.ff.fc_out");
-        assert_eq!(nvfp4_module("transformer_blocks.3.attn.to_out.0"), "transformer_blocks.3.attn.to_out");
-        assert_eq!(nvfp4_module("transformer_blocks.3.attn.to_q"), "transformer_blocks.3.attn.to_q");
-        assert_eq!(vae_source_key("decoder.transformer_blocks.2.ff.net.2.weight"), "blocks.2.ff.w2.weight");
+        assert_eq!(
+            nvfp4_module("transformer_blocks.3.ff.net.0.proj"),
+            "transformer_blocks.3.ff.fc_in"
+        );
+        assert_eq!(
+            nvfp4_module("transformer_blocks.3.ff.net.2"),
+            "transformer_blocks.3.ff.fc_out"
+        );
+        assert_eq!(
+            nvfp4_module("transformer_blocks.3.attn.to_out.0"),
+            "transformer_blocks.3.attn.to_out"
+        );
+        assert_eq!(
+            nvfp4_module("transformer_blocks.3.attn.to_q"),
+            "transformer_blocks.3.attn.to_q"
+        );
+        assert_eq!(
+            vae_source_key("decoder.transformer_blocks.2.ff.net.2.weight"),
+            "blocks.2.ff.w2.weight"
+        );
         assert_eq!(vae_source_key("decoder.proj_in.bias"), "x_embedder.bias");
-        assert_eq!(vae_source_key("post_quant_conv.weight"), "post_quant_conv.weight");
+        assert_eq!(
+            vae_source_key("post_quant_conv.weight"),
+            "post_quant_conv.weight"
+        );
     }
 
     #[test]
@@ -791,9 +1382,20 @@ mod tests {
     #[test]
     fn synthetic_is_deterministic() {
         let s = Synthetic { seed: 1 };
-        assert_eq!(s.get("a.weight", &[4, 4]).unwrap(), s.get("a.weight", &[4, 4]).unwrap());
-        assert_ne!(s.get("a.weight", &[4, 4]).unwrap(), s.get("b.weight", &[4, 4]).unwrap());
-        assert!(s.get("x.norm1.weight", &[4]).unwrap().iter().all(|v| (v - 1.0).abs() <= 0.1));
+        assert_eq!(
+            s.get("a.weight", &[4, 4]).unwrap(),
+            s.get("a.weight", &[4, 4]).unwrap()
+        );
+        assert_ne!(
+            s.get("a.weight", &[4, 4]).unwrap(),
+            s.get("b.weight", &[4, 4]).unwrap()
+        );
+        assert!(
+            s.get("x.norm1.weight", &[4])
+                .unwrap()
+                .iter()
+                .all(|v| (v - 1.0).abs() <= 0.1)
+        );
     }
 
     #[test]
@@ -801,15 +1403,25 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("h3-st-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let vals = [1.0f32, -2.5, 0.125, 3.0];
-        let bytes: Vec<u8> = vals.iter().flat_map(|&v| half::bf16::from_f32(v).to_le_bytes()).collect();
-        let view = safetensors::tensor::TensorView::new(safetensors::Dtype::BF16, vec![2, 2], &bytes).unwrap();
+        let bytes: Vec<u8> = vals
+            .iter()
+            .flat_map(|&v| half::bf16::from_f32(v).to_le_bytes())
+            .collect();
+        let view =
+            safetensors::tensor::TensorView::new(safetensors::Dtype::BF16, vec![2, 2], &bytes)
+                .unwrap();
         // An NVFP4 linear: 128 rows × 32 cols, scales padded [128, 4].
         let codes = vec![0x21u8; 128 * 16]; // cols 2i → code 1 (0.5), 2i+1 → code 2 (1.0)
         let scales = vec![0x38u8; 128 * 4]; // 1.0
         let alpha = 2.0f32.to_le_bytes().to_vec();
-        let cview = safetensors::tensor::TensorView::new(safetensors::Dtype::U8, vec![128, 16], &codes).unwrap();
-        let sview = safetensors::tensor::TensorView::new(safetensors::Dtype::U8, vec![128, 4], &scales).unwrap();
-        let aview = safetensors::tensor::TensorView::new(safetensors::Dtype::F32, vec![], &alpha).unwrap();
+        let cview =
+            safetensors::tensor::TensorView::new(safetensors::Dtype::U8, vec![128, 16], &codes)
+                .unwrap();
+        let sview =
+            safetensors::tensor::TensorView::new(safetensors::Dtype::U8, vec![128, 4], &scales)
+                .unwrap();
+        let aview =
+            safetensors::tensor::TensorView::new(safetensors::Dtype::F32, vec![], &alpha).unwrap();
         safetensors::serialize_to_file(
             [
                 ("w", view),
@@ -835,7 +1447,16 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
-        assert!(missing(&src, &[("transformer_blocks.0.ff.net.0.proj.weight".into(), vec![128, 32])]).is_empty());
+        assert!(
+            missing(
+                &src,
+                &[(
+                    "transformer_blocks.0.ff.net.0.proj.weight".into(),
+                    vec![128, 32]
+                )]
+            )
+            .is_empty()
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 }

@@ -1,0 +1,148 @@
++ O=/root/out
++ mkdir -p /root/out
++ cd /root
++ nvidia-smi --query-gpu=name,driver_version,power.limit,memory.total --format=csv,noheader
+NVIDIA GeForce RTX 5090, 595.91.07, 575.00 W, 32607 MiB
+++ seq 1 80
++ for i in $(seq 1 80)
++ curl -sf -o /w/h3-bin-good 'https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/runpod-20261113-5090h/h3-bin-good?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261113%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261113T184040Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=8a268080653e52c6debf9a2357707dc0afde476dc2ab19a102deb0262e91da0e'
++ break
++ curl -sf -o /w/h3-bin-good 'https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/runpod-20261113-5090h/h3-bin-good?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261113%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261113T184040Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=8a268080653e52c6debf9a2357707dc0afde476dc2ab19a102deb0262e91da0e'
++ chmod +x /w/h3-bin-good
++ echo 'good binary ok'
+good binary ok
++ cat
++ PUT=(['v2-new-trace.log']='https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/runpod-20261113-5090h/results/v2-new-trace.log?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261113%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261113T184125Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=a19b513236319f87e1e8b399418d839014ae858041cf2aba37a5c41e97d62b39' ['v2-new-trace.grid.png']='https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/runpod-20261113-5090h/results/v2-new-trace.grid.png?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261113%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261113T184126Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=af5ee32b6aa92e69f0a3611aaa2ee90938e8694b37615c9e6960b469fa278d4d' ['v2-good.log']='https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/runpod-20261113-5090h/results/v2-good.log?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261113%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261113T184126Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=b769fd92d5584340181e7ab9ede90eb1730dae115556b708112176b77ad189e3' ['v2-good.grid.png']='https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/runpod-20261113-5090h/results/v2-good.grid.png?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261113%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261113T184126Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=95c7030abc9639b2b84c1ea2720ac10cdcc6e1e28df6c27710249d0d6af6d810' ['base2-new-trace.log']='https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/runpod-20261113-5090h/results/base2-new-trace.log?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261113%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261113T184126Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=2dbc52ebfa03e1296fc92f0386f668d7bcf9dfe06b5a1223c2183d52472c190d' ['base2-new-trace.grid.png']='https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/runpod-20261113-5090h/results/base2-new-trace.grid.png?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261113%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261113T184127Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=4f07782218922b58e7f9219b967aa770d2465d45836f56a3fae4b5a496fea7dc' ['all.log']='https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/runpod-20261113-5090h/results/all.log?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261113%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261113T184127Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=f0eab7e1aaf4862a1be32c59181b635e3878206faf5f9bd0d330b5ac2d9e031e')
++ declare -A PUT
++ T=/workspace/h3-rs/tables
++ MX=/w/h3-8step-mxfp8/transformer.safetensors
++ V2='--variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --tables /workspace/h3-rs/tables/v2.tables --stream-blocks'
++ BASE='--variant h3 --model-dir /w/h3-base --weights mxfp8 --decoder-weights mxfp8 --attention dense --stream-blocks'
++ H3_TRACE=1
++ run v2-new-trace h3-bin 1200 --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --tables /workspace/h3-rs/tables/v2.tables --stream-blocks
++ n=v2-new-trace
++ b=h3-bin
++ t=1200
++ shift 3
++ echo '== v2-new-trace (h3-bin): --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --tables /workspace/h3-rs/tables/v2.tables --stream-blocks'
+== v2-new-trace (h3-bin): --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --tables /workspace/h3-rs/tables/v2.tables --stream-blocks
++ echo 'exit 0'
+exit 0
++ grep -E '^cuda|^load|prompt:|^run |rror|panick|warning|real|non-finite [1-9]' /root/out/v2-new-trace.log
++ head -40
+cuda NVIDIA GeForce RTX 5090 (sm_120)
+load 27.0s
+prompt: 462 rows in 70.6s
+trace step 1 video: max 0.0000e0, non-finite 3580416 of 3580416
+trace step 1 audio: max 0.0000e0, non-finite 13248 of 13248
+trace step 2 video: max 0.0000e0, non-finite 3580416 of 3580416
+trace step 2 audio: max 0.0000e0, non-finite 13248 of 13248
+trace step 3 video: max 0.0000e0, non-finite 3580416 of 3580416
+trace step 3 audio: max 0.0000e0, non-finite 13248 of 13248
+trace step 4 video: max 0.0000e0, non-finite 3580416 of 3580416
+trace step 4 audio: max 0.0000e0, non-finite 13248 of 13248
+trace step 5 video: max 0.0000e0, non-finite 3580416 of 3580416
+trace step 5 audio: max 0.0000e0, non-finite 13248 of 13248
+trace step 6 video: max 0.0000e0, non-finite 3580416 of 3580416
+trace step 6 audio: max 0.0000e0, non-finite 13248 of 13248
+trace step 7 video: max 0.0000e0, non-finite 3580416 of 3580416
+trace step 7 audio: max 0.0000e0, non-finite 13248 of 13248
+run 0: total 120.54s  prepare 0.25s  adaln 0.00s  denoise 114.03s (["68.39", "6.51", "6.59", "6.48", "6.49", "6.56", "6.53", "6.47"])  decode 6.01s  audio 0.18s
+real	3m50.160s
++ grep -E '^trace' /root/out/v2-new-trace.log
++ awk '{print $2, $3, $4, $5, $6}'
++ head -3
+input h: max 1.2100e2, non-finite
+block 0 attn: max 5.6250e1,
+block 0 h: max 1.0957e5,
+++ stats /root/out/v2-new-trace.y4m
+++ ffmpeg -v info -i /root/out/v2-new-trace.y4m -frames:v 2 -vf signalstats,metadata=print:key=lavfi.signalstats.YAVG -f null -
+++ head -2
+++ grep -o 'YAVG=[0-9.]*'
+++ tr '\n' ' '
++ echo 'luma: YAVG=0 YAVG=0 '
+luma: YAVG=0 YAVG=0 
++ '[' -f /root/out/v2-new-trace.y4m ']'
++ grid /root/out/v2-new-trace.y4m /root/out/v2-new-trace.grid.png
++ ffmpeg -loglevel error -y -i /root/out/v2-new-trace.y4m -vf 'select='\''eq(n\,0)+eq(n\,40)+eq(n\,80)+eq(n\,120)'\'',scale=448:-1,tile=2x2' -vframes 1 /root/out/v2-new-trace.grid.png
++ curl -s -X PUT --upload-file /root/out/v2-new-trace.grid.png 'https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/runpod-20261113-5090h/results/v2-new-trace.grid.png?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261113%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261113T184126Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=af5ee32b6aa92e69f0a3611aaa2ee90938e8694b37615c9e6960b469fa278d4d'
++ curl -s -X PUT --upload-file /root/out/v2-new-trace.log 'https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/runpod-20261113-5090h/results/v2-new-trace.log?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261113%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261113T184125Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=a19b513236319f87e1e8b399418d839014ae858041cf2aba37a5c41e97d62b39'
++ rm -f /root/out/v2-new-trace.y4m /root/out/v2-new-trace.wav
++ run v2-good h3-bin-good 1200 --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --tables /workspace/h3-rs/tables/v2.tables --stream-blocks
++ n=v2-good
++ b=h3-bin-good
++ t=1200
++ shift 3
++ echo '== v2-good (h3-bin-good): --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --tables /workspace/h3-rs/tables/v2.tables --stream-blocks'
+== v2-good (h3-bin-good): --variant fasth3-v2 --model-dir /w/h3-8step --transformer /w/h3-8step-mxfp8/transformer.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --tables /workspace/h3-rs/tables/v2.tables --stream-blocks
++ echo 'exit 0'
+exit 0
++ grep -E '^cuda|^load|prompt:|^run |rror|panick|warning|real|non-finite [1-9]' /root/out/v2-good.log
++ head -40
+cuda NVIDIA GeForce RTX 5090 (sm_120)
+load 29.6s
+prompt: 462 rows in 74.0s
+run 0: total 59.26s  prepare 0.32s  adaln 0.00s  denoise 52.54s (["6.88", "6.50", "6.47", "6.46", "6.59", "6.60", "6.56", "6.48"])  decode 6.15s  audio 0.18s
+real	2m53.519s
++ grep -E '^trace' /root/out/v2-good.log
++ awk '{print $2, $3, $4, $5, $6}'
++ head -3
+++ stats /root/out/v2-good.y4m
+++ ffmpeg -v info -i /root/out/v2-good.y4m -frames:v 2 -vf signalstats,metadata=print:key=lavfi.signalstats.YAVG -f null -
+++ grep -o 'YAVG=[0-9.]*'
+++ head -2
+++ tr '\n' ' '
++ echo 'luma: YAVG=0 YAVG=0 '
+luma: YAVG=0 YAVG=0 
++ '[' -f /root/out/v2-good.y4m ']'
++ grid /root/out/v2-good.y4m /root/out/v2-good.grid.png
++ ffmpeg -loglevel error -y -i /root/out/v2-good.y4m -vf 'select='\''eq(n\,0)+eq(n\,40)+eq(n\,80)+eq(n\,120)'\'',scale=448:-1,tile=2x2' -vframes 1 /root/out/v2-good.grid.png
++ curl -s -X PUT --upload-file /root/out/v2-good.grid.png 'https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/runpod-20261113-5090h/results/v2-good.grid.png?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261113%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261113T184126Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=95c7030abc9639b2b84c1ea2720ac10cdcc6e1e28df6c27710249d0d6af6d810'
++ curl -s -X PUT --upload-file /root/out/v2-good.log 'https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/runpod-20261113-5090h/results/v2-good.log?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261113%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261113T184126Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=b769fd92d5584340181e7ab9ede90eb1730dae115556b708112176b77ad189e3'
++ rm -f /root/out/v2-good.y4m /root/out/v2-good.wav
++ H3_TRACE=1
++ run base2-new-trace h3-bin 1500 --variant h3 --model-dir /w/h3-base --weights mxfp8 --decoder-weights mxfp8 --attention dense --stream-blocks --steps 2
++ n=base2-new-trace
++ b=h3-bin
++ t=1500
++ shift 3
++ echo '== base2-new-trace (h3-bin): --variant h3 --model-dir /w/h3-base --weights mxfp8 --decoder-weights mxfp8 --attention dense --stream-blocks --steps 2'
+== base2-new-trace (h3-bin): --variant h3 --model-dir /w/h3-base --weights mxfp8 --decoder-weights mxfp8 --attention dense --stream-blocks --steps 2
++ echo 'exit 0'
+exit 0
++ head -40
++ grep -E '^cuda|^load|prompt:|^run |rror|panick|warning|real|non-finite [1-9]' /root/out/base2-new-trace.log
+cuda NVIDIA GeForce RTX 5090 (sm_120)
+load 94.1s
+prompt: 462 rows in 208.6s
+trace step 1 video: max 0.0000e0, non-finite 3580416 of 3580416
+trace step 1 audio: max 0.0000e0, non-finite 13248 of 13248
+run 0: total 135.61s  prepare 0.02s  adaln 41.40s  denoise 87.94s (["75.07", "12.87"])  decode 6.00s  audio 0.18s
+real	7m25.936s
++ grep -E '^trace' /root/out/base2-new-trace.log
++ head -3
++ awk '{print $2, $3, $4, $5, $6}'
+input h: max 1.2050e2, non-finite
+block 0 attn: max 5.4750e1,
+block 0 h: max 1.1110e5,
+++ stats /root/out/base2-new-trace.y4m
+++ ffmpeg -v info -i /root/out/base2-new-trace.y4m -frames:v 2 -vf signalstats,metadata=print:key=lavfi.signalstats.YAVG -f null -
+++ grep -o 'YAVG=[0-9.]*'
+++ tr '\n' ' '
+++ head -2
++ echo 'luma: YAVG=0 YAVG=0 '
+luma: YAVG=0 YAVG=0 
++ '[' -f /root/out/base2-new-trace.y4m ']'
++ grid /root/out/base2-new-trace.y4m /root/out/base2-new-trace.grid.png
++ ffmpeg -loglevel error -y -i /root/out/base2-new-trace.y4m -vf 'select='\''eq(n\,0)+eq(n\,40)+eq(n\,80)+eq(n\,120)'\'',scale=448:-1,tile=2x2' -vframes 1 /root/out/base2-new-trace.grid.png
++ curl -s -X PUT --upload-file /root/out/base2-new-trace.grid.png 'https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/runpod-20261113-5090h/results/base2-new-trace.grid.png?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261113%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261113T184127Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=4f07782218922b58e7f9219b967aa770d2465d45836f56a3fae4b5a496fea7dc'
++ curl -s -X PUT --upload-file /root/out/base2-new-trace.log 'https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/runpod-20261113-5090h/results/base2-new-trace.log?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261113%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261113T184126Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=2dbc52ebfa03e1296fc92f0386f668d7bcf9dfe06b5a1223c2183d52472c190d'
++ rm -f /root/out/base2-new-trace.y4m /root/out/base2-new-trace.wav
++ cat /root/out/base2-new-trace.log /root/out/v2-good.log /root/out/v2-new-trace.log
++ curl -s -X PUT --upload-file /root/out/all.log 'https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/runpod-20261113-5090h/results/all.log?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261113%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261113T184127Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=f0eab7e1aaf4862a1be32c59181b635e3878206faf5f9bd0d330b5ac2d9e031e'
++ echo 'debug done; terminating pod 1vinrib42j65l9'
+debug done; terminating pod 1vinrib42j65l9
++ terminate
++ '[' -n 'https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/runpod-20261113-5090h/out/1.log?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261113%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261113T184124Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=0fd23910b3855bba14f8caddd9d67258f1730a138a18fd9c422cddcc8439a80f' ']'
++ up /root/out.log 'https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/runpod-20261113-5090h/out/1.log?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261113%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261113T184124Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=0fd23910b3855bba14f8caddd9d67258f1730a138a18fd9c422cddcc8439a80f'
++ curl -s -X PUT --upload-file /root/out.log 'https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/h3-runs/runpod-20261113-5090h/out/1.log?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=f398485e5c4812e2277ed2999833e6ed%2F20261113%2Fauto%2Fs3%2Faws4_request&X-Amz-Date=20261113T184124Z&X-Amz-Expires=21600&X-Amz-SignedHeaders=host&X-Amz-Signature=0fd23910b3855bba14f8caddd9d67258f1730a138a18fd9c422cddcc8439a80f'

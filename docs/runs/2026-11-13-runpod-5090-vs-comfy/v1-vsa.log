@@ -1,0 +1,20 @@
+++ cat /root/p5.txt
++ timeout 1500 /w/h3-bin generate --backend cuda --seed 1 --width 1344 --height 768 --prompt 'integrated_multimodal_description: [Shot 1] Live-action, cinematic, a medium-wide shot frames an elderly Japanese samurai standing in the open stone courtyard of a temple in light, steady rain, facing the camera squarely under grey overcast daylight, framed from the knees up. He is around seventy, with a deeply lined, weathered face, a thin white beard and mustache, and a full head of thick, long, loose grey-white hair falling from the crown of his head past his shoulders, damp strands lifting and swaying in the wind; he wears a dark indigo kimono over grey hakama, with a katana and a shorter sword tucked through the sash at his left hip. Fine rain streaks fall through the whole frame and small droplets splash on the wet flagstones, while the dark wooden pillars and pale paper shoji screens of the temple hall stand behind him. Keeping his eyes on the lens, he raises both forearms and crosses them firmly at the wrists in an X in front of his chest, open hands flat with fingers together, the wide wet sleeves sliding back along his forearms, as the elderly samurai with a low, gravelly, unhurried voice (S1) says: <d>[English] No.</d> The camera pans right with small amplitude at slow speed while he holds the crossed arms, the pillars drifting across the background behind the falling rain. He lowers his arms to his sides, and the camera pushes in with large amplitude toward his face, ending on a tight close-up in which the wrinkles around his eyes, the individual white beard hairs, wet strands of long hair clinging to his cheek, and raindrops running down his skin are sharply visible, as he (S1) continues, lips moving clearly: <d>[English] A blade drawn in anger cuts its owner first.</d> He holds a steady gaze into the lens as the rain keeps falling.
+
+overall_soundscape: Light, steady rain patters on the stone courtyard and the temple roof tiles, with water trickling from the eaves and a low wind passing through. Heavy damp fabric rustles as the sleeves slide back and the forearms cross, and small droplets splash on the flagstones.
+
+non_diegetic_music: N/A' --out /root/out/v1-vsa.y4m --variant fasth3-v1 --model-dir /w/h3-base --adapter /w/FastH3-4-step-Preview-v1-LoRA/vsa-datafree/adapter_model.safetensors --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --stream-blocks --tables /workspace/h3-rs/tables/v1-vsa.tables --frames 124
+cuda NVIDIA GeForce RTX 5090 (sm_120)
+load 86.4s
+prompt: 462 rows in 76.5s
+step 1/4 14.68s
+step 2/4 14.40s
+step 3/4 14.41s
+step 4/4 14.36s
+run 0: total 64.52s  prepare 0.22s  adaln 0.00s  denoise 57.86s (["14.68", "14.40", "14.41", "14.36"])  decode 6.19s  audio 0.18s
+wrote /root/out/v1-vsa.y4m (124 frames 1344x768) and /root/out/v1-vsa.wav
+mux: ffmpeg -i /root/out/v1-vsa.y4m -i /root/out/v1-vsa.wav -c:v libx264 -pix_fmt yuv420p -c:a aac /root/out/v1-vsa.mp4
+
+real	3m53.877s
+user	5m42.096s
+sys	1m55.800s

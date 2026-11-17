@@ -22,7 +22,11 @@ fn fallback_attention_and_buffer_ops() {
     let Some(be) = open() else { return };
     let cpu = h3_cpu::Cpu;
     let mut rng = Rng::new(7);
-    for &(heads, kv, sq, sk, d, causal) in &[(4usize, 2usize, 70usize, 70usize, 72usize, false), (3, 1, 33, 40, 24, true), (2, 2, 130, 130, 72, true)] {
+    for &(heads, kv, sq, sk, d, causal) in &[
+        (4usize, 2usize, 70usize, 70usize, 72usize, false),
+        (3, 1, 33, 40, 24, true),
+        (2, 2, 130, 130, 72, true),
+    ] {
         let q = rng.normal(heads * sq * d);
         let k = rng.normal(kv * sk * d);
         let v = rng.normal(kv * sk * d);
@@ -45,14 +49,47 @@ fn fallback_attention_and_buffer_ops() {
 
 trait Run {
     #[allow(clippy::too_many_arguments)]
-    fn attn(&self, q: &[f32], k: &[f32], v: &[f32], heads: usize, kv: usize, sq: usize, sk: usize, d: usize, causal: bool) -> Vec<f32>;
+    fn attn(
+        &self,
+        q: &[f32],
+        k: &[f32],
+        v: &[f32],
+        heads: usize,
+        kv: usize,
+        sq: usize,
+        sk: usize,
+        d: usize,
+        causal: bool,
+    ) -> Vec<f32>;
 }
 struct W<'a, B: Backend>(&'a B);
 impl<B: Backend> Run for W<'_, B> {
-    fn attn(&self, q: &[f32], k: &[f32], v: &[f32], heads: usize, kv: usize, sq: usize, sk: usize, d: usize, causal: bool) -> Vec<f32> {
+    fn attn(
+        &self,
+        q: &[f32],
+        k: &[f32],
+        v: &[f32],
+        heads: usize,
+        kv: usize,
+        sq: usize,
+        sk: usize,
+        d: usize,
+        causal: bool,
+    ) -> Vec<f32> {
         let be = self.0;
         let o = be.alloc(sq * heads * d);
-        be.attention(&be.upload(q), &be.upload(k), &be.upload(v), heads, kv, sq, sk, d, causal, &o);
+        be.attention(
+            &be.upload(q),
+            &be.upload(k),
+            &be.upload(v),
+            heads,
+            kv,
+            sq,
+            sk,
+            d,
+            causal,
+            &o,
+        );
         be.download(&o)
     }
 }

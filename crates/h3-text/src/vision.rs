@@ -21,14 +21,25 @@ pub const PATCH_FEATURES: usize = 3 * TEMPORAL_PATCH * PATCH * PATCH;
 /// Python's round-half-even for the processor's `round(x / factor)`.
 fn round_half_even(x: f64) -> f64 {
     let r = x.round();
-    if (x - x.trunc()).abs() == 0.5 && (r as i64) % 2 != 0 { r - x.signum() } else { r }
+    if (x - x.trunc()).abs() == 0.5 && (r as i64) % 2 != 0 {
+        r - x.signum()
+    } else {
+        r
+    }
 }
 
 /// Qwen2-VL `smart_resize` for one image.
-pub fn smart_resize(height: usize, width: usize, min_pixels: usize, max_pixels: usize) -> Result<(usize, usize)> {
+pub fn smart_resize(
+    height: usize,
+    width: usize,
+    min_pixels: usize,
+    max_pixels: usize,
+) -> Result<(usize, usize)> {
     let (h, w, f) = (height as f64, width as f64, FACTOR as f64);
     if h.max(w) / h.min(w) > 200.0 {
-        return Err(Error::Geometry("absolute aspect ratio must be below 200".into()));
+        return Err(Error::Geometry(
+            "absolute aspect ratio must be below 200".into(),
+        ));
     }
     let mut hb = round_half_even(h / f) * f;
     let mut wb = round_half_even(w / f) * f;
@@ -45,7 +56,13 @@ pub fn smart_resize(height: usize, width: usize, min_pixels: usize, max_pixels: 
 }
 
 /// Qwen3-VL video `smart_resize`: the budget is over all frames.
-pub fn smart_resize_video(frames: usize, height: usize, width: usize, min_pixels: usize, max_pixels: usize) -> Result<(usize, usize)> {
+pub fn smart_resize_video(
+    frames: usize,
+    height: usize,
+    width: usize,
+    min_pixels: usize,
+    max_pixels: usize,
+) -> Result<(usize, usize)> {
     if frames < TEMPORAL_PATCH {
         return Err(Error::Geometry("a video needs at least two frames".into()));
     }
@@ -57,7 +74,9 @@ pub fn smart_resize_video(frames: usize, height: usize, width: usize, min_pixels
         w = (w * s).trunc();
     }
     if h.max(w) / h.min(w) > 200.0 {
-        return Err(Error::Geometry("absolute aspect ratio must be below 200".into()));
+        return Err(Error::Geometry(
+            "absolute aspect ratio must be below 200".into(),
+        ));
     }
     let mut hb = round_half_even(h / f) * f;
     let mut wb = round_half_even(w / f) * f;
@@ -134,7 +153,10 @@ fn patchify(frames: &[Vec<f32>], height: usize, width: usize) -> VisionInput {
             }
         }
     }
-    VisionInput { patches: out, grid: (gt, gh, gw) }
+    VisionInput {
+        patches: out,
+        grid: (gt, gh, gw),
+    }
 }
 
 /// Preprocess one image (`Qwen2VLImageProcessor` with the released bounds).
@@ -147,8 +169,17 @@ pub fn preprocess_image(im: &Image) -> Result<VisionInput> {
 /// Preprocess sampled video frames (`Qwen3VLVideoProcessor`, no frame
 /// resampling: the caller already picked the 2 fps frames).
 pub fn preprocess_video(frames: &[Image]) -> Result<VisionInput> {
-    let (h, w) = smart_resize_video(frames.len(), frames[0].height, frames[0].width, VIDEO_MIN_PIXELS, VIDEO_MAX_PIXELS)?;
-    let fr: Vec<Vec<f32>> = frames.iter().map(|f| normalized(&f.resize(w, h, Filter::Bicubic))).collect();
+    let (h, w) = smart_resize_video(
+        frames.len(),
+        frames[0].height,
+        frames[0].width,
+        VIDEO_MIN_PIXELS,
+        VIDEO_MAX_PIXELS,
+    )?;
+    let fr: Vec<Vec<f32>> = frames
+        .iter()
+        .map(|f| normalized(&f.resize(w, h, Filter::Bicubic)))
+        .collect();
     Ok(patchify(&fr, h, w))
 }
 
@@ -158,12 +189,27 @@ mod tests {
 
     #[test]
     fn resize_rules_and_patch_layout() {
-        assert_eq!(smart_resize(768, 1344, IMAGE_MIN_PIXELS, IMAGE_MAX_PIXELS).unwrap(), (768, 1344));
-        assert_eq!(smart_resize(2048, 3648, IMAGE_MIN_PIXELS, IMAGE_MAX_PIXELS).unwrap(), (2048, 3648));
-        assert_eq!(smart_resize(100, 100, IMAGE_MIN_PIXELS, IMAGE_MAX_PIXELS).unwrap(), (256, 256));
-        assert_eq!(smart_resize(5000, 5000, IMAGE_MIN_PIXELS, IMAGE_MAX_PIXELS).unwrap(), (4096, 4096));
+        assert_eq!(
+            smart_resize(768, 1344, IMAGE_MIN_PIXELS, IMAGE_MAX_PIXELS).unwrap(),
+            (768, 1344)
+        );
+        assert_eq!(
+            smart_resize(2048, 3648, IMAGE_MIN_PIXELS, IMAGE_MAX_PIXELS).unwrap(),
+            (2048, 3648)
+        );
+        assert_eq!(
+            smart_resize(100, 100, IMAGE_MIN_PIXELS, IMAGE_MAX_PIXELS).unwrap(),
+            (256, 256)
+        );
+        assert_eq!(
+            smart_resize(5000, 5000, IMAGE_MIN_PIXELS, IMAGE_MAX_PIXELS).unwrap(),
+            (4096, 4096)
+        );
         // 24 frames of 1344×768 fit the video budget; 30 do not.
-        assert_eq!(smart_resize_video(24, 768, 1344, VIDEO_MIN_PIXELS, VIDEO_MAX_PIXELS).unwrap(), (768, 1344));
+        assert_eq!(
+            smart_resize_video(24, 768, 1344, VIDEO_MIN_PIXELS, VIDEO_MAX_PIXELS).unwrap(),
+            (768, 1344)
+        );
         let (h, w) = smart_resize_video(30, 768, 1344, VIDEO_MIN_PIXELS, VIDEO_MAX_PIXELS).unwrap();
         assert!(h < 768 && w < 1344 && h % 32 == 0 && w % 32 == 0);
         // 256×256: already on the lattice and above the 65536-pixel minimum, so

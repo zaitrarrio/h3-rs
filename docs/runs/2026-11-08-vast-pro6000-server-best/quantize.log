@@ -1,0 +1,6 @@
++ timeout 3000 /w/h3-bin quantize --variant fasth3-v2 --model-dir /w/h3 --weights mxfp8 --skip-adaln --out /w/v2-mx8.safetensors
+mxfp8: 903 tensors, 25.600 GB -> /w/v2-mx8.safetensors in 46.9s
+
+real	0m48.292s
+user	2m54.252s
+sys	0m28.783s

@@ -6,7 +6,6 @@
 //! reference keeps it in fp32 too).
 
 use crate::linear::Linear;
-use h3_cpu::gelu_tanh;
 use h3_core::{
     Error, Result,
     backend::{Backend, Conv1dShape, ConvEpilogue, ConvT1dShape, Snake},
@@ -15,6 +14,7 @@ use h3_core::{
     timestep::matvec,
     weights::WeightSource,
 };
+use h3_cpu::gelu_tanh;
 
 /// Filter length of the anti-aliasing resamplers.
 pub const AA_KERNEL: usize = 12;
@@ -28,11 +28,23 @@ struct Conv<B: Backend> {
     k: usize,
 }
 
-fn conv<B: Backend>(be: &B, src: &dyn WeightSource, key: &str, cout: usize, cin: usize, k: usize, bias: bool) -> Result<Conv<B>> {
+fn conv<B: Backend>(
+    be: &B,
+    src: &dyn WeightSource,
+    key: &str,
+    cout: usize,
+    cin: usize,
+    k: usize,
+    bias: bool,
+) -> Result<Conv<B>> {
     let w = src.conv_weight(key, &[cout, cin, k])?;
     Ok(Conv {
         w: be.weight(&w, cout, cin * k),
-        b: if bias { Some(be.upload(&src.get(&format!("{key}.bias"), &[cout])?)) } else { None },
+        b: if bias {
+            Some(be.upload(&src.get(&format!("{key}.bias"), &[cout])?))
+        } else {
+            None
+        },
         cin,
         cout,
         k,
@@ -40,9 +52,22 @@ fn conv<B: Backend>(be: &B, src: &dyn WeightSource, key: &str, cout: usize, cin:
 }
 
 /// A transposed convolution (`[cin, cout, k]` as stored).
-fn conv_t<B: Backend>(be: &B, src: &dyn WeightSource, key: &str, cin: usize, cout: usize, k: usize) -> Result<Conv<B>> {
+fn conv_t<B: Backend>(
+    be: &B,
+    src: &dyn WeightSource,
+    key: &str,
+    cin: usize,
+    cout: usize,
+    k: usize,
+) -> Result<Conv<B>> {
     let w = src.conv_weight(key, &[cin, cout, k])?;
-    Ok(Conv { w: be.weight(&w, cin, cout * k), b: Some(be.upload(&src.get(&format!("{key}.bias"), &[cout])?)), cin, cout, k })
+    Ok(Conv {
+        w: be.weight(&w, cin, cout * k),
+        b: Some(be.upload(&src.get(&format!("{key}.bias"), &[cout])?)),
+        cin,
+        cout,
+        k,
+    })
 }
 
 struct Unit<B: Backend> {
@@ -130,7 +155,11 @@ pub struct AudioLatents {
 
 impl AudioLatents {
     pub fn zeros(channels: usize, frames: usize) -> Self {
-        Self { channels, frames, data: vec![0.0; channels * frames] }
+        Self {
+            channels,
+            frames,
+            data: vec![0.0; channels * frames],
+        }
     }
     /// `[frames, channels]` rows (the DiT's audio row layout).
     pub fn rows(&self) -> Vec<f32> {
@@ -150,7 +179,11 @@ impl AudioLatents {
                 data[c * frames + f] = rows[f * channels + c];
             }
         }
-        Self { channels, frames, data }
+        Self {
+            channels,
+            frames,
+            data,
+        }
     }
     pub fn channel_affine(&mut self, scale: &[f32], shift: &[f32]) {
         for c in 0..self.channels {
@@ -186,17 +219,26 @@ fn layer_norm(x: &[f32], w: &[f32], b: &[f32]) -> Vec<f32> {
     let mean = x.iter().map(|&v| v as f64).sum::<f64>() / n;
     let var = x.iter().map(|&v| (v as f64 - mean).powi(2)).sum::<f64>() / n;
     let inv = 1.0 / (var + 1e-5).sqrt();
-    x.iter().enumerate().map(|(i, &v)| ((v as f64 - mean) * inv) as f32 * w[i] + b[i]).collect()
+    x.iter()
+        .enumerate()
+        .map(|(i, &v)| ((v as f64 - mean) * inv) as f32 * w[i] + b[i])
+        .collect()
 }
 
 impl PreBlock {
     fn load(src: &dyn WeightSource, cfg: &AudioVaeConfig) -> Result<Self> {
         let (ld, lc) = (cfg.latent_dim, cfg.latent_channels);
         let pair = |k: &str, o: usize, i: usize| -> Result<(Vec<f32>, Vec<f32>)> {
-            Ok((src.get(&format!("{k}.weight"), &[o, i])?, src.get(&format!("{k}.bias"), &[o])?))
+            Ok((
+                src.get(&format!("{k}.weight"), &[o, i])?,
+                src.get(&format!("{k}.bias"), &[o])?,
+            ))
         };
         let vecs = |k: &str, n: usize| -> Result<(Vec<f32>, Vec<f32>)> {
-            Ok((src.get(&format!("{k}.weight"), &[n])?, src.get(&format!("{k}.bias"), &[n])?))
+            Ok((
+                src.get(&format!("{k}.weight"), &[n])?,
+                src.get(&format!("{k}.bias"), &[n])?,
+            ))
         };
         let mut qkv_b = src.get("pre_block.attn.q_bias", &[ld])?;
         qkv_b.extend(src.get("pre_block.attn.zero_k_bias", &[ld])?);
@@ -214,8 +256,14 @@ impl PreBlock {
             w1: pair("pre_block.mlp.w1", 2 * lc, lc)?,
             w2: pair("pre_block.mlp.w2", lc, 2 * lc)?,
             heads: cfg.heads,
-            mean_proj: (src.get("mean_proj.weight", &[lc, lc, 1])?, src.get("mean_proj.bias", &[lc])?),
-            logs_proj: (src.get("logs_proj.weight", &[lc, lc, 1])?, src.get("logs_proj.bias", &[lc])?),
+            mean_proj: (
+                src.get("mean_proj.weight", &[lc, lc, 1])?,
+                src.get("mean_proj.bias", &[lc])?,
+            ),
+            logs_proj: (
+                src.get("logs_proj.weight", &[lc, lc, 1])?,
+                src.get("logs_proj.bias", &[lc])?,
+            ),
         })
     }
 
@@ -226,8 +274,14 @@ impl PreBlock {
         let heads = self.heads;
         let hd = ld / heads;
         // Causal attention over normed inputs.
-        let n1: Vec<Vec<f32>> = x.iter().map(|r| layer_norm(r, &self.norm1.0, &self.norm1.1)).collect();
-        let qkv: Vec<Vec<f32>> = n1.iter().map(|r| matvec(&self.qkv, Some(&self.qkv_b), r)).collect();
+        let n1: Vec<Vec<f32>> = x
+            .iter()
+            .map(|r| layer_norm(r, &self.norm1.0, &self.norm1.1))
+            .collect();
+        let qkv: Vec<Vec<f32>> = n1
+            .iter()
+            .map(|r| matvec(&self.qkv, Some(&self.qkv_b), r))
+            .collect();
         let scale = 1.0 / (hd as f32).sqrt();
         let mut pooled = vec![vec![0.0f32; hd]; s]; // mean over heads
         for i in 0..s {
@@ -259,7 +313,9 @@ impl PreBlock {
         let attn_out: Vec<Vec<f32>> = pooled
             .iter()
             .map(|p| {
-                let pooled: Vec<f32> = (0..lc).map(|o| p[o * bin..(o + 1) * bin].iter().sum::<f32>() / bin as f32).collect();
+                let pooled: Vec<f32> = (0..lc)
+                    .map(|o| p[o * bin..(o + 1) * bin].iter().sum::<f32>() / bin as f32)
+                    .collect();
                 matvec(&self.attn_proj.0, Some(&self.attn_proj.1), &pooled)
             })
             .collect();
@@ -267,7 +323,11 @@ impl PreBlock {
             .iter()
             .zip(&attn_out)
             .map(|(r, a)| {
-                let p = matvec(&self.proj.0, Some(&self.proj.1), &layer_norm(r, &self.norm3.0, &self.norm3.1));
+                let p = matvec(
+                    &self.proj.0,
+                    Some(&self.proj.1),
+                    &layer_norm(r, &self.norm3.0, &self.norm3.1),
+                );
                 p.iter().zip(a).map(|(x, y)| x + y).collect()
             })
             .collect();
@@ -295,15 +355,39 @@ impl PreBlock {
 }
 
 impl<B: Backend> AudioVae<B> {
-    pub fn load(be: &B, cfg: AudioVaeConfig, src: &dyn WeightSource, encoder: bool, decoder: bool) -> Result<Self> {
-        let enc = if encoder { Some(Self::load_encoder(be, &cfg, src)?) } else { None };
-        let pre = if encoder { Some(PreBlock::load(src, &cfg)?) } else { None };
-        let dec = if decoder { Some(Self::load_decoder(be, &cfg, src)?) } else { None };
-        Ok(Self { cfg, encoder: enc, pre, decoder: dec })
+    pub fn load(
+        be: &B,
+        cfg: AudioVaeConfig,
+        src: &dyn WeightSource,
+        encoder: bool,
+        decoder: bool,
+    ) -> Result<Self> {
+        let enc = if encoder {
+            Some(Self::load_encoder(be, &cfg, src)?)
+        } else {
+            None
+        };
+        let pre = if encoder {
+            Some(PreBlock::load(src, &cfg)?)
+        } else {
+            None
+        };
+        let dec = if decoder {
+            Some(Self::load_decoder(be, &cfg, src)?)
+        } else {
+            None
+        };
+        Ok(Self {
+            cfg,
+            encoder: enc,
+            pre,
+            decoder: dec,
+        })
     }
 
     fn load_encoder(be: &B, cfg: &AudioVaeConfig, src: &dyn WeightSource) -> Result<Encoder<B>> {
-        let alpha = |k: &str, c: usize| -> Result<B::Buf> { Ok(be.upload(&src.get(k, &[1, c, 1])?)) };
+        let alpha =
+            |k: &str, c: usize| -> Result<B::Buf> { Ok(be.upload(&src.get(k, &[1, c, 1])?)) };
         let mut blocks = Vec::new();
         let mut c = cfg.encoder_dim;
         for (i, &stride) in cfg.encoder_rates.iter().enumerate() {
@@ -332,7 +416,15 @@ impl<B: Backend> AudioVae<B> {
             conv_in: conv(be, src, "encoder.block.0", cfg.encoder_dim, 1, 7, true)?,
             blocks,
             alpha: alpha(&format!("encoder.block.{n}.alpha"), c)?,
-            conv_out: conv(be, src, &format!("encoder.block.{}", n + 1), cfg.latent_dim, c, 3, true)?,
+            conv_out: conv(
+                be,
+                src,
+                &format!("encoder.block.{}", n + 1),
+                cfg.latent_dim,
+                c,
+                3,
+                true,
+            )?,
         })
     }
 
@@ -341,8 +433,22 @@ impl<B: Backend> AudioVae<B> {
             Ok(Activation {
                 alpha: be.upload(&src.get(&format!("{p}.act.alpha"), &[c])?),
                 beta: be.upload(&src.get(&format!("{p}.act.beta"), &[c])?),
-                up: depthwise(be, &src.get(&format!("{p}.upsample.filter"), &[1, 1, AA_KERNEL])?, c),
-                down: depthwise(be, &src.get(&format!("{p}.downsample.lowpass.filter"), &[1, 1, AA_KERNEL])?, c),
+                up: depthwise(
+                    be,
+                    &src.get(&format!("{p}.upsample.filter"), &[1, 1, AA_KERNEL])?
+                        .iter()
+                        .map(|v| v * AA_RATIO as f32)
+                        .collect::<Vec<_>>(),
+                    c,
+                ),
+                down: depthwise(
+                    be,
+                    &src.get(
+                        &format!("{p}.downsample.lowpass.filter"),
+                        &[1, 1, AA_KERNEL],
+                    )?,
+                    c,
+                ),
             })
         };
         let dd = cfg.decoder_dim;
@@ -350,8 +456,16 @@ impl<B: Backend> AudioVae<B> {
         let mut resblocks = Vec::new();
         let mut c = dd;
         let nk = cfg.resblock_kernels.len();
-        for (i, (&rate, &k)) in cfg.decoder_rates.iter().zip(&cfg.decoder_kernels).enumerate() {
-            ups.push((conv_t(be, src, &format!("decoder.ups.{i}.0"), c, c / 2, k)?, rate));
+        for (i, (&rate, &k)) in cfg
+            .decoder_rates
+            .iter()
+            .zip(&cfg.decoder_kernels)
+            .enumerate()
+        {
+            ups.push((
+                conv_t(be, src, &format!("decoder.ups.{i}.0"), c, c / 2, k)?,
+                rate,
+            ));
             c /= 2;
             for (j, &rk) in cfg.resblock_kernels.iter().enumerate() {
                 let p = format!("decoder.resblocks.{}", i * nk + j);
@@ -360,22 +474,33 @@ impl<B: Backend> AudioVae<B> {
                 let mut convs2 = Vec::new();
                 let mut acts = Vec::new();
                 for (d, &dil) in dils.iter().enumerate() {
-                    convs1.push((conv(be, src, &format!("{p}.convs1.{d}"), c, c, rk, true)?, dil));
+                    convs1.push((
+                        conv(be, src, &format!("{p}.convs1.{d}"), c, c, rk, true)?,
+                        dil,
+                    ));
                     convs2.push(conv(be, src, &format!("{p}.convs2.{d}"), c, c, rk, true)?);
                 }
                 for a in 0..2 * dils.len() {
                     acts.push(act(&format!("{p}.activations.{a}"), c)?);
                 }
-                resblocks.push(Amp { convs1, convs2, acts });
+                resblocks.push(Amp {
+                    convs1,
+                    convs2,
+                    acts,
+                });
             }
         }
-        let dec_in_w = src.get("dec_in_proj.weight", &[cfg.latent_dim, cfg.latent_channels, 1])?;
+        let dec_in_w = src.get(
+            "dec_in_proj.weight",
+            &[cfg.latent_dim, cfg.latent_channels, 1],
+        )?;
         Ok(Decoder {
             dec_in: Linear {
                 w: be.weight(&dec_in_w, cfg.latent_dim, cfg.latent_channels),
                 b: Some(be.upload(&src.get("dec_in_proj.bias", &[cfg.latent_dim])?)),
                 rows: cfg.latent_dim,
                 cols: cfg.latent_channels,
+                lora: None,
             },
             conv_pre: conv(be, src, "decoder.conv_pre", dd, cfg.latent_dim, 7, true)?,
             ups,
@@ -387,15 +512,40 @@ impl<B: Backend> AudioVae<B> {
 
     pub fn normalize_latents(&self, z: &mut AudioLatents) {
         let scale: Vec<f32> = self.cfg.latents_std.iter().map(|s| 1.0 / s).collect();
-        let shift: Vec<f32> = self.cfg.latents_mean.iter().zip(&self.cfg.latents_std).map(|(m, s)| -m / s).collect();
+        let shift: Vec<f32> = self
+            .cfg
+            .latents_mean
+            .iter()
+            .zip(&self.cfg.latents_std)
+            .map(|(m, s)| -m / s)
+            .collect();
         z.channel_affine(&scale, &shift);
     }
     pub fn denormalize_latents(&self, z: &mut AudioLatents) {
         z.channel_affine(&self.cfg.latents_std, &self.cfg.latents_mean);
     }
 
-    fn c1(&self, be: &B, x: &B::Buf, c: &Conv<B>, len: usize, stride: usize, dilation: usize, pad: (usize, usize), ep: ConvEpilogue<'_, B::Buf>) -> (B::Buf, usize) {
-        let s = Conv1dShape { cin: c.cin, cout: c.cout, groups: 1, len, k: c.k, stride, dilation, pad };
+    fn c1(
+        &self,
+        be: &B,
+        x: &B::Buf,
+        c: &Conv<B>,
+        len: usize,
+        stride: usize,
+        dilation: usize,
+        pad: (usize, usize),
+        ep: ConvEpilogue<'_, B::Buf>,
+    ) -> (B::Buf, usize) {
+        let s = Conv1dShape {
+            cin: c.cin,
+            cout: c.cout,
+            groups: 1,
+            len,
+            k: c.k,
+            stride,
+            dilation,
+            pad,
+        };
         let out = be.alloc(s.out_len());
         be.conv1d(x, &s, &c.w, c.b.as_ref(), ep, &out);
         (out, s.out_len_1d())
@@ -404,14 +554,18 @@ impl<B: Backend> AudioVae<B> {
     /// Posterior of one mono waveform (samples in `[−1, 1]`), right-padded to a
     /// multiple of the hop: latents at 40 Hz.
     pub fn encode(&self, be: &B, wave: &[f32]) -> Result<AudioPosterior> {
-        let enc = self.encoder.as_ref().ok_or_else(|| Error::Msg("the audio VAE encoder is not loaded".into()))?;
+        let enc = self
+            .encoder
+            .as_ref()
+            .ok_or_else(|| Error::Msg("the audio VAE encoder is not loaded".into()))?;
         let pre = self.pre.as_ref().unwrap();
         let hop = self.cfg.hop();
         let len = wave.len().div_ceil(hop) * hop;
         let mut x = wave.to_vec();
         x.resize(len, 0.0);
         let gx = be.upload(&x);
-        let (mut cur, mut n) = self.c1(be, &gx, &enc.conv_in, len, 1, 1, (3, 3), ConvEpilogue::None);
+        let (mut cur, mut n) =
+            self.c1(be, &gx, &enc.conv_in, len, 1, 1, (3, 3), ConvEpilogue::None);
         let mut c = self.cfg.encoder_dim;
         for blk in &enc.blocks {
             for u in &blk.units {
@@ -419,7 +573,16 @@ impl<B: Backend> AudioVae<B> {
                 be.copy(&cur, 0, &y, 0, c * n);
                 be.snake(&y, c, n, Snake::Alpha(&u.alpha1));
                 let pad = 3 * u.dilation;
-                let (y2, n2) = self.c1(be, &y, &u.conv1, n, 1, u.dilation, (pad, pad), ConvEpilogue::None);
+                let (y2, n2) = self.c1(
+                    be,
+                    &y,
+                    &u.conv1,
+                    n,
+                    1,
+                    u.dilation,
+                    (pad, pad),
+                    ConvEpilogue::None,
+                );
                 debug_assert_eq!(n2, n);
                 be.snake(&y2, c, n, Snake::Alpha(&u.alpha2));
                 let (out, _) = self.c1(be, &y2, &u.conv2, n, 1, 1, (0, 0), ConvEpilogue::Add(&cur));
@@ -427,7 +590,16 @@ impl<B: Backend> AudioVae<B> {
             }
             be.snake(&cur, c, n, Snake::Alpha(&blk.alpha));
             let pad = blk.stride.div_ceil(2);
-            let (out, n2) = self.c1(be, &cur, &blk.down, n, blk.stride, 1, (pad, pad), ConvEpilogue::None);
+            let (out, n2) = self.c1(
+                be,
+                &cur,
+                &blk.down,
+                n,
+                blk.stride,
+                1,
+                (pad, pad),
+                ConvEpilogue::None,
+            );
             cur = out;
             n = n2;
             c *= 2;
@@ -436,35 +608,68 @@ impl<B: Backend> AudioVae<B> {
         let (out, n2) = self.c1(be, &cur, &enc.conv_out, n, 1, 1, (1, 1), ConvEpilogue::None);
         let ld = self.cfg.latent_dim;
         let host = be.download(&out);
-        let rows: Vec<Vec<f32>> = (0..n2).map(|f| (0..ld).map(|ch| host[ch * n2 + f]).collect()).collect();
+        let rows: Vec<Vec<f32>> = (0..n2)
+            .map(|f| (0..ld).map(|ch| host[ch * n2 + f]).collect())
+            .collect();
         let (mean, logs) = pre.forward(&rows, self.cfg.latent_channels);
         Ok(AudioPosterior { mean, logs })
     }
 
-    fn activation(&self, be: &B, x: &B::Buf, c: usize, len: usize, a: &Activation<B>) -> (B::Buf, usize) {
+    fn activation(
+        &self,
+        be: &B,
+        x: &B::Buf,
+        c: usize,
+        len: usize,
+        a: &Activation<B>,
+    ) -> (B::Buf, usize) {
         // UpSample1d: replicate pad `pad`, transposed conv stride 2, ×ratio, crop.
+        // The crop is symmetric (`pl == pr`), so it is the transposed conv's own
+        // `pad`: the kernel writes the kept samples only, and the ×ratio lives in
+        // the filter (`depthwise`, exact in bf16). The earlier per-channel crop
+        // copies were 36 k launches and 46 % of the audio decode on an RTX PRO 6000.
         let k = AA_KERNEL;
         let pad = k / AA_RATIO - 1;
         let pl = pad * AA_RATIO + (k - AA_RATIO) / 2;
         let pr = pad * AA_RATIO + (k - AA_RATIO + 1) / 2;
+        debug_assert_eq!(pl, pr);
         let padded = be.alloc(c * (len + 2 * pad));
         be.replicate_pad1d(x, c, len, pad, pad, &padded);
-        let ts = ConvT1dShape { cin: c, cout: c, groups: c, len: len + 2 * pad, k, stride: AA_RATIO, pad: 0 };
-        let up_full = be.alloc(ts.out_len());
-        be.conv_transpose1d(&padded, &ts, &a.up, None, &up_full);
-        let ul = ts.out_len_1d();
-        let up_len = ul - pl - pr;
+        let ts = ConvT1dShape {
+            cin: c,
+            cout: c,
+            groups: c,
+            len: len + 2 * pad,
+            k,
+            stride: AA_RATIO,
+            pad: pl,
+        };
+        let up_len = ts.out_len_1d();
         let up = be.alloc(c * up_len);
-        for ch in 0..c {
-            be.copy(&up_full, ch * ul + pl, &up, ch * up_len, up_len);
-        }
-        be.axpby(&up, 0, AA_RATIO as f32, &up, 0, 0.0, c * up_len); // × ratio
-        be.snake(&up, c, up_len, Snake::AlphaBeta { alpha: &a.alpha, beta: &a.beta });
+        be.conv_transpose1d(&padded, &ts, &a.up, None, &up);
+        be.snake(
+            &up,
+            c,
+            up_len,
+            Snake::AlphaBeta {
+                alpha: &a.alpha,
+                beta: &a.beta,
+            },
+        );
         // DownSample1d: replicate pad (k/2 − 1, k/2), depthwise conv stride 2.
         let (dl, dr) = (k / 2 - 1, k / 2);
         let dp = be.alloc(c * (up_len + dl + dr));
         be.replicate_pad1d(&up, c, up_len, dl, dr, &dp);
-        let ds = Conv1dShape { cin: c, cout: c, groups: c, len: up_len + dl + dr, k, stride: AA_RATIO, dilation: 1, pad: (0, 0) };
+        let ds = Conv1dShape {
+            cin: c,
+            cout: c,
+            groups: c,
+            len: up_len + dl + dr,
+            k,
+            stride: AA_RATIO,
+            dilation: 1,
+            pad: (0, 0),
+        };
         let out = be.alloc(ds.out_len());
         be.conv1d(&dp, &ds, &a.down, None, ConvEpilogue::None, &out);
         (out, ds.out_len_1d())
@@ -473,22 +678,54 @@ impl<B: Backend> AudioVae<B> {
     /// Decode one mono latent stream (denormalised `[lc, frames]`) to
     /// `frames · hop` samples in `[−1, 1]`.
     pub fn decode(&self, be: &B, z: &AudioLatents) -> Result<Vec<f32>> {
-        let dec = self.decoder.as_ref().ok_or_else(|| Error::Msg("the audio VAE decoder is not loaded".into()))?;
+        let dec = self
+            .decoder
+            .as_ref()
+            .ok_or_else(|| Error::Msg("the audio VAE decoder is not loaded".into()))?;
         let cfg = &self.cfg;
         let n0 = z.frames;
         // dec_in_proj (1×1 conv): rows are frames.
         let rows = be.upload(&z.rows());
         let proj = be.alloc(n0 * cfg.latent_dim);
-        be.linear(&rows, 0, n0, &dec.dec_in.w, dec.dec_in.b.as_ref(), h3_core::backend::Act::None, &proj, 0);
+        be.linear(
+            &rows,
+            0,
+            n0,
+            &dec.dec_in.w,
+            dec.dec_in.b.as_ref(),
+            h3_core::backend::Act::None,
+            &proj,
+            0,
+        );
         // [frames, ld] → [ld, frames]: unpatchify with a unit patch is a transpose.
         let xt = be.alloc(cfg.latent_dim * n0);
-        be.unpatchify(&proj, 0, cfg.latent_dim, 0, cfg.latent_dim, 1, 1, n0, (1, 1, 1), &xt);
-        let (mut cur, mut n) = self.c1(be, &xt, &dec.conv_pre, n0, 1, 1, (3, 3), ConvEpilogue::None);
+        be.unpatchify(
+            &proj,
+            0,
+            cfg.latent_dim,
+            0,
+            cfg.latent_dim,
+            1,
+            1,
+            n0,
+            (1, 1, 1),
+            &xt,
+        );
+        let (mut cur, mut n) =
+            self.c1(be, &xt, &dec.conv_pre, n0, 1, 1, (3, 3), ConvEpilogue::None);
         let mut c = cfg.decoder_dim;
         let nk = cfg.resblock_kernels.len();
         for (i, (up, rate)) in dec.ups.iter().enumerate() {
             let pad = (up.k - rate) / 2;
-            let ts = ConvT1dShape { cin: c, cout: c / 2, groups: 1, len: n, k: up.k, stride: *rate, pad };
+            let ts = ConvT1dShape {
+                cin: c,
+                cout: c / 2,
+                groups: 1,
+                len: n,
+                k: up.k,
+                stride: *rate,
+                pad,
+            };
             let y = be.alloc(ts.out_len());
             be.conv_transpose1d(&cur, &ts, &up.w, up.b.as_ref(), &y);
             c /= 2;
@@ -540,7 +777,10 @@ mod tests {
         assert_eq!(hop, 10);
         let wave: Vec<f32> = (0..95).map(|i| ((i as f32) * 0.3).sin() * 0.5).collect();
         let post = vae.encode(&be, &wave).unwrap();
-        assert_eq!((post.mean.channels, post.mean.frames), (cfg.latent_channels, 10));
+        assert_eq!(
+            (post.mean.channels, post.mean.frames),
+            (cfg.latent_channels, 10)
+        );
         let mut z = post.mode();
         vae.normalize_latents(&mut z);
         assert_eq!(AudioLatents::from_rows(&z.rows(), cfg.latent_channels), z);

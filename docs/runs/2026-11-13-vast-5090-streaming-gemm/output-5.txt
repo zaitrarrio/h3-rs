@@ -1,0 +1,139 @@
++ cat
++ O=/w/out
++ mkdir -p /w/out
++ cd /w
++ T=/w/tables
++ BASE='--variant h3 --model-dir /w/h3-base --weights mxfp8 --decoder-weights mxfp8 --attention dense --stream-blocks --pv8'
++ V2='--variant fasth3-v2 --model-dir /w/h3-8step --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --pv8 --tables /w/tables/v2.tables --stream-blocks'
++ echo '== item 5: ComfyUI'\''s block-sparse rows on the raw model (keep 10 %, 5 / 3 dense first steps; page: 131.4 / 118.0 s total, 122.7 / 109.6 s sampler)'
+== item 5: ComfyUI's block-sparse rows on the raw model (keep 10 %, 5 / 3 dense first steps; page: 131.4 / 118.0 s total, 122.7 / 109.6 s sampler)
++ BV='--variant h3 --model-dir /w/h3-base --weights mxfp8 --decoder-weights mxfp8 --attention vsa --vsa-sparsity 0.9 --stream-blocks --pv8 --steps 25 --tables /w/tables/base25.tables'
++ run base25-vsa-d5 2400 --variant h3 --model-dir /w/h3-base --weights mxfp8 --decoder-weights mxfp8 --attention vsa --vsa-sparsity 0.9 --stream-blocks --pv8 --steps 25 --tables /w/tables/base25.tables --dense-first-steps 5
++ n=base25-vsa-d5
++ t=2400
++ shift 2
++ echo '== base25-vsa-d5: --variant h3 --model-dir /w/h3-base --weights mxfp8 --decoder-weights mxfp8 --attention vsa --vsa-sparsity 0.9 --stream-blocks --pv8 --steps 25 --tables /w/tables/base25.tables --dense-first-steps 5'
+== base25-vsa-d5: --variant h3 --model-dir /w/h3-base --weights mxfp8 --decoder-weights mxfp8 --attention vsa --vsa-sparsity 0.9 --stream-blocks --pv8 --steps 25 --tables /w/tables/base25.tables --dense-first-steps 5
++ sp=15372
++ nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits -lms 500
++ rc=0
++ kill 15372
+++ sort -n /w/out/base25-vsa-d5.mem
+++ tail -1
++ echo 'peak VRAM MiB: 17948; exit 0'
+peak VRAM MiB: 17948; exit 0
++ grep -E '^cuda|^load|prompt:|^run |^prefetch|h2d probe|rror|panick|warning|real' /w/out/base25-vsa-d5.log
++ cut -c1-400
+cuda NVIDIA GeForce RTX 5090 (sm_120)
+load 99.8s
+prompt: 462 rows in 116.0s
+run 0: total 205.32s  prepare 0.46s  adaln 0.00s  denoise 197.63s (["12.75", "11.98", "12.04", "12.06", "12.05", "6.88", "6.86", "6.86", "6.86", "6.83", "6.81", "6.82", "6.88", "6.88", "6.82", "6.85", "6.83", "6.85", "6.84", "6.81", "6.80", "6.83", "6.81", "6.84", "6.78"])  decode 6.93s  audio 0.19s
+real	7m10.759s
++ '[' -f /w/out/base25-vsa-d5.y4m ']'
+++ stats /w/out/base25-vsa-d5.y4m
+++ ffmpeg -v info -i /w/out/base25-vsa-d5.y4m -frames:v 2 -vf signalstats,metadata=print:key=lavfi.signalstats.YAVG -f null -
+++ grep -o 'YAVG=[0-9.]*'
+++ head -2
+++ tr '\n' ' '
++ echo 'luma: YAVG=69.2493 YAVG=69.1758 '
+luma: YAVG=69.2493 YAVG=69.1758 
++ '[' -f /w/out/base25-vsa-d5.y4m ']'
++ grid /w/out/base25-vsa-d5.y4m /w/out/base25-vsa-d5.grid.png
++ ffmpeg -loglevel error -y -i /w/out/base25-vsa-d5.y4m -vf 'select='\''eq(n\,0)+eq(n\,40)+eq(n\,80)+eq(n\,120)'\'',scale=448:-1,tile=2x2' -vframes 1 /w/out/base25-vsa-d5.grid.png
++ ffmpeg -loglevel error -y -i /w/out/base25-vsa-d5.y4m -i /w/out/base25-vsa-d5.wav -c:v libx264 -crf 18 -pix_fmt yuv420p -c:a aac -b:a 192k -shortest /w/out/base25-vsa-d5.mp4
++ run base25-vsa-d3 2400 --variant h3 --model-dir /w/h3-base --weights mxfp8 --decoder-weights mxfp8 --attention vsa --vsa-sparsity 0.9 --stream-blocks --pv8 --steps 25 --tables /w/tables/base25.tables --dense-first-steps 3
++ n=base25-vsa-d3
++ t=2400
++ shift 2
++ echo '== base25-vsa-d3: --variant h3 --model-dir /w/h3-base --weights mxfp8 --decoder-weights mxfp8 --attention vsa --vsa-sparsity 0.9 --stream-blocks --pv8 --steps 25 --tables /w/tables/base25.tables --dense-first-steps 3'
+== base25-vsa-d3: --variant h3 --model-dir /w/h3-base --weights mxfp8 --decoder-weights mxfp8 --attention vsa --vsa-sparsity 0.9 --stream-blocks --pv8 --steps 25 --tables /w/tables/base25.tables --dense-first-steps 3
++ sp=15746
++ nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits -lms 500
++ rc=0
++ kill 15746
+++ sort -n /w/out/base25-vsa-d3.mem
+++ tail -1
++ echo 'peak VRAM MiB: 17916; exit 0'
+peak VRAM MiB: 17916; exit 0
++ grep -E '^cuda|^load|prompt:|^run |^prefetch|h2d probe|rror|panick|warning|real' /w/out/base25-vsa-d3.log
++ cut -c1-400
+cuda NVIDIA GeForce RTX 5090 (sm_120)
+load 97.9s
+prompt: 462 rows in 116.1s
+run 0: total 196.19s  prepare 0.49s  adaln 0.00s  denoise 188.55s (["12.93", "12.04", "12.13", "6.93", "6.89", "6.91", "6.89", "6.92", "6.91", "6.95", "6.92", "6.89", "6.90", "6.89", "6.89", "6.89", "6.87", "6.88", "6.82", "6.83", "6.87", "6.83", "6.85", "6.86", "6.86"])  decode 6.86s  audio 0.20s
+real	6m59.943s
++ '[' -f /w/out/base25-vsa-d3.y4m ']'
+++ stats /w/out/base25-vsa-d3.y4m
+++ ffmpeg -v info -i /w/out/base25-vsa-d3.y4m -frames:v 2 -vf signalstats,metadata=print:key=lavfi.signalstats.YAVG -f null -
+++ grep -o 'YAVG=[0-9.]*'
+++ head -2
+++ tr '\n' ' '
++ echo 'luma: YAVG=70.862 YAVG=70.7513 '
+luma: YAVG=70.862 YAVG=70.7513 
++ '[' -f /w/out/base25-vsa-d3.y4m ']'
++ grid /w/out/base25-vsa-d3.y4m /w/out/base25-vsa-d3.grid.png
++ ffmpeg -loglevel error -y -i /w/out/base25-vsa-d3.y4m -vf 'select='\''eq(n\,0)+eq(n\,40)+eq(n\,80)+eq(n\,120)'\'',scale=448:-1,tile=2x2' -vframes 1 /w/out/base25-vsa-d3.grid.png
++ ffmpeg -loglevel error -y -i /w/out/base25-vsa-d3.y4m -i /w/out/base25-vsa-d3.wav -c:v libx264 -crf 18 -pix_fmt yuv420p -c:a aac -b:a 192k -shortest /w/out/base25-vsa-d3.mp4
++ echo '== V2 at ComfyUI'\''s budget (keep 10 %, first 2 of 8 dense) with FP8 P·V'
+== V2 at ComfyUI's budget (keep 10 %, first 2 of 8 dense) with FP8 P·V
++ run v2-budget 1500 --variant fasth3-v2 --model-dir /w/h3-8step --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --pv8 --tables /w/tables/v2.tables --stream-blocks --vsa-sparsity 0.9 --dense-first-steps 2
++ n=v2-budget
++ t=1500
++ shift 2
++ echo '== v2-budget: --variant fasth3-v2 --model-dir /w/h3-8step --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --pv8 --tables /w/tables/v2.tables --stream-blocks --vsa-sparsity 0.9 --dense-first-steps 2'
+== v2-budget: --variant fasth3-v2 --model-dir /w/h3-8step --weights mxfp8 --decoder-weights mxfp8 --vsa-qk8 --pv8 --tables /w/tables/v2.tables --stream-blocks --vsa-sparsity 0.9 --dense-first-steps 2
++ sp=16119
++ nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits -lms 500
++ rc=0
++ kill 16119
+++ sort -n /w/out/v2-budget.mem
+++ tail -1
++ echo 'peak VRAM MiB: 18592; exit 0'
+peak VRAM MiB: 18592; exit 0
++ grep -E '^cuda|^load|prompt:|^run |^prefetch|h2d probe|rror|panick|warning|real' /w/out/v2-budget.log
++ cut -c1-400
+cuda NVIDIA GeForce RTX 5090 (sm_120)
+load 102.3s
+prompt: 462 rows in 108.8s
+run 0: total 77.61s  prepare 0.43s  adaln 0.00s  denoise 69.92s (["13.29", "12.50", "7.34", "7.39", "7.42", "7.34", "7.32", "7.32"])  decode 7.00s  audio 0.19s
+real	4m58.175s
++ '[' -f /w/out/v2-budget.y4m ']'
+++ stats /w/out/v2-budget.y4m
+++ ffmpeg -v info -i /w/out/v2-budget.y4m -frames:v 2 -vf signalstats,metadata=print:key=lavfi.signalstats.YAVG -f null -
+++ grep -o 'YAVG=[0-9.]*'
+++ head -2
+++ tr '\n' ' '
++ echo 'luma: YAVG=74.7057 YAVG=74.7454 '
+luma: YAVG=74.7057 YAVG=74.7454 
++ '[' -f /w/out/v2-budget.y4m ']'
++ grid /w/out/v2-budget.y4m /w/out/v2-budget.grid.png
++ ffmpeg -loglevel error -y -i /w/out/v2-budget.y4m -vf 'select='\''eq(n\,0)+eq(n\,40)+eq(n\,80)+eq(n\,120)'\'',scale=448:-1,tile=2x2' -vframes 1 /w/out/v2-budget.grid.png
++ ffmpeg -loglevel error -y -i /w/out/v2-budget.y4m -i /w/out/v2-budget.wav -c:v libx264 -crf 18 -pix_fmt yuv420p -c:a aac -b:a 192k -shortest /w/out/v2-budget.mp4
++ tee /w/out/psnr-cmd4.log
++ psnr base25-vsa-d5 base25-ref
++ echo '== psnr base25-vsa-d5 vs base25-ref'
+== psnr base25-vsa-d5 vs base25-ref
++ ffmpeg -loglevel info -i /w/out/base25-vsa-d5.y4m -i /w/out/base25-ref.y4m -lavfi psnr -f null -
++ grep -E PSNR
+[Parsed_psnr_0 @ 0x5bdd2aa7e340] PSNR y:16.735509 u:36.364002 v:35.863868 average:21.407474 min:18.531822 max:23.557062
++ psnr base25-vsa-d3 base25-ref
++ echo '== psnr base25-vsa-d3 vs base25-ref'
+== psnr base25-vsa-d3 vs base25-ref
++ ffmpeg -loglevel info -i /w/out/base25-vsa-d3.y4m -i /w/out/base25-ref.y4m -lavfi psnr -f null -
++ grep -E PSNR
+[Parsed_psnr_0 @ 0x590bfedf7340] PSNR y:16.307383 u:35.588421 v:35.475815 average:20.975975 min:18.821998 max:23.608422
++ psnr v2-budget v2-stall
++ echo '== psnr v2-budget vs v2-stall'
+== psnr v2-budget vs v2-stall
++ ffmpeg -loglevel info -i /w/out/v2-budget.y4m -i /w/out/v2-stall.y4m -lavfi psnr -f null -
++ grep -E PSNR
+[Parsed_psnr_0 @ 0x5b9aaf167200] PSNR y:13.750573 u:30.859862 v:31.603523 average:18.368811 min:16.328394 max:20.211312
++ tar czf /root/cmd4.tgz -C /w/out '--exclude=*.y4m' '--exclude=*.wav' '--exclude=*.mp4' .
+++ cd /w/out
+++ ls base2-allblocks.mp4 base2-both-profile.mp4 base2-both.mp4 base2-qkvsplit.mp4 base2-stall-depth2.mp4 base2-stall.mp4 base25-both.mp4 base25-ref.mp4 base25-vsa-d3.mp4 base25-vsa-d5.mp4 v2-allblocks.mp4 v2-both.mp4 v2-budget.mp4 v2-qkvsplit.mp4 v2-stall-depth2.mp4 v2-stall-nopin.mp4 v2-stall.mp4
++ tar czf /root/mp4.tgz -C /w/out base2-allblocks.mp4 base2-both-profile.mp4 base2-both.mp4 base2-qkvsplit.mp4 base2-stall-depth2.mp4 base2-stall.mp4 base25-both.mp4 base25-ref.mp4 base25-vsa-d3.mp4 base25-vsa-d5.mp4 v2-allblocks.mp4 v2-both.mp4 v2-budget.mp4 v2-qkvsplit.mp4 v2-stall-depth2.mp4 v2-stall-nopin.mp4 v2-stall.mp4
+++ date -u
++ echo 'cmd5 done Sat Nov 14 01:23:06 UTC 2026'
+cmd5 done Sat Nov 14 01:23:06 UTC 2026
+exit 0
+

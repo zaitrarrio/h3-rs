@@ -1,0 +1,1973 @@
+{
+ "source": "https://plox-1.github.io/h3-speedups/",
+ "generated": "2026-10-18",
+ "setup": [
+  "RTX 5090, 32 GB",
+  "ComfyUI H3 template, no LoRA",
+  "25 steps, euler",
+  "Comfy Kitchen int8 attention"
+ ],
+ "baselineSetup": "<b>Baseline video:</b> ComfyUI's official H3 template, raw: no LoRA, 25 euler steps. LoRAs and distilled models are candidates like any other method.",
+ "prompts": [
+  {
+   "key": "5s",
+   "label": "Samurai in the rain \u00b7 5 s",
+   "facts": [
+    "124 frames",
+    "5.2 s at 24 fps",
+    "1344 \u00d7 768 (7:4)",
+    "One continuous shot",
+    "Two spoken lines, no music",
+    "Seed 1"
+   ],
+   "prompt": "integrated_multimodal_description: [Shot 1] Live-action, cinematic, a medium-wide shot frames an elderly Japanese samurai standing in the open stone courtyard of a temple in light, steady rain, facing the camera squarely under grey overcast daylight, framed from the knees up. He is around seventy, with a deeply lined, weathered face, a thin white beard and mustache, and a full head of thick, long, loose grey-white hair falling from the crown of his head past his shoulders, damp strands lifting and swaying in the wind; he wears a dark indigo kimono over grey hakama, with a katana and a shorter sword tucked through the sash at his left hip. Fine rain streaks fall through the whole frame and small droplets splash on the wet flagstones, while the dark wooden pillars and pale paper shoji screens of the temple hall stand behind him. Keeping his eyes on the lens, he raises both forearms and crosses them firmly at the wrists in an X in front of his chest, open hands flat with fingers together, the wide wet sleeves sliding back along his forearms, as the elderly samurai with a low, gravelly, unhurried voice (S1) says: <d>[English] No.</d> The camera pans right with small amplitude at slow speed while he holds the crossed arms, the pillars drifting across the background behind the falling rain. He lowers his arms to his sides, and the camera pushes in with large amplitude toward his face, ending on a tight close-up in which the wrinkles around his eyes, the individual white beard hairs, wet strands of long hair clinging to his cheek, and raindrops running down his skin are sharply visible, as he (S1) continues, lips moving clearly: <d>[English] A blade drawn in anger cuts its owner first.</d> He holds a steady gaze into the lens as the rain keeps falling.\n\noverall_soundscape: Light, steady rain patters on the stone courtyard and the temple roof tiles, with water trickling from the eaves and a low wind passing through. Heavy damp fabric rustles as the sleeves slide back and the forearms cross, and small droplets splash on the flagstones.\n\nnon_diegetic_music: N/A",
+   "frames": 124,
+   "rows": [
+    {
+     "id": "baseline",
+     "title": "Baseline",
+     "method": null,
+     "steps": 25,
+     "total": 181.7,
+     "cold": 189.3,
+     "sampler": 169.0,
+     "vram": 30.0,
+     "spd": 1.0,
+     "coldSpd": 1.0,
+     "qsum": null,
+     "state": "baseline",
+     "detail": "ComfyUI's official MiniMax H3 text-to-video template, unchanged except euler at 25 steps. Its time is the median of four renders, each in a fresh ComfyUI.",
+     "settings": [
+      [
+       "Model",
+       "MiniMax H3, pruned int8 (template)"
+      ],
+      [
+       "LoRA",
+       "none"
+      ],
+      [
+       "Steps",
+       "25"
+      ],
+      [
+       "Sampler",
+       "euler / simple"
+      ],
+      [
+       "Attention",
+       "Comfy Kitchen int8"
+      ],
+      [
+       "Output",
+       "1344x768, 124 frames, 24 fps, seed 1"
+      ]
+     ],
+     "nodes": [
+      [
+       "Load Diffusion Model",
+       [
+        [
+         "unet name",
+         "MiniMax H3, pruned int8 (template)"
+        ],
+        [
+         "weight dtype",
+         "default"
+        ]
+       ]
+      ],
+      [
+       "KSampler Select",
+       [
+        [
+         "sampler name",
+         "euler"
+        ]
+       ]
+      ],
+      [
+       "Basic Scheduler",
+       [
+        [
+         "scheduler",
+         "simple"
+        ],
+        [
+         "steps",
+         "25"
+        ],
+        [
+         "denoise",
+         "1"
+        ]
+       ]
+      ]
+     ],
+     "runs": [
+      {
+       "warm": 179.5,
+       "cold": 185.2
+      },
+      {
+       "warm": 185.0,
+       "cold": 188.1
+      },
+      {
+       "warm": 183.6,
+       "cold": 192.7
+      },
+      {
+       "warm": 179.8,
+       "cold": 190.5
+      }
+     ],
+     "url": null,
+     "source": null
+    },
+    {
+     "id": "0075c-5s",
+     "title": "Block Sparse Attention, 5 dense steps",
+     "method": "core-blocksparse",
+     "steps": 25,
+     "total": 131.4,
+     "cold": 136.1,
+     "sampler": 122.7,
+     "vram": 30.0,
+     "spd": 1.382800608828006,
+     "coldSpd": 1.3908890521675241,
+     "qsum": 24,
+     "state": "pass",
+     "detail": "Block Sparse Attention at the node's default start of 0.2, which keeps the first 5 of 25 steps dense: close to the baseline, a smaller gain than with 3 dense steps.",
+     "settings": [
+      [
+       "Model",
+       "MiniMax H3, pruned int8 (template)"
+      ],
+      [
+       "LoRA",
+       "none"
+      ],
+      [
+       "Steps",
+       "25"
+      ],
+      [
+       "Sampler",
+       "euler / simple"
+      ],
+      [
+       "Attention",
+       "Comfy Kitchen int8 + Block Sparse (sol-attn, tau 1.3; first 20% dense)"
+      ],
+      [
+       "Output",
+       "1344x768, 124 frames, 24 fps, seed 1"
+      ]
+     ],
+     "nodes": [
+      [
+       "Block Sparse Attention",
+       [
+        [
+         "start percent",
+         "0.2"
+        ],
+        [
+         "end percent",
+         "1"
+        ],
+        [
+         "dense blocks",
+         ""
+        ],
+        [
+         "min tokens",
+         "12288"
+        ],
+        [
+         "extra tokens",
+         "256"
+        ],
+        [
+         "sink conditioning",
+         "exact_kv_and_rows"
+        ],
+        [
+         "selection",
+         "sol-attn"
+        ],
+        [
+         "tau",
+         "1.3"
+        ]
+       ]
+      ]
+     ],
+     "runs": null,
+     "url": "https://github.com/Comfy-Org/ComfyUI",
+     "source": "Comfy-Org/ComfyUI"
+    },
+    {
+     "id": "0075e-5s",
+     "title": "SageAttention 2.2",
+     "method": "sage",
+     "steps": 25,
+     "total": 183.9,
+     "cold": 193.4,
+     "sampler": 173.5,
+     "vram": 30.0,
+     "spd": 0.9880369766177269,
+     "coldSpd": 0.9788004136504654,
+     "qsum": 25,
+     "state": "slower",
+     "detail": "Swaps Comfy Kitchen's int8 attention for SageAttention. A slightly different sample, and exactly the same speed on this card.",
+     "settings": [
+      [
+       "Model",
+       "MiniMax H3, pruned int8 (template)"
+      ],
+      [
+       "LoRA",
+       "none"
+      ],
+      [
+       "Steps",
+       "25"
+      ],
+      [
+       "Sampler",
+       "euler / simple"
+      ],
+      [
+       "Attention",
+       "SageAttention 2.2"
+      ],
+      [
+       "Output",
+       "1344x768, 124 frames, 24 fps, seed 1"
+      ]
+     ],
+     "nodes": [],
+     "runs": null,
+     "url": "https://github.com/woct0rdho/SageAttention",
+     "source": "woct0rdho/SageAttention"
+    },
+    {
+     "id": "0075f-5s",
+     "title": "Block Sparse Attention, 3 dense steps",
+     "method": "sparse-solattn",
+     "steps": 25,
+     "total": 118.0,
+     "cold": 130.6,
+     "sampler": 109.6,
+     "vram": 30.0,
+     "spd": 1.5398305084745763,
+     "coldSpd": 1.4494640122511486,
+     "qsum": 24,
+     "state": "pass",
+     "detail": "Skips most attention blocks once the first three steps have set the scene. The picture stays the raw model's own; a few fewer raindrops on the face.",
+     "settings": [
+      [
+       "Model",
+       "MiniMax H3, pruned int8 (template)"
+      ],
+      [
+       "LoRA",
+       "none"
+      ],
+      [
+       "Steps",
+       "25"
+      ],
+      [
+       "Sampler",
+       "euler / simple"
+      ],
+      [
+       "Attention",
+       "Comfy Kitchen int8 + Block Sparse Attention (sol_attn, tau 1.3; 3 dense steps)"
+      ],
+      [
+       "Output",
+       "1344x768, 124 frames, 24 fps, seed 1"
+      ]
+     ],
+     "nodes": [
+      [
+       "Block Sparse Attention",
+       [
+        [
+         "enabled",
+         "on"
+        ],
+        [
+         "dense start",
+         "0.1"
+        ],
+        [
+         "engine",
+         "sol_attn"
+        ],
+        [
+         "tau",
+         "1.3"
+        ]
+       ]
+      ]
+     ],
+     "runs": null,
+     "url": "https://github.com/Comfy-Org/ComfyUI",
+     "source": "Comfy-Org/ComfyUI"
+    },
+    {
+     "id": "0079h-5s",
+     "title": "PDD Acc, 8 steps",
+     "method": "pdd-8",
+     "steps": 8,
+     "total": 67.4,
+     "cold": 79.0,
+     "sampler": 55.9,
+     "vram": 30.2,
+     "spd": 2.6958456973293763,
+     "coldSpd": 2.39620253164557,
+     "qsum": 24,
+     "state": "pass",
+     "detail": "PDD Acc at the 8 steps it was trained for: the arm-cross, the push-in and a sharp close-up; fewer raindrops on the face than the raw model.",
+     "settings": [
+      [
+       "Model",
+       "MiniMax H3, int8 (unpruned)"
+      ],
+      [
+       "LoRA",
+       "PDD Acc adapter (its own)"
+      ],
+      [
+       "Steps",
+       "8, its own sigmas"
+      ],
+      [
+       "Sampler",
+       "euler / simple"
+      ],
+      [
+       "Attention",
+       "Comfy Kitchen int8"
+      ],
+      [
+       "Output",
+       "1344x768, 124 frames, 24 fps, seed 1"
+      ]
+     ],
+     "nodes": [
+      [
+       "Load Diffusion Model",
+       [
+        [
+         "unet name",
+         "MiniMax H3, int8 (unpruned)"
+        ],
+        [
+         "weight dtype",
+         "default"
+        ]
+       ]
+      ],
+      [
+       "PDD Acc Apply",
+       [
+        [
+         "pdd file",
+         "minimax_h3_fl2va_pdd_acc_8step_comfyui"
+        ],
+        [
+         "nfe",
+         "8"
+        ],
+        [
+         "lora strength",
+         "1"
+        ],
+        [
+         "head strength",
+         "1"
+        ],
+        [
+         "on off grid",
+         "error"
+        ],
+        [
+         "partition",
+         ""
+        ],
+        [
+         "enabled",
+         "on"
+        ],
+        [
+         "partition check",
+         "error"
+        ]
+       ]
+      ]
+     ],
+     "runs": null,
+     "url": "https://github.com/Jalen-Brunson/ComfyUI-MiniMax-H3-PDD-Acc",
+     "source": "Jalen-Brunson/ComfyUI-MiniMax-H3-PDD-Acc"
+    },
+    {
+     "id": "0079k-5s",
+     "title": "FastH3 v1, 4 steps",
+     "method": "fasth3-v1-euler",
+     "steps": 4,
+     "total": 33.3,
+     "cold": 47.6,
+     "sampler": 23.9,
+     "vram": 30.0,
+     "spd": 5.456456456456457,
+     "coldSpd": 3.976890756302521,
+     "qsum": 20,
+     "state": "pass",
+     "detail": "FastH3's 4-step preview on euler: the arm-cross and push-in are there, but a topknot sits on his crown and the close-up skin is over-sharpened, with few raindrops.",
+     "settings": [
+      [
+       "Model",
+       "FastH3 v1 checkpoint (int8)"
+      ],
+      [
+       "LoRA",
+       "none"
+      ],
+      [
+       "Steps",
+       "4"
+      ],
+      [
+       "Sampler",
+       "euler / simple"
+      ],
+      [
+       "Attention",
+       "Comfy Kitchen int8 + Block Sparse (vsa, keep 10.0%; first 20% dense)"
+      ],
+      [
+       "Also",
+       "Sigma shift (shift video 10.0, shift audio 3.0)"
+      ],
+      [
+       "Output",
+       "1344x768, 124 frames, 24 fps, seed 1"
+      ]
+     ],
+     "nodes": [
+      [
+       "Load Diffusion Model",
+       [
+        [
+         "unet name",
+         "FastH3 v1 checkpoint (int8)"
+        ],
+        [
+         "weight dtype",
+         "default"
+        ]
+       ]
+      ],
+      [
+       "MiniMax H3 Sigma Shift",
+       [
+        [
+         "shift video",
+         "10"
+        ],
+        [
+         "shift audio",
+         "3"
+        ]
+       ]
+      ],
+      [
+       "Model Attention Backend",
+       [
+        [
+         "attention",
+         "comfy kitchen attention"
+        ]
+       ]
+      ],
+      [
+       "Block Sparse Attention",
+       [
+        [
+         "start percent",
+         "0.2"
+        ],
+        [
+         "end percent",
+         "1"
+        ],
+        [
+         "dense blocks",
+         ""
+        ],
+        [
+         "min tokens",
+         "12288"
+        ],
+        [
+         "extra tokens",
+         "256"
+        ],
+        [
+         "sink conditioning",
+         "exact_kv_and_rows"
+        ],
+        [
+         "selection",
+         "vsa"
+        ],
+        [
+         "keep percent",
+         "10"
+        ]
+       ]
+      ],
+      [
+       "Basic Scheduler",
+       [
+        [
+         "scheduler",
+         "simple"
+        ],
+        [
+         "steps",
+         "4"
+        ],
+        [
+         "denoise",
+         "1"
+        ]
+       ]
+      ]
+     ],
+     "runs": null,
+     "url": "https://huggingface.co/Kijai/MiniMax-H3-experimental",
+     "source": "Kijai/MiniMax-H3-experimental"
+    },
+    {
+     "id": "0079m-5s",
+     "title": "FastH3 V2, 8 steps",
+     "method": "fasth3-v2-euler",
+     "steps": 8,
+     "total": 54.1,
+     "cold": 62.5,
+     "sampler": 45.2,
+     "vram": 30.0,
+     "spd": 3.3585951940850274,
+     "coldSpd": 3.0288000000000004,
+     "qsum": 21,
+     "state": "pass",
+     "detail": "FastH3 V2 at its 8 steps on euler: the arm-cross and push-in are there and the face holds, but a topknot sits on his crown and the close-up skin is creased and over-sharpened.",
+     "settings": [
+      [
+       "Model",
+       "FastH3 V2 checkpoint (pruned int8)"
+      ],
+      [
+       "LoRA",
+       "none"
+      ],
+      [
+       "Steps",
+       "8"
+      ],
+      [
+       "Sampler",
+       "euler / simple"
+      ],
+      [
+       "Attention",
+       "Comfy Kitchen int8 + Block Sparse (vsa, keep 10.0%; first 20% dense)"
+      ],
+      [
+       "Also",
+       "Sigma shift (shift video 10.0, shift audio 3.0)"
+      ],
+      [
+       "Output",
+       "1344x768, 124 frames, 24 fps, seed 1"
+      ]
+     ],
+     "nodes": [
+      [
+       "Load Diffusion Model",
+       [
+        [
+         "unet name",
+         "FastH3 V2 checkpoint (pruned int8)"
+        ],
+        [
+         "weight dtype",
+         "default"
+        ]
+       ]
+      ],
+      [
+       "MiniMax H3 Sigma Shift",
+       [
+        [
+         "shift video",
+         "10"
+        ],
+        [
+         "shift audio",
+         "3"
+        ]
+       ]
+      ],
+      [
+       "Model Attention Backend",
+       [
+        [
+         "attention",
+         "comfy kitchen attention"
+        ]
+       ]
+      ],
+      [
+       "Block Sparse Attention",
+       [
+        [
+         "start percent",
+         "0.2"
+        ],
+        [
+         "end percent",
+         "1"
+        ],
+        [
+         "dense blocks",
+         ""
+        ],
+        [
+         "min tokens",
+         "12288"
+        ],
+        [
+         "extra tokens",
+         "256"
+        ],
+        [
+         "sink conditioning",
+         "exact_kv_and_rows"
+        ],
+        [
+         "selection",
+         "vsa"
+        ],
+        [
+         "keep percent",
+         "10"
+        ]
+       ]
+      ],
+      [
+       "Basic Scheduler",
+       [
+        [
+         "scheduler",
+         "simple"
+        ],
+        [
+         "steps",
+         "8"
+        ],
+        [
+         "denoise",
+         "1"
+        ]
+       ]
+      ]
+     ],
+     "runs": null,
+     "url": "https://huggingface.co/FastVideo/FastVideo-FastH3-Comfy",
+     "source": "FastVideo/FastVideo-FastH3-Comfy"
+    },
+    {
+     "id": "0080b-5s",
+     "title": "H3 Express",
+     "method": "h3-express-3",
+     "steps": 3,
+     "total": 22.9,
+     "cold": 41.4,
+     "sampler": 17.0,
+     "vram": 30.0,
+     "spd": 7.934497816593886,
+     "coldSpd": 4.572463768115942,
+     "qsum": 24,
+     "state": "pass",
+     "detail": "H3 Express with 3 model calls: as fast as the Fast preset at 5 s. The final close-up is a little looser.",
+     "settings": [
+      [
+       "Model",
+       "MiniMax H3, pruned int8 (template)"
+      ],
+      [
+       "LoRA",
+       "LightX2V turbo 4-8 step (DARE-TIES) @ 0.90"
+      ],
+      [
+       "Steps",
+       "3 model calls (Express Sigmas, of the LoRA's 6)"
+      ],
+      [
+       "Sampler",
+       "euler / simple"
+      ],
+      [
+       "Attention",
+       "Comfy Kitchen int8 + Block Sparse Attention (sol_attn, tau 1.3; 1 dense step)"
+      ],
+      [
+       "Also",
+       "H3 AdaLN LoRA fix (port, for the pruned model)"
+      ],
+      [
+       "Output",
+       "1344x768, 124 frames, 24 fps, seed 1"
+      ]
+     ],
+     "nodes": [
+      [
+       "LoRA Loader",
+       [
+        [
+         "lora name",
+         "minimax_h3_fl2v_lightx2v_turbo_4to8step_v0.1-v1.0_768p_v4_step600_dareties"
+        ],
+        [
+         "strength model",
+         "0.9"
+        ]
+       ]
+      ],
+      [
+       "H3 AdaLN LoRA Fix",
+       [
+        [
+         "mode",
+         "port"
+        ]
+       ]
+      ],
+      [
+       "Block Sparse Attention",
+       [
+        [
+         "enabled",
+         "on"
+        ],
+        [
+         "dense start",
+         "0.1"
+        ],
+        [
+         "engine",
+         "sol_attn"
+        ],
+        [
+         "tau",
+         "1.3"
+        ]
+       ]
+      ],
+      [
+       "H3 Express Sigmas",
+       [
+        [
+         "preset",
+         "express3 (3 calls: 1, .96, .706)"
+        ],
+        [
+         "scheduler",
+         "simple"
+        ]
+       ]
+      ]
+     ],
+     "runs": null,
+     "url": null,
+     "source": null
+    },
+    {
+     "id": "0084a-5s",
+     "title": "pDMD LoRA, 2 steps",
+     "method": "pdmd-2",
+     "steps": 2,
+     "total": 23.4,
+     "cold": 32.6,
+     "sampler": 12.2,
+     "vram": 30.0,
+     "spd": 7.764957264957265,
+     "coldSpd": 5.806748466257669,
+     "qsum": 22,
+     "state": "trade",
+     "detail": "The pDMD LoRA renders the whole clip in 2 model calls: the arm-cross, the push-in and long loose hair, with raindrops on his forehead.",
+     "settings": [
+      [
+       "Model",
+       "MiniMax H3, pruned int8 (template)"
+      ],
+      [
+       "LoRA",
+       "pDMD 2-step @ 1.00"
+      ],
+      [
+       "Steps",
+       "2"
+      ],
+      [
+       "Sampler",
+       "euler / simple"
+      ],
+      [
+       "Attention",
+       "Comfy Kitchen int8"
+      ],
+      [
+       "Also",
+       "Sigma shift (shift video 12.0, shift audio 6.0)"
+      ],
+      [
+       "Output",
+       "1344x768, 124 frames, 24 fps, seed 1"
+      ]
+     ],
+     "nodes": [
+      [
+       "LoRA Loader",
+       [
+        [
+         "lora name",
+         "minimax_h3_pdmd_2step_lora_avg_rank_38_bf16"
+        ],
+        [
+         "strength model",
+         "1"
+        ]
+       ]
+      ],
+      [
+       "MiniMax H3 Sigma Shift",
+       [
+        [
+         "shift video",
+         "12"
+        ],
+        [
+         "shift audio",
+         "6"
+        ]
+       ]
+      ],
+      [
+       "Basic Scheduler",
+       [
+        [
+         "scheduler",
+         "simple"
+        ],
+        [
+         "steps",
+         "2"
+        ],
+        [
+         "denoise",
+         "1"
+        ]
+       ]
+      ]
+     ],
+     "runs": null,
+     "url": "https://huggingface.co/Kijai/MiniMax-H3-experimental/blob/main/loras/minimax_h3_pdmd_2step_lora_avg_rank_38_bf16.safetensors",
+     "source": "Kijai/MiniMax-H3-experimental"
+    },
+    {
+     "id": "0088b-5s",
+     "title": "pDMD LoRA + half resolution + X2 Detail VAE",
+     "method": "x2-pdmd2",
+     "steps": 2,
+     "total": 4.5,
+     "cold": 16.8,
+     "sampler": 1.9,
+     "vram": 30.5,
+     "spd": 40.37777777777777,
+     "coldSpd": 11.267857142857142,
+     "qsum": 20,
+     "state": "trade",
+     "detail": "pDMD in 2 model calls at half resolution, decoded 2x by the X2 Detail VAE: the whole clip in 4.5 s, long hair kept, fewer raindrops.",
+     "settings": [
+      [
+       "Model",
+       "MiniMax H3, pruned int8 (template)"
+      ],
+      [
+       "LoRA",
+       "pDMD 2-step @ 1.00"
+      ],
+      [
+       "Steps",
+       "2"
+      ],
+      [
+       "Sampler",
+       "euler / simple"
+      ],
+      [
+       "Attention",
+       "Comfy Kitchen int8"
+      ],
+      [
+       "Also",
+       "Sigma shift (shift video 12.0, shift audio 6.0)"
+      ],
+      [
+       "Resolution",
+       "sampled at 672x384, decoded 2x to 1344x768 by the X2 Detail VAE (H3 X2 Stream Save, NVENC)"
+      ],
+      [
+       "Output",
+       "1344x768, 124 frames, 24 fps, seed 1"
+      ]
+     ],
+     "nodes": [
+      [
+       "LoRA Loader",
+       [
+        [
+         "lora name",
+         "minimax_h3_pdmd_2step_lora_avg_rank_38_bf16"
+        ],
+        [
+         "strength model",
+         "1"
+        ]
+       ]
+      ],
+      [
+       "MiniMax H3 Sigma Shift",
+       [
+        [
+         "shift video",
+         "12"
+        ],
+        [
+         "shift audio",
+         "6"
+        ]
+       ]
+      ],
+      [
+       "Basic Scheduler",
+       [
+        [
+         "scheduler",
+         "simple"
+        ],
+        [
+         "steps",
+         "2"
+        ],
+        [
+         "denoise",
+         "1"
+        ]
+       ]
+      ]
+     ],
+     "runs": null,
+     "url": null,
+     "source": null
+    }
+   ],
+   "all_rows": 100
+  },
+  {
+   "key": "15s",
+   "label": "Night market \u00b7 15 s",
+   "facts": [
+    "362 frames",
+    "15.1 s at 24 fps",
+    "1344 \u00d7 768 (7:4)",
+    "Four shots, cuts at 3.8, 7.6 and 11.4 s",
+    "Two spoken lines and music",
+    "Seed 1"
+   ],
+   "prompt": "integrated_multimodal_description: [Shot 1] Live-action, cinematic, a handheld medium-wide shot pushes through a crowded night market alley in the rain-slicked dark, where red paper lanterns and a buzzing blue neon sign reading \"24H\" light steam rising off a row of food stalls. At a noodle stall a stocky cook in his fifties, bald, in a grease-spotted white vest and a folded towel around his neck, tosses noodles in a blackened wok over a gas ring; a column of orange flame roars up from the wok and lights every face in the queue. The camera trucks right with small amplitude at slow speed past the queue as the cook with a loud, gravelly, carrying voice (S1) shouts over the noise: <d>[English] Two minutes! Sit down!</d> [Shot 2] At 00:03.800, the shot cuts to a low close shot along the stall counter, where a small brown macaque drops from the awning onto the wet steel, snatches a fried dumpling from a stacked bamboo steamer, and bolts left; steam curls in its wake and a woman's hand grabs at empty air where the dumpling was. [Shot 3] At 00:07.600, the camera cuts to a fast tracking shot following the macaque at knee height through the forest of legs, umbrellas and plastic stools, splashing through puddles that reflect the lanterns overhead, the cook's towel flying as he gives chase two steps behind with the wok still in one hand. [Shot 4] At 00:11.400, the shot cuts to a static shot on a rain-beaded corrugated roof where the macaque sits eating the dumpling with both hands, looking straight down into the lens. The camera pushes in with large amplitude at slow speed to a tight close-up of its wet face and the crumbs on its chin, while from below the cook, out of breath, with a low, gravelly voice (S1) says: <d>[English] Keep it. You paid nothing, you learn nothing.</d>\n\noverall_soundscape: Heavy rain drums on awnings and corrugated roofing over the roar of gas burners and the clatter of a steel wok on its ring. A dense crowd talks and laughs in layered voices, plastic stools scrape on wet concrete, and quick bare feet splash through standing water. A steamer lid rattles and falls, and the monkey chitters sharply at the end.\n\nnon_diegetic_music: Rapid plucked strings over a fast hand-drum pattern, accelerating through the chase and cutting off abruptly on the final close-up.",
+   "frames": 362,
+   "rows": [
+    {
+     "id": "baseline",
+     "title": "Baseline",
+     "method": null,
+     "steps": 25,
+     "total": 995.3499999999999,
+     "cold": 1022.1,
+     "sampler": 947.5,
+     "vram": 30.1,
+     "spd": 1.0,
+     "coldSpd": 1.0,
+     "qsum": null,
+     "state": "baseline",
+     "detail": "ComfyUI's official MiniMax H3 text-to-video template, unchanged except euler at 25 steps, on the 15-second four-shot prompt.",
+     "settings": [
+      [
+       "Model",
+       "MiniMax H3, pruned int8 (template)"
+      ],
+      [
+       "LoRA",
+       "none"
+      ],
+      [
+       "Steps",
+       "25"
+      ],
+      [
+       "Sampler",
+       "euler / simple"
+      ],
+      [
+       "Attention",
+       "Comfy Kitchen int8"
+      ],
+      [
+       "Output",
+       "1344x768, 362 frames, 24 fps, seed 1"
+      ]
+     ],
+     "nodes": [
+      [
+       "Load Diffusion Model",
+       [
+        [
+         "unet name",
+         "MiniMax H3, pruned int8 (template)"
+        ],
+        [
+         "weight dtype",
+         "default"
+        ]
+       ]
+      ],
+      [
+       "KSampler Select",
+       [
+        [
+         "sampler name",
+         "euler"
+        ]
+       ]
+      ],
+      [
+       "Basic Scheduler",
+       [
+        [
+         "scheduler",
+         "simple"
+        ],
+        [
+         "steps",
+         "25"
+        ],
+        [
+         "denoise",
+         "1"
+        ]
+       ]
+      ]
+     ],
+     "runs": [
+      {
+       "warm": 984.8,
+       "cold": 994.8
+      },
+      {
+       "warm": 1005.9,
+       "cold": 1049.4
+      }
+     ],
+     "url": null,
+     "source": null
+    },
+    {
+     "id": "0075c-15s",
+     "title": "Block Sparse Attention, 5 dense steps",
+     "method": "core-blocksparse",
+     "steps": 25,
+     "total": 581.8,
+     "cold": 589.1,
+     "sampler": 556.5,
+     "vram": 30.0,
+     "spd": 1.7108112753523548,
+     "coldSpd": 1.7350195213036836,
+     "qsum": 25,
+     "state": "pass",
+     "detail": "Five dense steps at 15 s: it gains more than at 5 s and keeps the baseline's frames in every shot.",
+     "settings": [
+      [
+       "Model",
+       "MiniMax H3, pruned int8 (template)"
+      ],
+      [
+       "LoRA",
+       "none"
+      ],
+      [
+       "Steps",
+       "25"
+      ],
+      [
+       "Sampler",
+       "euler / simple"
+      ],
+      [
+       "Attention",
+       "Comfy Kitchen int8 + Block Sparse (sol-attn, tau 1.3; first 20% dense)"
+      ],
+      [
+       "Output",
+       "1344x768, 362 frames, 24 fps, seed 1"
+      ]
+     ],
+     "nodes": [
+      [
+       "Block Sparse Attention",
+       [
+        [
+         "start percent",
+         "0.2"
+        ],
+        [
+         "end percent",
+         "1"
+        ],
+        [
+         "dense blocks",
+         ""
+        ],
+        [
+         "min tokens",
+         "12288"
+        ],
+        [
+         "extra tokens",
+         "256"
+        ],
+        [
+         "sink conditioning",
+         "exact_kv_and_rows"
+        ],
+        [
+         "selection",
+         "sol-attn"
+        ],
+        [
+         "tau",
+         "1.3"
+        ]
+       ]
+      ]
+     ],
+     "runs": null,
+     "url": "https://github.com/Comfy-Org/ComfyUI",
+     "source": "Comfy-Org/ComfyUI"
+    },
+    {
+     "id": "0075e-15s",
+     "title": "SageAttention 2.2",
+     "method": "sage",
+     "steps": 25,
+     "total": 1039.2,
+     "cold": 1052.3,
+     "sampler": 1003.0,
+     "vram": 30.1,
+     "spd": 0.9578040800615857,
+     "coldSpd": 0.9713009598023378,
+     "qsum": 25,
+     "state": "slower",
+     "detail": "SageAttention in place of Comfy Kitchen's int8 attention: a slightly different sample with every shot intact, but at 15 s it is 4% slower on this card.",
+     "settings": [
+      [
+       "Model",
+       "MiniMax H3, pruned int8 (template)"
+      ],
+      [
+       "LoRA",
+       "none"
+      ],
+      [
+       "Steps",
+       "25"
+      ],
+      [
+       "Sampler",
+       "euler / simple"
+      ],
+      [
+       "Attention",
+       "SageAttention 2.2"
+      ],
+      [
+       "Output",
+       "1344x768, 362 frames, 24 fps, seed 1"
+      ]
+     ],
+     "nodes": [],
+     "runs": null,
+     "url": "https://github.com/woct0rdho/SageAttention",
+     "source": "woct0rdho/SageAttention"
+    },
+    {
+     "id": "0075f-15s",
+     "title": "Block Sparse Attention, 3 dense steps",
+     "method": "sparse-solattn",
+     "steps": 25,
+     "total": 478.3,
+     "cold": 530.5,
+     "sampler": 452.5,
+     "vram": 30.0,
+     "spd": 2.0810160986828348,
+     "coldSpd": 1.9266729500471254,
+     "qsum": 25,
+     "state": "pass",
+     "detail": "At 15 seconds attention is a bigger share of the work, so Block Sparse Attention gains more than at 5 s. The frames are almost the baseline's own.",
+     "settings": [
+      [
+       "Model",
+       "MiniMax H3, pruned int8 (template)"
+      ],
+      [
+       "LoRA",
+       "none"
+      ],
+      [
+       "Steps",
+       "25"
+      ],
+      [
+       "Sampler",
+       "euler / simple"
+      ],
+      [
+       "Attention",
+       "Comfy Kitchen int8 + Block Sparse Attention (sol_attn, tau 1.3; 3 dense steps)"
+      ],
+      [
+       "Output",
+       "1344x768, 362 frames, 24 fps, seed 1"
+      ]
+     ],
+     "nodes": [
+      [
+       "Block Sparse Attention",
+       [
+        [
+         "enabled",
+         "on"
+        ],
+        [
+         "dense start",
+         "0.1"
+        ],
+        [
+         "engine",
+         "sol_attn"
+        ],
+        [
+         "tau",
+         "1.3"
+        ]
+       ]
+      ]
+     ],
+     "runs": null,
+     "url": "https://github.com/Comfy-Org/ComfyUI",
+     "source": "Comfy-Org/ComfyUI"
+    },
+    {
+     "id": "0079h-15s",
+     "title": "PDD Acc, 8 steps",
+     "method": "pdd-8",
+     "steps": 8,
+     "total": 341.6,
+     "cold": 352.3,
+     "sampler": 304.0,
+     "vram": 30.1,
+     "spd": 2.9137880562060885,
+     "coldSpd": 2.901220550667045,
+     "qsum": 23,
+     "state": "pass",
+     "detail": "PDD Acc at the 8 steps it was trained for: the white vest, the flame, a clean snatch and the chase with the wok; the roof and close-up turn to overcast daylight.",
+     "settings": [
+      [
+       "Model",
+       "MiniMax H3, int8 (unpruned)"
+      ],
+      [
+       "LoRA",
+       "PDD Acc adapter (its own)"
+      ],
+      [
+       "Steps",
+       "8, its own sigmas"
+      ],
+      [
+       "Sampler",
+       "euler / simple"
+      ],
+      [
+       "Attention",
+       "Comfy Kitchen int8"
+      ],
+      [
+       "Output",
+       "1344x768, 362 frames, 24 fps, seed 1"
+      ]
+     ],
+     "nodes": [
+      [
+       "Load Diffusion Model",
+       [
+        [
+         "unet name",
+         "MiniMax H3, int8 (unpruned)"
+        ],
+        [
+         "weight dtype",
+         "default"
+        ]
+       ]
+      ],
+      [
+       "PDD Acc Apply",
+       [
+        [
+         "pdd file",
+         "minimax_h3_fl2va_pdd_acc_8step_comfyui"
+        ],
+        [
+         "nfe",
+         "8"
+        ],
+        [
+         "lora strength",
+         "1"
+        ],
+        [
+         "head strength",
+         "1"
+        ],
+        [
+         "on off grid",
+         "error"
+        ],
+        [
+         "partition",
+         ""
+        ],
+        [
+         "enabled",
+         "on"
+        ],
+        [
+         "partition check",
+         "error"
+        ]
+       ]
+      ]
+     ],
+     "runs": null,
+     "url": "https://github.com/Jalen-Brunson/ComfyUI-MiniMax-H3-PDD-Acc",
+     "source": "Jalen-Brunson/ComfyUI-MiniMax-H3-PDD-Acc"
+    },
+    {
+     "id": "0079k-15s",
+     "title": "FastH3 v1, 4 steps",
+     "method": "fasth3-v1-euler",
+     "steps": 4,
+     "total": 124.2,
+     "cold": 130.4,
+     "sampler": 97.9,
+     "vram": 30.0,
+     "spd": 8.014090177133655,
+     "coldSpd": 7.83819018404908,
+     "qsum": 21,
+     "state": "trade",
+     "detail": "FastH3's 4-step preview on euler at 15 s: the night, the flame, a clean snatch and the chase all hold; the cook works bare-chested and the roof and fur look over-sharpened.",
+     "settings": [
+      [
+       "Model",
+       "FastH3 v1 checkpoint (int8)"
+      ],
+      [
+       "LoRA",
+       "none"
+      ],
+      [
+       "Steps",
+       "4"
+      ],
+      [
+       "Sampler",
+       "euler / simple"
+      ],
+      [
+       "Attention",
+       "Comfy Kitchen int8 + Block Sparse (vsa, keep 10.0%; first 20% dense)"
+      ],
+      [
+       "Also",
+       "Sigma shift (shift video 10.0, shift audio 3.0)"
+      ],
+      [
+       "Output",
+       "1344x768, 362 frames, 24 fps, seed 1"
+      ]
+     ],
+     "nodes": [
+      [
+       "Load Diffusion Model",
+       [
+        [
+         "unet name",
+         "FastH3 v1 checkpoint (int8)"
+        ],
+        [
+         "weight dtype",
+         "default"
+        ]
+       ]
+      ],
+      [
+       "MiniMax H3 Sigma Shift",
+       [
+        [
+         "shift video",
+         "10"
+        ],
+        [
+         "shift audio",
+         "3"
+        ]
+       ]
+      ],
+      [
+       "Model Attention Backend",
+       [
+        [
+         "attention",
+         "comfy kitchen attention"
+        ]
+       ]
+      ],
+      [
+       "Block Sparse Attention",
+       [
+        [
+         "start percent",
+         "0.2"
+        ],
+        [
+         "end percent",
+         "1"
+        ],
+        [
+         "dense blocks",
+         ""
+        ],
+        [
+         "min tokens",
+         "12288"
+        ],
+        [
+         "extra tokens",
+         "256"
+        ],
+        [
+         "sink conditioning",
+         "exact_kv_and_rows"
+        ],
+        [
+         "selection",
+         "vsa"
+        ],
+        [
+         "keep percent",
+         "10"
+        ]
+       ]
+      ],
+      [
+       "Basic Scheduler",
+       [
+        [
+         "scheduler",
+         "simple"
+        ],
+        [
+         "steps",
+         "4"
+        ],
+        [
+         "denoise",
+         "1"
+        ]
+       ]
+      ]
+     ],
+     "runs": null,
+     "url": "https://huggingface.co/Kijai/MiniMax-H3-experimental",
+     "source": "Kijai/MiniMax-H3-experimental"
+    },
+    {
+     "id": "0079m-15s",
+     "title": "FastH3 V2, 8 steps",
+     "method": "fasth3-v2-euler",
+     "steps": 8,
+     "total": 213.6,
+     "cold": 225.5,
+     "sampler": 185.6,
+     "vram": 30.1,
+     "spd": 4.659878277153558,
+     "coldSpd": 4.532594235033259,
+     "qsum": 20,
+     "state": "trade",
+     "detail": "FastH3 V2 at its 8 steps on euler at 15 s: the night, the flame, the snatch and the chase all hold; the cook works bare-chested and the roof and fur are over-sharpened.",
+     "settings": [
+      [
+       "Model",
+       "FastH3 V2 checkpoint (pruned int8)"
+      ],
+      [
+       "LoRA",
+       "none"
+      ],
+      [
+       "Steps",
+       "8"
+      ],
+      [
+       "Sampler",
+       "euler / simple"
+      ],
+      [
+       "Attention",
+       "Comfy Kitchen int8 + Block Sparse (vsa, keep 10.0%; first 20% dense)"
+      ],
+      [
+       "Also",
+       "Sigma shift (shift video 10.0, shift audio 3.0)"
+      ],
+      [
+       "Output",
+       "1344x768, 362 frames, 24 fps, seed 1"
+      ]
+     ],
+     "nodes": [
+      [
+       "Load Diffusion Model",
+       [
+        [
+         "unet name",
+         "FastH3 V2 checkpoint (pruned int8)"
+        ],
+        [
+         "weight dtype",
+         "default"
+        ]
+       ]
+      ],
+      [
+       "MiniMax H3 Sigma Shift",
+       [
+        [
+         "shift video",
+         "10"
+        ],
+        [
+         "shift audio",
+         "3"
+        ]
+       ]
+      ],
+      [
+       "Model Attention Backend",
+       [
+        [
+         "attention",
+         "comfy kitchen attention"
+        ]
+       ]
+      ],
+      [
+       "Block Sparse Attention",
+       [
+        [
+         "start percent",
+         "0.2"
+        ],
+        [
+         "end percent",
+         "1"
+        ],
+        [
+         "dense blocks",
+         ""
+        ],
+        [
+         "min tokens",
+         "12288"
+        ],
+        [
+         "extra tokens",
+         "256"
+        ],
+        [
+         "sink conditioning",
+         "exact_kv_and_rows"
+        ],
+        [
+         "selection",
+         "vsa"
+        ],
+        [
+         "keep percent",
+         "10"
+        ]
+       ]
+      ],
+      [
+       "Basic Scheduler",
+       [
+        [
+         "scheduler",
+         "simple"
+        ],
+        [
+         "steps",
+         "8"
+        ],
+        [
+         "denoise",
+         "1"
+        ]
+       ]
+      ]
+     ],
+     "runs": null,
+     "url": "https://huggingface.co/FastVideo/FastVideo-FastH3-Comfy",
+     "source": "FastVideo/FastVideo-FastH3-Comfy"
+    },
+    {
+     "id": "0080b-15s",
+     "title": "H3 Express",
+     "method": "h3-express-3",
+     "steps": 3,
+     "total": 89.0,
+     "cold": 96.5,
+     "sampler": 73.8,
+     "vram": 30.0,
+     "spd": 11.183707865168538,
+     "coldSpd": 10.591709844559587,
+     "qsum": 23,
+     "state": "pass",
+     "detail": "H3 Express with 3 calls: its full-size first step makes it slower than Fast at 15 s. The sign doubles into '24H 24H'.",
+     "settings": [
+      [
+       "Model",
+       "MiniMax H3, pruned int8 (template)"
+      ],
+      [
+       "LoRA",
+       "LightX2V turbo 4-8 step (DARE-TIES) @ 0.90"
+      ],
+      [
+       "Steps",
+       "3 model calls (Express Sigmas, of the LoRA's 6)"
+      ],
+      [
+       "Sampler",
+       "euler / simple"
+      ],
+      [
+       "Attention",
+       "Comfy Kitchen int8 + Block Sparse Attention (sol_attn, tau 1.3; 1 dense step)"
+      ],
+      [
+       "Also",
+       "H3 AdaLN LoRA fix (port, for the pruned model)"
+      ],
+      [
+       "Output",
+       "1344x768, 362 frames, 24 fps, seed 1"
+      ]
+     ],
+     "nodes": [
+      [
+       "LoRA Loader",
+       [
+        [
+         "lora name",
+         "minimax_h3_fl2v_lightx2v_turbo_4to8step_v0.1-v1.0_768p_v4_step600_dareties"
+        ],
+        [
+         "strength model",
+         "0.9"
+        ]
+       ]
+      ],
+      [
+       "H3 AdaLN LoRA Fix",
+       [
+        [
+         "mode",
+         "port"
+        ]
+       ]
+      ],
+      [
+       "Block Sparse Attention",
+       [
+        [
+         "enabled",
+         "on"
+        ],
+        [
+         "dense start",
+         "0.1"
+        ],
+        [
+         "engine",
+         "sol_attn"
+        ],
+        [
+         "tau",
+         "1.3"
+        ]
+       ]
+      ],
+      [
+       "H3 Express Sigmas",
+       [
+        [
+         "preset",
+         "express3 (3 calls: 1, .96, .706)"
+        ],
+        [
+         "scheduler",
+         "simple"
+        ]
+       ]
+      ]
+     ],
+     "runs": null,
+     "url": null,
+     "source": null
+    },
+    {
+     "id": "0084a-15s",
+     "title": "pDMD LoRA, 2 steps",
+     "method": "pdmd-2",
+     "steps": 2,
+     "total": 109.9,
+     "cold": 115.2,
+     "sampler": 82.5,
+     "vram": 30.0,
+     "spd": 9.056869881710645,
+     "coldSpd": 8.872395833333334,
+     "qsum": 24,
+     "state": "trade",
+     "detail": "The pDMD LoRA renders all four shots in 2 model calls: the wok flame, the dumpling snatch, the chase and a sharp close-up on the roof.",
+     "settings": [
+      [
+       "Model",
+       "MiniMax H3, pruned int8 (template)"
+      ],
+      [
+       "LoRA",
+       "pDMD 2-step @ 1.00"
+      ],
+      [
+       "Steps",
+       "2"
+      ],
+      [
+       "Sampler",
+       "euler / simple"
+      ],
+      [
+       "Attention",
+       "Comfy Kitchen int8"
+      ],
+      [
+       "Also",
+       "Sigma shift (shift video 12.0, shift audio 6.0)"
+      ],
+      [
+       "Output",
+       "1344x768, 362 frames, 24 fps, seed 1"
+      ]
+     ],
+     "nodes": [
+      [
+       "LoRA Loader",
+       [
+        [
+         "lora name",
+         "minimax_h3_pdmd_2step_lora_avg_rank_38_bf16"
+        ],
+        [
+         "strength model",
+         "1"
+        ]
+       ]
+      ],
+      [
+       "MiniMax H3 Sigma Shift",
+       [
+        [
+         "shift video",
+         "12"
+        ],
+        [
+         "shift audio",
+         "6"
+        ]
+       ]
+      ],
+      [
+       "Basic Scheduler",
+       [
+        [
+         "scheduler",
+         "simple"
+        ],
+        [
+         "steps",
+         "2"
+        ],
+        [
+         "denoise",
+         "1"
+        ]
+       ]
+      ]
+     ],
+     "runs": null,
+     "url": "https://huggingface.co/Kijai/MiniMax-H3-experimental/blob/main/loras/minimax_h3_pdmd_2step_lora_avg_rank_38_bf16.safetensors",
+     "source": "Kijai/MiniMax-H3-experimental"
+    },
+    {
+     "id": "0088b-15s",
+     "title": "pDMD LoRA + half resolution + X2 Detail VAE",
+     "method": "x2-pdmd2",
+     "steps": 2,
+     "total": 14.5,
+     "cold": 20.9,
+     "sampler": 7.6,
+     "vram": 30.3,
+     "spd": 68.64482758620689,
+     "coldSpd": 48.9043062200957,
+     "qsum": 23,
+     "state": "trade",
+     "detail": "pDMD in 2 model calls at half resolution, decoded 2x by the X2 Detail VAE: all four shots of the night market in 14.5 seconds.",
+     "settings": [
+      [
+       "Model",
+       "MiniMax H3, pruned int8 (template)"
+      ],
+      [
+       "LoRA",
+       "pDMD 2-step @ 1.00"
+      ],
+      [
+       "Steps",
+       "2"
+      ],
+      [
+       "Sampler",
+       "euler / simple"
+      ],
+      [
+       "Attention",
+       "Comfy Kitchen int8"
+      ],
+      [
+       "Also",
+       "Sigma shift (shift video 12.0, shift audio 6.0)"
+      ],
+      [
+       "Resolution",
+       "sampled at 672x384, decoded 2x to 1344x768 by the X2 Detail VAE (H3 X2 Stream Save, NVENC)"
+      ],
+      [
+       "Output",
+       "1344x768, 362 frames, 24 fps, seed 1"
+      ]
+     ],
+     "nodes": [
+      [
+       "LoRA Loader",
+       [
+        [
+         "lora name",
+         "minimax_h3_pdmd_2step_lora_avg_rank_38_bf16"
+        ],
+        [
+         "strength model",
+         "1"
+        ]
+       ]
+      ],
+      [
+       "MiniMax H3 Sigma Shift",
+       [
+        [
+         "shift video",
+         "12"
+        ],
+        [
+         "shift audio",
+         "6"
+        ]
+       ]
+      ],
+      [
+       "Basic Scheduler",
+       [
+        [
+         "scheduler",
+         "simple"
+        ],
+        [
+         "steps",
+         "2"
+        ],
+        [
+         "denoise",
+         "1"
+        ]
+       ]
+      ]
+     ],
+     "runs": null,
+     "url": null,
+     "source": null
+    }
+   ],
+   "all_rows": 85
+  }
+ ]
+}

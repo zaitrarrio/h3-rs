@@ -20,11 +20,16 @@ pub mod variant;
 pub mod vsa;
 pub mod weights;
 
-pub use backend::{Act, Backend, Conv1dShape, Conv3dShape, ConvEpilogue, ConvShape, ConvT1dShape, FlowStep, Gate, HeadNorm, ModRef, ModTable, Modulation, Rope};
-pub use variant::{Task, Variant};
-pub use config::{AudioVaeConfig, H3Config, Qwen3VlConfig, TaeH3Config, UpscalerConfig, VideoVaeConfig};
+pub use backend::{
+    Act, Backend, Conv1dShape, Conv3dShape, ConvEpilogue, ConvShape, ConvT1dShape, FlowStep, Gate,
+    HeadNorm, ModRef, ModTable, Modulation, Rope,
+};
+pub use config::{
+    AudioVaeConfig, H3Config, Qwen3VlConfig, TaeH3Config, UpscalerConfig, VideoVaeConfig,
+};
 pub use packing::{Geometry, Layout};
 pub use schedule::Schedule;
+pub use variant::{Task, Variant};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {

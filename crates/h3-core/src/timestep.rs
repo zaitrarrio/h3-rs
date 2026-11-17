@@ -45,9 +45,49 @@ pub struct TimeEmbedder {
     pub l2w: Vec<f32>,
     pub l2b: Vec<f32>,
     pub basis: Option<Vec<f32>>,
+    /// ComfyUI's single-file Trim checkpoints replace the embedder and the
+    /// basis by `adaln_t_table [grid, rank]`: the AdaLN input is the table
+    /// linearly interpolated at `t · (grid − 1)` (no SiLU).
+    pub table: Option<AdalnTable>,
+}
+
+/// `adaln_t_table [grid, width]`, row-major.
+pub struct AdalnTable {
+    pub grid: usize,
+    pub width: usize,
+    pub data: Vec<f32>,
+}
+
+impl AdalnTable {
+    /// Linear interpolation at `t ∈ [0, 1]` (clamped), as ComfyUI's
+    /// `torch.lerp(table[i0], table[i0 + 1], pos − i0)` with `pos = t·(grid−1)`,
+    /// `i0 = min(floor(pos), grid − 2)`.
+    pub fn at(&self, t: f32) -> Vec<f32> {
+        let pos = t.clamp(0.0, 1.0) * (self.grid - 1) as f32;
+        let i0 = (pos.floor() as usize).min(self.grid - 2);
+        let f = pos - i0 as f32;
+        let (a, b) = (
+            &self.data[i0 * self.width..(i0 + 1) * self.width],
+            &self.data[(i0 + 1) * self.width..(i0 + 2) * self.width],
+        );
+        a.iter().zip(b).map(|(&x, &y)| x + (y - x) * f).collect()
+    }
 }
 
 impl TimeEmbedder {
+    /// An embedder that only holds a table (no MLP weights).
+    pub fn from_table(table: AdalnTable) -> Self {
+        Self {
+            freq_dim: 0,
+            l1w: Vec::new(),
+            l1b: Vec::new(),
+            l2w: Vec::new(),
+            l2b: Vec::new(),
+            basis: None,
+            table: Some(table),
+        }
+    }
+
     /// `temb(t)`: the MLP output (`[time_embed_dim]`).
     pub fn temb(&self, t: f32) -> Vec<f32> {
         let e = sinusoid(t, self.freq_dim);
@@ -57,8 +97,11 @@ impl TimeEmbedder {
 
     /// What the AdaLN projections consume: `silu(temb)` for the full-rank
     /// checkpoints, `basis · silu(temb)` (no further SiLU) for a rank-reduced
-    /// one.
+    /// one, the interpolated table row for a table checkpoint.
     pub fn adaln_input(&self, t: f32) -> Vec<f32> {
+        if let Some(tab) = &self.table {
+            return tab.at(t);
+        }
         let s = silu(&self.temb(t));
         match &self.basis {
             Some(b) => matvec(b, None, &s),
@@ -70,6 +113,23 @@ impl TimeEmbedder {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn table_interpolates_linearly_and_clamps() {
+        let tab = AdalnTable {
+            grid: 3,
+            width: 2,
+            data: vec![0.0, 10.0, 1.0, 20.0, 4.0, 40.0],
+        };
+        assert_eq!(tab.at(0.0), vec![0.0, 10.0]);
+        assert_eq!(tab.at(0.25), vec![0.5, 15.0]);
+        assert_eq!(tab.at(0.5), vec![1.0, 20.0]);
+        assert_eq!(tab.at(0.75), vec![2.5, 30.0]);
+        assert_eq!(tab.at(1.0), vec![4.0, 40.0]);
+        assert_eq!(tab.at(7.0), vec![4.0, 40.0]);
+        let te = TimeEmbedder::from_table(tab);
+        assert_eq!(te.adaln_input(0.25), vec![0.5, 15.0]);
+    }
 
     #[test]
     fn sinusoid_is_cos_then_sin() {
