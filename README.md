@@ -269,6 +269,13 @@ they arrive and the soundtrack plays with them. `--synthetic` runs a tiny
 random model for trying the page without weights. The engine listens on
 127.0.0.1 and answers CORS for one `--allow-origin` only.
 
+`--upscale realesr-animevideov3.safetensors` adds an "Upscale after
+decoding" box: the clip plays at its own size as soon as it decodes, then
+Real-ESRGAN runs on the engine and the page switches to the upscaled frames
+(×4 for 480×272 → 1920×1088, ×3 for 480p → 2496×1440, ×2 above; a button
+flips back to the original size). The size menu also offers 480×272 and
+272×480, rendered at 480×288 / 288×480 and centre-cropped.
+
 ## Layout
 
 ```

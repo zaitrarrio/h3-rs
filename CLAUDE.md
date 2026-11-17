@@ -415,6 +415,15 @@ State and invariants only; the reasoning is in `docs/design.md`.
 - `h3 serve` binds 127.0.0.1, answers CORS for one `--allow-origin` only, and
   rejects non-JSON or foreign-origin generate requests; `web/demo.html` is
   compiled into the binary (rebuild after editing).
+  `serve` crops off-grid sizes like `generate` (`finish.rs` is shared) and,
+  with `--upscale`, runs Real-ESRGAN on a finished clip when the request
+  asks (`upscale: true | 2 | 3 | 4`): stage `upscaling`, frames kept as
+  JPEGs (`/api/jobs/<id>/hd?frame=N`; raw ×4 frames of a 480p clip would be
+  2.4 GB per job), the page decoding a 16-frame window of ImageBitmaps
+  around the playhead. Its default factor (`finish::serve_factor`) is the
+  largest whose output fits 2560×1440; `generate`'s is ×4 up to 480p.
+  Checked on the synthetic engine in Chromium (CPU backend); not yet timed
+  on a GPU.
 - Diagnostic switches (`H3_PROFILE`, `H3_STALL`, `H3_TRACE`,
   `H3_STREAM_STRESS`, `H3_CUDA_LT_NTH`, …) must leave a clip's bytes alone
   apart from a pinned candidate: the plain-FP8 timing probe (first call per

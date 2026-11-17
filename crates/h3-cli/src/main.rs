@@ -27,6 +27,7 @@ use h3_model::{
 use h3_text::image::Image;
 use std::path::{Path, PathBuf};
 
+mod finish;
 mod gallery;
 mod media;
 mod serve;
@@ -220,7 +221,7 @@ impl Shape {
             };
             (h, w, packing::resolve_num_frames(self.frames)?)
         };
-        let grid = |v: usize| v.div_ceil(packing::CANVAS_MULTIPLE) * packing::CANVAS_MULTIPLE;
+        let grid = finish::canvas_edge;
         let g = Geometry {
             width: grid(width),
             height: grid(height),
@@ -429,6 +430,11 @@ enum Cmd {
         tile: usize,
         #[arg(long, default_value_t = false)]
         preview: bool,
+        /// Offer Real-ESRGAN upscaling of finished clips
+        /// (`realesr-animevideov3.safetensors`; with `--synthetic`, any value
+        /// loads a tiny random ×2 network).
+        #[arg(long)]
+        upscale: Option<PathBuf>,
     },
 }
 
@@ -983,6 +989,7 @@ fn main() -> Result<()> {
             allow_origin,
             tile,
             preview,
+            upscale,
         } => {
             let resolved = if synthetic {
                 None
@@ -1000,6 +1007,7 @@ fn main() -> Result<()> {
                 attn,
                 tiling: (tile > 0).then_some(Tiling { tile, overlap: 64 }),
                 preview,
+                upscale,
             };
             serve::serve(settings, move |s, shared, rx| {
                 with_backend!(backend, |be| serve::engine(be, s, shared, rx))
@@ -1197,28 +1205,14 @@ impl Finish {
     fn apply<B: Backend>(&self, be: &B, g: &mut h3_model::pipeline::Generation) -> Result<()> {
         let (ow, oh) = self.out_size;
         if (ow, oh) != (g.width, g.height) {
-            let (l, t) = ((g.width - ow) / 2, (g.height - oh) / 2);
-            let mut rgb = Vec::with_capacity(g.frames * ow * oh * 3);
-            for f in 0..g.frames {
-                for y in t..t + oh {
-                    let row = (f * g.height + y) * g.width;
-                    rgb.extend_from_slice(&g.rgb[(row + l) * 3..(row + l + ow) * 3]);
-                }
-            }
+            g.rgb = finish::crop(&g.rgb, g.frames, g.width, g.height, ow, oh);
             println!("crop {}x{} -> {ow}x{oh}", g.width, g.height);
-            (g.rgb, g.width, g.height) = (rgb, ow, oh);
+            (g.width, g.height) = (ow, oh);
         }
         let Some((weights, factor)) = &self.upscale else {
             return Ok(());
         };
-        let factor = factor.unwrap_or(if g.width * g.height <= 832 * 480 {
-            4
-        } else {
-            2
-        });
-        if !(2..=4).contains(&factor) {
-            bail!("--upscale-factor is 2, 3 or 4, got {factor}");
-        }
+        let factor = factor.unwrap_or(finish::cli_factor(g.width, g.height));
         let t0 = std::time::Instant::now();
         let src = SafetensorsDir::open(weights)?;
         let up = h3_model::esrgan::Esrgan::load(
@@ -1226,29 +1220,11 @@ impl Finish {
             h3_model::esrgan::EsrganConfig::anime_video_v3(),
             &src,
         )?;
-        let s = up.cfg.scale;
         let (w, h) = (g.width, g.height);
         let (tw, th) = (w * factor, h * factor);
-        let batch = up.batch(be, h, w, 1 << 28);
         let mut rgb = vec![0u8; g.frames * tw * th * 3];
-        up.upscale(be, &g.rgb, g.frames, h, w, batch, &mut |f0, n, x4| {
-            let dst = &mut rgb[f0 * tw * th * 3..(f0 + n) * tw * th * 3];
-            if factor == s {
-                dst.copy_from_slice(&x4);
-            } else {
-                // Real-ESRGAN's --outscale: the ×4 frames resampled.
-                std::thread::scope(|sc| {
-                    for (f, d) in dst.chunks_mut(tw * th * 3).enumerate() {
-                        let fr = &x4[f * w * s * h * s * 3..(f + 1) * w * s * h * s * 3];
-                        sc.spawn(move || {
-                            let im = h3_text::image::Image::new(w * s, h * s, fr.to_vec());
-                            d.copy_from_slice(
-                                &im.resize(tw, th, h3_text::image::Filter::Lanczos).rgb,
-                            );
-                        });
-                    }
-                });
-            }
+        let batch = finish::upscale(be, &up, &g.rgb, g.frames, w, h, factor, &mut |f0, n, x| {
+            rgb[f0 * tw * th * 3..(f0 + n) * tw * th * 3].copy_from_slice(&x);
             Ok(())
         })?;
         println!(

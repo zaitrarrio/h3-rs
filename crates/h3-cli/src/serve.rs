@@ -7,12 +7,21 @@
 //! ```text
 //! GET  /                         the demo page (web/demo.html)
 //! GET  /api/info                 backend, model, limits, ready / error
-//! POST /api/generate             {prompt, width, height, frames, seed?} → {id}
+//! POST /api/generate             {prompt, width, height, frames, seed?, upscale?} → {id}
 //! GET  /api/jobs/<id>            status, per-stage timings, frames decoded so far
 //! GET  /api/jobs/<id>/frames?from=N
 //!                                binary: u32 LE width, height, first, count; then RGB8
 //! GET  /api/jobs/<id>/audio      WAV (16-bit stereo, 32 kHz) once the clip is done
+//! GET  /api/jobs/<id>/hd?frame=N one upscaled frame (JPEG), once upscaled
 //! ```
+//!
+//! A size off the 32-pixel grid (480×272) renders on the next canvas up
+//! (480×288) and the frames are centre-cropped as they decode. With
+//! `--upscale realesr-animevideov3.safetensors`, a request's `upscale`
+//! (`true` for the default factor, or 2 / 3 / 4) runs Real-ESRGAN on the
+//! finished clip: the low-resolution frames stream as usual, then the job
+//! enters `upscaling` and its frames become available one by one as JPEGs
+//! (`up_frames`), which keeps a clip of 1080p frames to tens of MB.
 //!
 //! It binds 127.0.0.1 by default and sends no CORS headers, so other web
 //! pages cannot queue jobs on your GPU. `--allow-origin <url>` opens the API
@@ -20,7 +29,7 @@
 //! non-JSON bodies and foreign `Origin`s (a cross-site form POST skips the
 //! preflight).
 
-use crate::{AttnArgs, Resolved, media, open_conditioner, open_transformer, sampler_plan};
+use crate::{AttnArgs, Resolved, finish, media, open_conditioner, open_transformer, sampler_plan};
 use anyhow::{Context, Result, anyhow};
 use h3_core::{
     Backend,
@@ -34,6 +43,7 @@ use h3_core::{
 use h3_model::{
     audio_vae::AudioVae,
     dit::{AdalnTables, H3Dit, LoadOptions},
+    esrgan::{Esrgan, EsrganConfig},
     pipeline::{Event, Pipeline, Prompt, Request, SamplerPlan},
     taeh3::TaeH3,
     vae::{Tiling, VideoVae},
@@ -59,6 +69,29 @@ pub struct Settings {
     pub attn: AttnArgs,
     pub tiling: Option<Tiling>,
     pub preview: bool,
+    /// Real-ESRGAN weights (any value with `synthetic`: a tiny random net).
+    pub upscale: Option<PathBuf>,
+}
+
+/// What a job asked of the upscaler.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Upscale {
+    Off,
+    /// [`finish::serve_factor`].
+    Auto,
+    Factor(usize),
+}
+
+/// A parsed `/api/generate` body.
+#[derive(Debug)]
+struct Parsed {
+    prompt: String,
+    /// The canvas the model renders.
+    geometry: Geometry,
+    /// The size the client gets (the canvas, or a centre crop of it).
+    out: (usize, usize),
+    seed: u64,
+    upscale: Upscale,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -68,6 +101,7 @@ enum Stage {
     Preparing,
     Denoising,
     Decoding,
+    Upscaling,
     Done,
     Failed,
 }
@@ -80,6 +114,7 @@ impl Stage {
             Stage::Preparing => "preparing",
             Stage::Denoising => "denoising",
             Stage::Decoding => "decoding",
+            Stage::Upscaling => "upscaling",
             Stage::Done => "done",
             Stage::Failed => "failed",
         }
@@ -90,7 +125,9 @@ struct Job {
     id: u64,
     prompt: String,
     geometry: Geometry,
+    out: (usize, usize),
     seed: u64,
+    upscale: Upscale,
     stage: Stage,
     tokens: usize,
     encode_s: f64,
@@ -106,17 +143,55 @@ struct Job {
     rgb: Vec<u8>,
     audio: Option<Vec<u8>>,
     error: Option<String>,
+    up_factor: Option<usize>,
+    /// Upscaled frames, JPEG.
+    hd: Vec<Vec<u8>>,
+    up_s: f64,
+    up_error: Option<String>,
 }
 
 impl Job {
+    fn new(id: u64, p: Parsed, total_steps: usize) -> Self {
+        Job {
+            id,
+            prompt: p.prompt,
+            geometry: p.geometry,
+            out: p.out,
+            seed: p.seed,
+            upscale: p.upscale,
+            stage: Stage::Queued,
+            tokens: 0,
+            encode_s: 0.0,
+            prepare_s: 0.0,
+            steps: Vec::new(),
+            total_steps,
+            decode_s: 0.0,
+            started: None,
+            total_s: 0.0,
+            width: 0,
+            height: 0,
+            frames: 0,
+            rgb: Vec::new(),
+            audio: None,
+            error: None,
+            up_factor: None,
+            hd: Vec::new(),
+            up_s: 0.0,
+            up_error: None,
+        }
+    }
+
     fn status(&self) -> Value {
         json!({
             "id": self.id, "prompt": self.prompt, "stage": self.stage.name(), "seed": self.seed,
-            "width": self.geometry.width, "height": self.geometry.height, "total_frames": self.geometry.frames,
+            "width": self.out.0, "height": self.out.1, "total_frames": self.geometry.frames,
+            "canvas_width": self.geometry.width, "canvas_height": self.geometry.height,
             "tokens": self.tokens, "encode_s": self.encode_s, "prepare_s": self.prepare_s,
             "steps": self.steps, "total_steps": self.total_steps, "decode_s": self.decode_s,
             "elapsed_s": self.started.map(|t| t.elapsed().as_secs_f64()).unwrap_or(0.0),
             "total_s": self.total_s, "frames": self.frames, "audio": self.audio.is_some(), "error": self.error,
+            "upscale": self.up_factor, "up_frames": self.hd.len(), "up_s": self.up_s, "up_error": self.up_error,
+            "up_width": self.up_factor.map(|k| self.out.0 * k), "up_height": self.up_factor.map(|k| self.out.1 * k),
         })
     }
 }
@@ -370,11 +445,28 @@ pub fn engine<B: Backend>(
             tables,
         )
     };
+    let upscaler = match &s.upscale {
+        None => None,
+        Some(p) => {
+            stage("loading the upscaler");
+            Some(if s.synthetic {
+                Esrgan::load(&be, EsrganConfig::tiny(), &Synthetic { seed: 5 })?
+            } else {
+                Esrgan::load(
+                    &be,
+                    EsrganConfig::anime_video_v3(),
+                    &SafetensorsDir::open(p)?,
+                )?
+            })
+        }
+    };
     stage("waiting for the device");
     be.sync();
     {
         let mut info = shared.info.lock().unwrap();
         info["ready"] = json!(true);
+        info["upscale"] = json!(upscaler.as_ref().map(|u| u.cfg.scale));
+        info["upscale_max_pixels"] = json!(finish::SERVE_MAX_OUT_PIXELS);
         info["model"] = json!(model);
         info["backend"] = json!(be.name());
         info["load_s"] = json!(t0.elapsed().as_secs_f64());
@@ -392,10 +484,10 @@ pub fn engine<B: Backend>(
     let _ = Schedule::uniform;
 
     for id in rx {
-        let Some((prompt, geometry, seed)) = shared.with(id, |j| {
+        let Some((prompt, geometry, out, seed, upscale)) = shared.with(id, |j| {
             j.started = Some(Instant::now());
             j.stage = Stage::Encoding;
-            (j.prompt.clone(), j.geometry, j.seed)
+            (j.prompt.clone(), j.geometry, j.out, j.seed, j.upscale)
         }) else {
             continue;
         };
@@ -456,10 +548,12 @@ pub fn engine<B: Backend>(
                         rgb,
                         ..
                     } => {
+                        let (ow, oh) = (out.0.min(width), out.1.min(height));
+                        let cropped = finish::crop(rgb, count, width, height, ow, oh);
                         shared.with(id, |j| {
-                            j.width = width;
-                            j.height = height;
-                            j.rgb.extend_from_slice(rgb);
+                            j.width = ow;
+                            j.height = oh;
+                            j.rgb.extend_from_slice(&cropped);
                             j.frames += count;
                             j.decode_s = j.started.unwrap().elapsed().as_secs_f64()
                                 - j.encode_s
@@ -483,6 +577,10 @@ pub fn engine<B: Backend>(
                 },
             )?;
             let _ = generation;
+            if upscale != Upscale::Off {
+                let res = upscale_job(&be, upscaler.as_ref(), &shared, id, upscale);
+                shared.with(id, |j| j.up_error = res.err().map(|e| format!("{e:#}")));
+            }
             Ok(())
         };
         let res = run();
@@ -498,6 +596,60 @@ pub fn engine<B: Backend>(
         });
     }
     Ok(())
+}
+
+/// Upscale a finished job's frames and keep them as JPEGs, frame by frame.
+fn upscale_job<B: Backend>(
+    be: &B,
+    up: Option<&Esrgan<B>>,
+    shared: &Shared,
+    id: u64,
+    upscale: Upscale,
+) -> Result<()> {
+    let up = up.ok_or_else(|| anyhow!("this engine has no upscaler (start it with --upscale)"))?;
+    let (rgb, frames, w, h) = shared
+        .with(id, |j| (j.rgb.clone(), j.frames, j.width, j.height))
+        .ok_or_else(|| anyhow!("no such job"))?;
+    let factor = match upscale {
+        Upscale::Factor(k) => k,
+        _ => finish::serve_factor(w, h, up.cfg.scale),
+    };
+    shared.with(id, |j| {
+        j.stage = Stage::Upscaling;
+        j.up_factor = Some(factor);
+    });
+    let t = Instant::now();
+    let (tw, th) = (w * factor, h * factor);
+    finish::upscale(be, up, &rgb, frames, w, h, factor, &mut |_, n, x| {
+        let mut jpegs = vec![Vec::new(); n];
+        std::thread::scope(|sc| -> Result<()> {
+            let hs: Vec<_> = x
+                .chunks(tw * th * 3)
+                .map(|fr| sc.spawn(move || jpeg(fr, tw, th)))
+                .collect();
+            for (o, hnd) in jpegs.iter_mut().zip(hs) {
+                *o = hnd.join().map_err(|_| anyhow!("JPEG encoder panicked"))??;
+            }
+            Ok(())
+        })?;
+        shared.with(id, |j| {
+            j.hd.extend(jpegs);
+            j.up_s = t.elapsed().as_secs_f64();
+        });
+        Ok(())
+    })?;
+    Ok(())
+}
+
+fn jpeg(rgb: &[u8], w: usize, h: usize) -> Result<Vec<u8>> {
+    let mut buf = Vec::new();
+    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut buf, 92).encode(
+        rgb,
+        w as u32,
+        h as u32,
+        image::ExtendedColorType::Rgb8,
+    )?;
+    Ok(buf)
 }
 
 fn hdr(k: &str, v: &str) -> tiny_http::Header {
@@ -543,7 +695,7 @@ fn cors_for(req: &tiny_http::Request, allow: Option<&str>) -> Vec<tiny_http::Hea
     }
 }
 
-fn parse_request(body: &str, s: &Settings, pika: bool) -> Result<(String, Geometry, u64), String> {
+fn parse_request(body: &str, s: &Settings, pika: bool) -> Result<Parsed, String> {
     let v: Value = serde_json::from_str(body).map_err(|e| format!("body is not JSON: {e}"))?;
     let prompt = v["prompt"].as_str().unwrap_or("").trim().to_string();
     if prompt.is_empty() {
@@ -559,12 +711,33 @@ fn parse_request(body: &str, s: &Settings, pika: bool) -> Result<(String, Geomet
         packing::resolve_num_frames(num("frames", 124))
     }
     .map_err(|e| e.to_string())?;
+    let out = (num("width", 1344), num("height", 768));
+    // Off the 32-pixel grid: render the next canvas up and crop back (not
+    // for Pika's bucketed canvases).
+    let crop = !pika && out.0 % 16 == 0 && out.1 % 16 == 0;
     let g = Geometry {
-        width: num("width", 1344),
-        height: num("height", 768),
+        width: if crop {
+            finish::canvas_edge(out.0)
+        } else {
+            out.0
+        },
+        height: if crop {
+            finish::canvas_edge(out.1)
+        } else {
+            out.1
+        },
         frames,
     };
-    g.validate(16).map_err(|e| e.to_string())?;
+    g.validate(16).map_err(|e| {
+        if pika {
+            e.to_string()
+        } else {
+            format!(
+                "{}×{}: width and height must be positive multiples of 16.",
+                out.0, out.1
+            )
+        }
+    })?;
     if g.width * g.height > s.max_pixels {
         return Err(format!(
             "{}×{} is above this engine's limit of {} pixels per frame.",
@@ -577,13 +750,33 @@ fn parse_request(body: &str, s: &Settings, pika: bool) -> Result<(String, Geomet
             g.frames, s.max_frames
         ));
     }
+    let upscale = match &v["upscale"] {
+        Value::Null | Value::Bool(false) => Upscale::Off,
+        Value::Bool(true) => Upscale::Auto,
+        x => match x.as_u64() {
+            Some(k @ 2..=4) => Upscale::Factor(k as usize),
+            _ => return Err("`upscale` is true, false, 2, 3 or 4.".into()),
+        },
+    };
+    if upscale != Upscale::Off && s.upscale.is_none() {
+        return Err(
+            "This engine has no upscaler: start it with --upscale realesr-animevideov3.safetensors."
+                .into(),
+        );
+    }
     let seed = v["seed"].as_u64().unwrap_or_else(|| {
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos() as u64 % 1_000_000_000)
             .unwrap_or(7)
     });
-    Ok((prompt, g, seed))
+    Ok(Parsed {
+        prompt,
+        geometry: g,
+        out,
+        seed,
+        upscale,
+    })
 }
 
 /// Serve until killed. `start_engine` builds the backend on the engine thread.
@@ -719,7 +912,7 @@ pub fn serve(
                 let parsed = parse_request(&body, &s, pika).and_then(|r| {
                     let info = shared.info.lock().unwrap();
                     match info["gallery"].as_array() {
-                        Some(g) if !g.iter().any(|p| p.as_str().is_some_and(|p| p.split_whitespace().eq(r.0.split_whitespace()))) => {
+                        Some(g) if !g.iter().any(|p| p.as_str().is_some_and(|p| p.split_whitespace().eq(r.prompt.split_whitespace()))) => {
                             Err(format!("This engine has no text encoder: pick one of its {} gallery prompts.", g.len()))
                         }
                         _ => Ok(r),
@@ -727,7 +920,7 @@ pub fn serve(
                 });
                 match parsed {
                     Err(e) => respond_json(req, 400, &json!({"error": e}), &cors),
-                    Ok((prompt, geometry, seed)) => {
+                    Ok(parsed) => {
                         let mut jobs = shared.jobs.lock().unwrap();
                         if jobs
                             .iter()
@@ -750,27 +943,8 @@ pub fn serve(
                             *n - 1
                         };
                         let total_steps = info["steps"].as_u64().unwrap_or(8) as usize;
-                        jobs.push(Job {
-                            id,
-                            prompt,
-                            geometry,
-                            seed,
-                            stage: Stage::Queued,
-                            tokens: 0,
-                            encode_s: 0.0,
-                            prepare_s: 0.0,
-                            steps: Vec::new(),
-                            total_steps,
-                            decode_s: 0.0,
-                            started: None,
-                            total_s: 0.0,
-                            width: 0,
-                            height: 0,
-                            frames: 0,
-                            rgb: Vec::new(),
-                            audio: None,
-                            error: None,
-                        });
+                        let seed = parsed.seed;
+                        jobs.push(Job::new(id, parsed, total_steps));
                         while jobs.len() > KEEP_JOBS {
                             match jobs
                                 .iter()
@@ -826,6 +1000,28 @@ pub fn serve(
                             None => respond_json(req, 404, &json!({"error": "no such job"}), &cors),
                         }
                     }
+                    "hd" => {
+                        let n = query
+                            .split('&')
+                            .find_map(|kv| kv.strip_prefix("frame="))
+                            .and_then(|v| v.parse::<usize>().ok())
+                            .unwrap_or(0);
+                        match shared.with(id, |j| j.hd.get(n).cloned()) {
+                            Some(Some(b)) => send(
+                                req,
+                                tiny_http::Response::from_data(b)
+                                    .with_header(hdr("Content-Type", "image/jpeg")),
+                                &cors,
+                            ),
+                            Some(None) => respond_json(
+                                req,
+                                404,
+                                &json!({"error": "that frame is not upscaled (yet)"}),
+                                &cors,
+                            ),
+                            None => respond_json(req, 404, &json!({"error": "no such job"}), &cors),
+                        }
+                    }
                     "audio" => match shared.with(id, |j| j.audio.clone()) {
                         Some(Some(b)) => send(
                             req,
@@ -852,3 +1048,150 @@ pub fn serve(
 }
 
 use std::io::Read as _;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    #[derive(Parser)]
+    struct A {
+        #[command(flatten)]
+        attn: AttnArgs,
+    }
+
+    fn settings(upscale: bool) -> Settings {
+        Settings {
+            addr: String::new(),
+            model: None,
+            gallery: None,
+            synthetic: true,
+            max_pixels: 1344 * 768,
+            max_frames: 243,
+            allow_origin: None,
+            attn: A::parse_from(["t"]).attn,
+            tiling: None,
+            preview: false,
+            upscale: upscale.then(|| PathBuf::from("x")),
+        }
+    }
+
+    #[test]
+    fn sizes_off_the_grid_render_the_next_canvas_up() {
+        let p = parse_request(
+            r#"{"prompt":"a fox","width":480,"height":272}"#,
+            &settings(false),
+            false,
+        )
+        .unwrap();
+        assert_eq!(
+            (p.geometry.width, p.geometry.height, p.out),
+            (480, 288, (480, 272))
+        );
+        let p = parse_request(
+            r#"{"prompt":"a fox","width":272,"height":480}"#,
+            &settings(false),
+            false,
+        )
+        .unwrap();
+        assert_eq!(
+            (p.geometry.width, p.geometry.height, p.out),
+            (288, 480, (272, 480))
+        );
+        let p = parse_request(
+            r#"{"prompt":"a fox","width":1344,"height":768}"#,
+            &settings(false),
+            false,
+        )
+        .unwrap();
+        assert_eq!(
+            (p.geometry.width, p.geometry.height, p.out),
+            (1344, 768, (1344, 768))
+        );
+        assert!(
+            parse_request(
+                r#"{"prompt":"a fox","width":481,"height":272}"#,
+                &settings(false),
+                false
+            )
+            .is_err()
+        );
+        // Pika's canvases are not cropped.
+        assert!(
+            parse_request(
+                r#"{"prompt":"a fox","width":480,"height":272}"#,
+                &settings(false),
+                true
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn upscale_needs_an_upscaler_and_a_known_factor() {
+        let body =
+            |u: &str| format!(r#"{{"prompt":"a fox","width":480,"height":272,"upscale":{u}}}"#);
+        assert_eq!(
+            parse_request(&body("false"), &settings(false), false)
+                .unwrap()
+                .upscale,
+            Upscale::Off
+        );
+        assert!(
+            parse_request(&body("true"), &settings(false), false)
+                .unwrap_err()
+                .contains("--upscale")
+        );
+        assert_eq!(
+            parse_request(&body("true"), &settings(true), false)
+                .unwrap()
+                .upscale,
+            Upscale::Auto
+        );
+        assert_eq!(
+            parse_request(&body("3"), &settings(true), false)
+                .unwrap()
+                .upscale,
+            Upscale::Factor(3)
+        );
+        assert!(parse_request(&body("5"), &settings(true), false).is_err());
+        assert!(parse_request(&body("\"yes\""), &settings(true), false).is_err());
+    }
+
+    #[test]
+    fn upscaled_frames_are_jpegs_of_the_factor() {
+        let be = h3_cpu::Cpu;
+        let up = Esrgan::load(&be, EsrganConfig::tiny(), &Synthetic { seed: 5 }).unwrap();
+        let shared = Shared {
+            jobs: Mutex::new(Vec::new()),
+            info: Mutex::new(json!({})),
+            next: Mutex::new(1),
+        };
+        let p = parse_request(
+            r#"{"prompt":"a fox","width":480,"height":272,"upscale":true}"#,
+            &settings(true),
+            false,
+        )
+        .unwrap();
+        let mut j = Job::new(1, p, 4);
+        (j.width, j.height, j.frames) = (20, 12, 3);
+        j.rgb = (0..3 * 20 * 12 * 3).map(|i| (i * 13 % 256) as u8).collect();
+        shared.jobs.lock().unwrap().push(j);
+        upscale_job(&be, Some(&up), &shared, 1, Upscale::Auto).unwrap();
+        let st = shared.with(1, |j| j.status()).unwrap();
+        assert_eq!(
+            (
+                st["stage"].as_str(),
+                st["upscale"].as_u64(),
+                st["up_frames"].as_u64()
+            ),
+            (Some("upscaling"), Some(2), Some(3))
+        );
+        let hd = shared.with(1, |j| j.hd.clone()).unwrap();
+        for f in &hd {
+            let im = image::load_from_memory_with_format(f, image::ImageFormat::Jpeg).unwrap();
+            assert_eq!((im.width(), im.height()), (40, 24));
+        }
+        assert!(upscale_job(&be, None, &shared, 1, Upscale::Auto).is_err());
+    }
+}

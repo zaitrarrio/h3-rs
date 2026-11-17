@@ -85,6 +85,8 @@ code { font: 0.85em var(--f-mono); background: var(--accent-soft); padding: 1px 
 .clip span { font-size: 0.78rem; line-height: 1.35; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 @media (prefers-reduced-motion: no-preference) { .stage.active { animation: pulse 1.4s ease-in-out infinite; } }
 @keyframes pulse { 50% { background: transparent; } }
+label.check { display: flex; gap: 10px; align-items: flex-start; cursor: pointer; }
+label.check input { width: auto; margin: 3px 0 0; accent-color: var(--accent); }
 </style>
 </head>
 <body>
@@ -115,6 +117,7 @@ code { font: 0.85em var(--f-mono); background: var(--accent-soft); padding: 1px 
         <label class="field"><span class="label">Size</span><select id="size"></select></label>
         <label class="field"><span class="label">Length</span><select id="length"></select></label>
       </div>
+      <label class="check" id="up-row" hidden><input type="checkbox" id="up"><span>Upscale after decoding <span class="hint" id="up-hint"></span></span></label>
       <div class="row">
         <label class="field"><span class="label">Seed</span><input id="seed" type="number" min="0" step="1" placeholder="random"></label>
         <button type="button" class="ghost" id="dice" style="flex:0 0 auto">New seed</button>
@@ -131,6 +134,7 @@ code { font: 0.85em var(--f-mono); background: var(--accent-soft); padding: 1px 
         <div class="screen" id="screen"><canvas id="canvas" width="1344" height="768"></canvas><div class="empty" id="empty">Your clip plays here as soon as the first frames are decoded.</div></div>
         <div class="controls">
           <button type="button" class="ghost" id="play" disabled>Pause</button>
+          <button type="button" class="ghost" id="hd" hidden aria-pressed="true">Upscaled</button>
           <input type="range" id="scrub" min="0" max="0" value="0" disabled aria-label="Frame">
           <span class="counter" id="counter">0 / 0</span>
         </div>
@@ -169,11 +173,12 @@ const EXAMPLES = [
   ["Pour-over", "Close-up of hot water pouring in a slow spiral over coffee grounds in a glass pour-over, morning window light, macro detail."],
   ["Koi pond", "Top-down view of orange and white koi gliding beneath lily pads in a clear pond, ripples spreading, soft daylight."],
 ];
-const SIZES = [[1344, 768, "1344×768 · 16:9 (release)"], [768, 1344, "768×1344 · 9:16"], [768, 768, "768×768 · 1:1"], [832, 480, "832×480 · 480p"], [480, 832, "480×832 · 480p portrait"]];
+const SIZES = [[1344, 768, "1344×768 · 16:9 (release)"], [768, 1344, "768×1344 · 9:16"], [768, 768, "768×768 · 1:1"], [832, 480, "832×480 · 480p"], [480, 832, "480×832 · 480p portrait"],
+  [480, 272, "480×272 · 272p (may ghost)", true], [272, 480, "272×480 · 272p portrait", true]];
 const LENGTHS = [[124, "5.2 s · 124 frames"], [158, "6.6 s · 158 frames"], [192, "8 s · 192 frames"], [243, "10.1 s · 243 frames"], [294, "12.3 s · 294 frames"], [362, "15.1 s · 362 frames"]];
 
 let info = null, job = null, poll = null;
-let clip = { frames: [], width: 0, height: 0, total: 0, id: null };
+let clip = { frames: [], width: 0, height: 0, total: 0, id: null, hd: null };
 let frame = 0, playing = true, lastTick = 0, recording = false;
 const ctx = $("canvas").getContext("2d");
 
@@ -201,6 +206,8 @@ async function refreshInfo() {
   if (info.steps) { setSteps(info.steps); $("steps-hint").textContent = `${info.steps} denoising step${info.steps === 1 ? "" : "s"}, ${FPS} fps with 32 kHz stereo audio. Ctrl/⌘ + Enter generates. Clips stay on your machine: the engine runs on your GPU, and this page only talks to it.`; }
   if (!SAME) $("connect").hidden = true;
   $("synthetic").hidden = !info.synthetic;
+  $("up-row").hidden = !info.upscale;
+  if (info.upscale && store("h3.upscale") != null) $("up").checked = store("h3.upscale") === "1";
   applyGallery(info.gallery);
   fillOptions();
   $("go").disabled = !!job;
@@ -235,12 +242,24 @@ function applyGallery(list) {
 function setEngine(kind, text) { $("eng-dot").className = "dot " + kind; $("eng-text").textContent = text; }
 function fillOptions() {
   const keep = [$("size").value, $("length").value];
-  $("size").innerHTML = SIZES.filter(([w, h]) => w * h <= info.max_pixels).map(([w, h, l]) => `<option value="${w}x${h}">${l}</option>`).join("");
+  $("size").innerHTML = SIZES.filter(([w, h, , crop]) => w * h <= info.max_pixels && !(crop && info.pika)).map(([w, h, l]) => `<option value="${w}x${h}">${l}</option>`).join("");
   $("length").innerHTML = LENGTHS.filter(([f]) => f <= info.max_frames).map(([f, l]) => `<option value="${f}">${l}</option>`).join("");
   if (keep[0]) $("size").value = keep[0];
   if (keep[1]) $("length").value = keep[1];
   if (!$("size").value) $("size").selectedIndex = 0;
   if (!$("length").value) $("length").selectedIndex = 0;
+  upHint();
+}
+// The engine's default factor (finish::serve_factor): the largest up to the
+// network's whose output fits upscale_max_pixels, at least 2.
+function upFactor(w, h) {
+  for (let k = info.upscale; k >= 2; k--) if (w * k * h * k <= info.upscale_max_pixels) return k;
+  return 2;
+}
+function upHint() {
+  if (!info?.upscale || !$("size").value) return;
+  const [w, h] = $("size").value.split("x").map(Number), k = upFactor(w, h);
+  $("up-hint").textContent = `(×${k}: ${w}×${h} → ${w * k}×${h * k}; Real-ESRGAN, after the clip plays)`;
 }
 
 // ---- stages -----------------------------------------------------------------
@@ -249,7 +268,8 @@ function setSteps(n) { STAGES = [["encoding", "Prompt"]]; for (let i = 0; i < n;
 function renderStages(s) {
   const st = s ? s.stage : null, steps = s ? s.steps : [];
   const fmt = (x) => x.toFixed(x < 10 ? 2 : 1) + " s";
-  $("stages").innerHTML = STAGES.map(([key, label], i) => {
+  const stages = s?.upscale ? [...STAGES, ["upscaling", "Upscale ×" + s.upscale]] : STAGES;
+  $("stages").innerHTML = stages.map(([key, label], i) => {
     let cls = "", detail = "–";
     if (s) {
       if (key === "encoding") {
@@ -260,9 +280,12 @@ function renderStages(s) {
         const k = +key.slice(4);
         if (steps[k] != null) { cls = "done"; detail = fmt(steps[k]); }
         else if ((st === "denoising" || st === "preparing") && steps.length === k) { cls = "active"; detail = "running"; }
+      } else if (key === "upscaling") {
+        if (st === "upscaling") { cls = "active"; detail = `${s.up_frames} / ${s.frames}`; }
+        if (st === "done") { if (s.up_error) detail = "failed"; else { cls = "done"; detail = fmt(s.up_s); } }
       } else {
         if (st === "decoding") { cls = "active"; detail = `${s.frames} / ${s.total_frames}`; }
-        if (st === "done") { cls = "done"; detail = fmt(s.decode_s); }
+        if (st === "done" || st === "upscaling") { cls = "done"; detail = fmt(s.decode_s); }
         if (st === "failed") { detail = "failed"; }
       }
     }
@@ -277,6 +300,7 @@ async function generate(e) {
   $("err").hidden = true;
   const [width, height] = $("size").value.split("x").map(Number);
   const body = { prompt: $("prompt").value, width, height, frames: +$("length").value };
+  if (info.upscale && $("up").checked) body.upscale = true;
   if ($("seed").value !== "") body.seed = Math.max(0, Math.floor(+$("seed").value));
   $("go").disabled = true; $("go").textContent = "Generating…";
   try {
@@ -294,7 +318,9 @@ function resetButton() { job = null; $("go").textContent = "Generate clip"; $("g
 function showError(m) { $("err").textContent = m; $("err").hidden = false; }
 
 function startClip(id, w, h, total) {
-  clip = { frames: [], width: w, height: h, total, id };
+  dropHd();
+  clip = { frames: [], width: w, height: h, total, id, hd: null };
+  $("hd").hidden = true;
   { const a = $("audio"); a.pause(); a.removeAttribute("src"); audioJob = null; audioBlob = null; $("save-wav").disabled = true; }
   frame = 0; playing = true;
   $("canvas").width = w; $("canvas").height = h;
@@ -313,7 +339,7 @@ async function fetchFrames(id) {
   const head = new Uint32Array(buf, 0, 4);
   const [w, h, , count] = head, px = w * h;
   if (!count || clip.id !== id) return;
-  if (w !== clip.width || h !== clip.height) { clip.width = w; clip.height = h; $("canvas").width = w; $("canvas").height = h; }
+  if (w !== clip.width || h !== clip.height) { clip.width = w; clip.height = h; if (!showingHd()) { $("canvas").width = w; $("canvas").height = h; } }
   const rgb = new Uint8Array(buf, 16);
   for (let f = 0; f < count; f++) {
     const img = new ImageData(w, h), d = img.data, off = f * px * 3;
@@ -333,11 +359,61 @@ async function pollJob() {
   renderStages(s);
   if (s.frames > clip.frames.length) await fetchFrames(job.id);
   if (s.stage === "failed") { showError("Generation failed: " + s.error); resetButton(); return; }
+  if (s.stage === "upscaling" || s.stage === "done") {
+    if (s.audio) fetchAudio(s.id);
+    if (s.upscale) await fetchHd(s);
+  }
   if (s.stage === "done") {
+    if (s.up_error) showError("Upscale failed: " + s.up_error);
     finishClip(s);
     resetButton(); return;
   }
   poll = setTimeout(pollJob, 250);
+}
+
+// ---- upscaled frames ---------------------------------------------------------------
+// The engine keeps them as JPEGs; the page keeps the JPEG blobs and decodes a
+// short window of ImageBitmaps around the playhead (a clip of decoded 1080p
+// frames would hold a gigabyte).
+const low = document.createElement("canvas"), lowCtx = low.getContext("2d");
+function dropHd() { clip.hd?.bmp.forEach((b) => b.close()); }
+function showingHd() { return !!(clip.hd && clip.hd.on && clip.hd.blobs.length === clip.frames.length && clip.frames.length); }
+async function fetchHd(s) {
+  if (!clip.hd || clip.hd.id !== s.id) { dropHd(); clip.hd = { id: s.id, k: s.upscale, w: s.up_width, h: s.up_height, blobs: [], bmp: new Map(), pending: new Set(), on: store("h3.hd") !== "0" }; }
+  const c = clip.hd;
+  while (c.blobs.length < s.up_frames && clip.hd === c) {
+    const r = await fetch(api(`/api/jobs/${s.id}/hd?frame=${c.blobs.length}`), { cache: "no-store" });
+    if (!r.ok) break;
+    c.blobs.push(await r.blob());
+  }
+  if (c.blobs.length === clip.frames.length) setHd(c.on);
+}
+function setHd(on) {
+  const c = clip.hd; if (!c) return;
+  c.on = on;
+  const hd = showingHd();
+  $("hd").hidden = c.blobs.length !== clip.frames.length;
+  $("hd").textContent = hd ? `Upscaled ×${c.k}` : "Original size"; $("hd").setAttribute("aria-pressed", String(hd));
+  const [w, h] = hd ? [c.w, c.h] : [clip.width, clip.height];
+  if ($("canvas").width !== w || $("canvas").height !== h) { $("canvas").width = w; $("canvas").height = h; }
+  draw();
+}
+$("hd").onclick = () => { if (clip.hd) { store("h3.hd", clip.hd.on ? "0" : "1"); setHd(!clip.hd.on); } };
+function hdBitmap(f) {
+  const c = clip.hd;
+  for (let i = 0; i < 12; i++) {
+    const g = (f + i) % c.blobs.length;
+    if (c.bmp.has(g) || c.pending.has(g)) continue;
+    c.pending.add(g);
+    createImageBitmap(c.blobs[g]).then((b) => {
+      c.pending.delete(g);
+      if (clip.hd !== c) { b.close(); return; }
+      c.bmp.set(g, b);
+      for (const [k, v] of c.bmp) { if ((k - frame + c.blobs.length) % c.blobs.length >= 16) { v.close(); c.bmp.delete(k); } }
+      if (g === frame) draw();
+    }).catch(() => c.pending.delete(g));
+  }
+  return c.bmp.get(f) || null;
 }
 
 let audioBlob = null, audioJob = null;
@@ -366,13 +442,25 @@ $("save-wav").onclick = () => audioBlob && download(audioBlob, `${slug()}.wav`);
 function finishClip(s) {
   if (s.audio) fetchAudio(s.id);
   const steps = s.steps.reduce((a, b) => a + b, 0);
-  $("summary").textContent = `${s.frames} frames · ${s.width}×${s.height} · seed ${s.seed} · prompt ${s.encode_s.toFixed(1)} s · denoise ${steps.toFixed(1)} s · decode ${s.decode_s.toFixed(1)} s · total ${s.total_s.toFixed(1)} s`;
+  const up = s.upscale && !s.up_error ? ` · ×${s.upscale} to ${s.up_width}×${s.up_height} ${s.up_s.toFixed(1)} s` : "";
+  $("summary").textContent = `${s.frames} frames · ${s.width}×${s.height} · seed ${s.seed} · prompt ${s.encode_s.toFixed(1)} s · denoise ${steps.toFixed(1)} s · decode ${s.decode_s.toFixed(1)} s${up} · total ${s.total_s.toFixed(1)} s`;
   addHistory(s);
 }
 
 // ---- playback -----------------------------------------------------------------
 function draw() {
-  if (clip.frames.length) ctx.putImageData(clip.frames[Math.min(frame, clip.frames.length - 1)], 0, 0);
+  const f = Math.min(frame, clip.frames.length - 1);
+  if (clip.frames.length && showingHd()) {
+    const b = hdBitmap(f);
+    if (b) ctx.drawImage(b, 0, 0);
+    else {
+      // Not decoded yet: the original frame, scaled.
+      const im = clip.frames[f];
+      if (low.width !== im.width || low.height !== im.height) { low.width = im.width; low.height = im.height; }
+      lowCtx.putImageData(im, 0, 0);
+      ctx.drawImage(low, 0, 0, $("canvas").width, $("canvas").height);
+    }
+  } else if (clip.frames.length) ctx.putImageData(clip.frames[f], 0, 0);
   $("counter").textContent = `${clip.frames.length ? frame + 1 : 0} / ${clip.total || clip.frames.length}`;
   $("scrub").value = frame;
 }
@@ -443,6 +531,7 @@ async function reopen(s) {
   startClip(s.id, cur.width, cur.height, cur.frames);
   $("prompt").value = cur.prompt; $("seed").value = cur.seed; markChip();
   await fetchFrames(s.id);
+  if (cur.upscale && cur.up_frames === cur.frames) await fetchHd(cur);
   renderStages(cur); finishClip(cur); document.querySelector(`.clip[data-id="${s.id}"]`)?.remove(); addHistory(cur);
 }
 
@@ -454,6 +543,8 @@ $("examples").onclick = (e) => {
   markChip(); if (!gallery) $("prompt").focus();
 };
 $("dice").onclick = () => { $("seed").value = Math.floor(Math.random() * 1e9); };
+$("size").onchange = upHint;
+$("up").onchange = () => store("h3.upscale", $("up").checked ? "1" : "0");
 $("form").addEventListener("submit", generate);
 $("prompt").addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) generate(e); });
 $("start-cmd").textContent = START;
