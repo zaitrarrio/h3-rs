@@ -71,4 +71,19 @@ adaln-tables` with the same --task".
 
 ## Regen-2K from 272p drafts (any aspect)
 
-REGEN_PLACEHOLDER
+`h3 regen2k --draft` from the two un-upscaled 272p drafts (rendered again
+for this, 3.9 s each), base-VAE decode, 3 steps:
+
+| draft | canvases | prepare | steps | decode | total |
+|---|---|---|---|---|---|
+| 272×480 (9:16) | draft canvas 768×1344 → 1440×2560 | 104.3 s | 103.0 / 103.6 / 103.6 s | 31.9 s | 446.5 s |
+| 480×272 (16:9) | draft canvas 1344×768 → 2560×1440 | 107.3 s | 103.3 / 103.6 / 103.6 s | 32.2 s | 450.1 s |
+
+Both wrote 121 frames at the draft's aspect (`regen_canvases`), at the
+same cost as from a 768p draft (446 s, the earlier round): Regen-2K's time
+is set by its 2K canvas, not by the draft's size. **No images**: the
+round's archive step globbed in the wrong directory (`tar -C $O r2k-*`
+expands the glob before `-C` applies) and the box destroyed itself as
+scheduled, so the 2K frames were lost; only the log above survives. The
+composition-keeping claim rests on the earlier round's
+`regen2k-from-drafts.jpg` (480p and 768p drafts).

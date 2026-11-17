@@ -381,6 +381,8 @@ State and invariants only; the reasoning is in `docs/design.md`.
   the smallest reliably clean tier. Ref2VA: draft 480p 19.4 s denoise
   (4.8 s per forward, 2.5× T2VA's), `h3-turbo4-ref` 46.4 s, `-turbo8-ref`
   92.7 s at 768p, all keeping the reference's subject.
+  Regen-2K from 272p drafts: 9:16 → 1440×2560 in 446.5 s, 16:9 →
+  2560×1440 in 450.1 s (the 2K canvas sets the cost, whatever the draft).
 - AdaLN: the 13 B modulation weights are never resident. Tables are computed
   per generation by streaming each block's weight through the backend once,
   or loaded from an `h3 adaln-tables` file; `h3 quantize --skip-adaln` then
