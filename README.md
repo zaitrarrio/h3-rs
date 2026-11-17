@@ -226,7 +226,13 @@ h3 regen2k --regen-dir regen --model-dir h3 --draft draft.y4m --prompt "..." \
     --adaln-table adaln_t_table.bin --out final-2k.y4m
 ```
 
-`--tier 480p` (832×480) or `768p` (1344×768) works for every variant. On a
+`--tier 272p` (480×272, rendered at 480×288 and centre-cropped), `480p`
+(832×480) or `768p` (1344×768) works for every variant, at any `--aspect`.
+`--upscale realesr-animevideov3.safetensors` (Real-ESRGAN ×4, fastwan-rs's
+network, `https://weights.fastwan.dev/v1/realesr-animevideov3.safetensors`)
+upscales the finished frames at any size, `--upscale-factor 2 | 3` resampling
+the ×4 output; `h3 regen2k` takes a draft of any aspect (a 9:16 draft becomes
+1440×2560). On a
 600 W RTX PRO 6000 Server Edition a 480p draft takes 8.6 s after load and
 Regen-2K 446 s; the 2K clip keeps the draft's composition
 (`docs/runs/2026-11-17-vast-pro6000-turbo-cfg-draft`).
