@@ -359,6 +359,20 @@ State and invariants only; the reasoning is in `docs/design.md`.
   480p draft in 8.6 s after load (TAEH3), 768p 30–35 s, Regen-2K 446 s
   (`docs/runs/2026-11-17-vast-pro6000-turbo-cfg-draft`). Without
   `--tables` every run spends ~46 s on the AdaLN tables.
+- Sizes off the 32-pixel grid (`--tier 272p` = 480×272 at 16:9, 272×480
+  at 9:16, or any `--width` / `--height`): the canvas rounds each edge up
+  to 32 (480×288) and `generate` centre-crops the decoded frames
+  (`Finish`). `--upscale realesr-animevideov3.safetensors` runs Real-ESRGAN
+  ×4 (`esrgan.rs`, fastwan-rs's network: convs with
+  `ConvEpilogue::Prelu` on all three backends, `pixel_shuffle`, the 8-bit
+  residual on the host; byte-identical to fastwan-rs's on the real
+  weights) at any size, `--upscale-factor 2 | 3` Lanczos-resampling the ×4
+  frames (default 4 up to 480p, 2 above). Regen-2K follows the draft's
+  aspect (`regen_canvases`: snapped to a standard family within 3 %, the
+  768p draft canvas and a 1440-short-edge output; 2560×1440 / 1440×2560).
+  AdaLN tables record their transformer (`h3.transformer`): Ref2VA's
+  `transformer_ref` has its own modulation, and a table from the other DiT
+  is refused.
 - AdaLN: the 13 B modulation weights are never resident. Tables are computed
   per generation by streaming each block's weight through the backend once,
   or loaded from an `h3 adaln-tables` file; `h3 quantize --skip-adaln` then

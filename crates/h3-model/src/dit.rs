@@ -235,7 +235,7 @@ impl AdalnTables {
     /// F32 `[U]`, `block.N` F16 `[U, 18·d]`, `head` F16 `[U, 2·d]`. Values are
     /// bf16-sized in the checkpoint, so f16 storage keeps them exact enough
     /// (|x| < 65504 is checked; F32 otherwise).
-    pub fn save(&self, path: &std::path::Path, variant: &str) -> Result<()> {
+    pub fn save(&self, path: &std::path::Path, variant: &str, transformer: &str) -> Result<()> {
         use h3_core::export::{Tensor, f16_bytes, f32_bytes};
         use safetensors::Dtype;
         let u = self.timesteps.len();
@@ -259,6 +259,9 @@ impl AdalnTables {
         let meta = std::collections::HashMap::from([
             ("h3.format".to_string(), "adaln/1".to_string()),
             ("h3.variant".to_string(), variant.to_string()),
+            // The DiT the modulation came from: `transformer` and
+            // `transformer_ref` (Ref2VA) carry different AdaLN weights.
+            ("h3.transformer".to_string(), transformer.to_string()),
             ("h3.hidden".to_string(), self.d.to_string()),
         ]);
         h3_core::export::write(path, &t, meta)
@@ -267,6 +270,12 @@ impl AdalnTables {
     /// The variant a tables file was computed for (`h3.variant`).
     pub fn variant_of(path: &std::path::Path) -> Result<Option<String>> {
         Ok(h3_core::weights::SafetensorsDir::open(path)?.metadata("h3.variant"))
+    }
+
+    /// The transformer directory a tables file was computed from
+    /// (`h3.transformer`; absent in files written before 2026-11-17).
+    pub fn transformer_of(path: &std::path::Path) -> Result<Option<String>> {
+        Ok(h3_core::weights::SafetensorsDir::open(path)?.metadata("h3.transformer"))
     }
 
     pub fn load(path: &std::path::Path, cfg: &H3Config) -> Result<Self> {

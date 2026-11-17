@@ -2735,6 +2735,7 @@ extern "C" __global__ void fw_conv2d(u64 a_, u64 b_, u64 w_, u64 bias_, u64 res_
             if (ep == 1) v = fmaxf(v, 0.0f);
             if (ep == 2) v = fmaxf(v + ld(res, o), 0.0f);
             if (ep == 3) v += ld(res, o);
+            if (ep == 4 && v < 0.0f) v *= ld(res, n);
             out[o] = bf(v);
         }
     }
@@ -2868,6 +2869,7 @@ extern "C" __global__ void __launch_bounds__(128) fw_conv2d_mma(
                     if (ep == 1) v = fmaxf(v, 0.0f);
                     if (ep == 2) v = fmaxf(v + ld(res, o), 0.0f);
                     if (ep == 3) v += ld(res, o);
+                    if (ep == 4 && v < 0.0f) v *= ld(res, n);
                     out[o] = bf(v);
                 }
             }

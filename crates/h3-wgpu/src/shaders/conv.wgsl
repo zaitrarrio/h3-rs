@@ -96,6 +96,7 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>, @builtin(workgroup_id) wid
             if (p.ep == 1u) { v = max(v, 0.0); }
             if (p.ep == 2u) { v = max(v + res[o], 0.0); }
             if (p.ep == 3u) { v = v + res[o]; }
+            if (p.ep == 4u && v < 0.0) { v = res[n] * v; }
             out[o] = v;
         }
     }

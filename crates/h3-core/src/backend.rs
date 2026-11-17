@@ -107,6 +107,9 @@ pub enum ConvEpilogue<'a, T> {
     AddRelu(&'a T),
     /// `y + r` (ResNet skip).
     Add(&'a T),
+    /// `y ≥ 0 ? y : slope[c]·y` per output channel `c` (`nn.PReLU(c)`;
+    /// Real-ESRGAN's compact upscaler). `conv2d` only.
+    Prelu(&'a T),
 }
 
 /// A 2-D convolution over `frames` independent images, NCHW, stride 1, "same"

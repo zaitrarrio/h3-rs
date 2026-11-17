@@ -942,6 +942,7 @@ impl Wgpu {
             ConvEpilogue::Relu => (1, &self.dummy),
             ConvEpilogue::AddRelu(r) => (2, r),
             ConvEpilogue::Add(r) => (3, r),
+            ConvEpilogue::Prelu(slope) => (4, slope),
         }
     }
 
@@ -2034,6 +2035,10 @@ impl Backend for Wgpu {
         ep: ConvEpilogue<'_, GBuf>,
         out: &GBuf,
     ) {
+        assert!(
+            !matches!(ep, ConvEpilogue::Prelu(_)),
+            "PReLU is a conv2d epilogue"
+        );
         assert_eq!((w.rows, w.cols), (s.cout, s.k_len()), "conv3d weight shape");
         if self.prof.is_some() {
             *self.tag.lock().unwrap() =
@@ -2085,6 +2090,10 @@ impl Backend for Wgpu {
         ep: ConvEpilogue<'_, GBuf>,
         out: &GBuf,
     ) {
+        assert!(
+            !matches!(ep, ConvEpilogue::Prelu(_)),
+            "PReLU is a conv2d epilogue"
+        );
         assert_eq!(
             (w.rows, w.cols),
             (s.cout, (s.cin / s.groups) * s.k),

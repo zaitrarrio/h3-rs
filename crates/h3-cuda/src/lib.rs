@@ -1416,6 +1416,7 @@ impl Cuda {
             ConvEpilogue::Relu => (1, None),
             ConvEpilogue::AddRelu(r) => (2, Some(r)),
             ConvEpilogue::Add(r) => (3, Some(r)),
+            ConvEpilogue::Prelu(slope) => (4, Some(slope)),
         }
     }
 
@@ -3570,6 +3571,10 @@ impl Backend for Cuda {
         ep: ConvEpilogue<'_, CuBuf>,
         out: &CuBuf,
     ) {
+        assert!(
+            !matches!(ep, ConvEpilogue::Prelu(_)),
+            "PReLU is a conv2d epilogue"
+        );
         assert_eq!((w.rows, w.cols), (s.cout, s.k_len()), "conv3d weight shape");
         assert!(w.quant.is_none(), "conv weights are not quantized");
         assert!(s.in_len() <= x.len && s.out_len() <= out.len);
@@ -3648,6 +3653,10 @@ impl Backend for Cuda {
         ep: ConvEpilogue<'_, CuBuf>,
         out: &CuBuf,
     ) {
+        assert!(
+            !matches!(ep, ConvEpilogue::Prelu(_)),
+            "PReLU is a conv2d epilogue"
+        );
         assert_eq!((w.rows, w.cols), (s.cout, (s.cin / s.groups) * s.k));
         assert!(w.quant.is_none());
         assert!(s.cin * s.len <= x.len && s.out_len() <= out.len);

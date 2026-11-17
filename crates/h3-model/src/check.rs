@@ -338,6 +338,8 @@ pub enum Ep<'a> {
     Relu,
     AddRelu(&'a [f32]),
     Add(&'a [f32]),
+    /// Per-output-channel PReLU slopes (`conv2d` only).
+    Prelu(&'a [f32]),
 }
 
 struct BackendRunner<'a, B: Backend>(&'a B);
@@ -741,7 +743,7 @@ impl<B: Backend> ErasedBackend for BackendRunner<'_, B> {
         let gw = be.weight(w, shape.cout, shape.k_len());
         let gbias = bias.map(|b| be.upload(b));
         let res = match ep {
-            Ep::AddRelu(r) | Ep::Add(r) => Some(be.upload(r)),
+            Ep::AddRelu(r) | Ep::Add(r) | Ep::Prelu(r) => Some(be.upload(r)),
             _ => None,
         };
         let o = be.alloc(shape.out_len());
@@ -750,6 +752,7 @@ impl<B: Backend> ErasedBackend for BackendRunner<'_, B> {
             (Ep::Relu, _) => ConvEpilogue::Relu,
             (Ep::AddRelu(_), Some(r)) => ConvEpilogue::AddRelu(r),
             (Ep::Add(_), Some(r)) => ConvEpilogue::Add(r),
+            (Ep::Prelu(_), Some(r)) => ConvEpilogue::Prelu(r),
             _ => unreachable!(),
         };
         be.conv2d(&ga, gb.as_ref(), shape, &gw, gbias.as_ref(), e, &o);
@@ -1494,6 +1497,9 @@ fn ops<B: Backend>(p: &mut Pair<'_, B>, rng: &mut Rng) {
         (3, 6, 0, 8, 5, 7, true, 3, 0),
         (2, 4, 0, 12, 6, 6, false, 1, 0),
         (1, 3, 0, 3, 17, 33, false, 3, 2),
+        // PReLU (the Real-ESRGAN upscaler's body), at its 64-channel width.
+        (2, 3, 0, 64, 9, 13, false, 3, 3),
+        (1, 64, 0, 48, 10, 12, false, 3, 3),
     ] {
         let s = ConvShape {
             frames,
@@ -1510,12 +1516,14 @@ fn ops<B: Backend>(p: &mut Pair<'_, B>, rng: &mut Rng) {
         let wt = rng.uniform(cout * s.k_len(), 0.3);
         let bias = rng.normal(cout);
         let res = rng.normal(s.out_len());
+        let slope = rng.uniform(cout, 0.5);
         p.op(
             format!("conv2d {frames}x{cin_a}+{cin_b}->{cout} {h}x{w} up={up} k{k} ep{ep}"),
             |r| {
                 let e = match ep {
                     0 => Ep::None,
                     1 => Ep::Relu,
+                    3 => Ep::Prelu(&slope),
                     _ => Ep::AddRelu(&res),
                 };
                 r.conv2d(&a, (cin_b > 0).then_some(&b[..]), &s, &wt, Some(&bias), e)
@@ -1835,6 +1843,7 @@ fn models<B: Backend>(p: &mut Pair<'_, B>) {
     audio_check(p);
     tae_check(p);
     upscaler_check(p);
+    esrgan_check(p);
 }
 
 fn dit_forward<B: Backend>(
@@ -2125,6 +2134,22 @@ fn tae_check<B: Backend>(p: &mut Pair<'_, B>) {
         [a.data, b.data].concat()
     }
     p.record("taeh3 tiny", run(p.be), run(&Cpu));
+}
+
+/// The Real-ESRGAN pixel upscaler, tiny config (×2, 8 features): every conv
+/// with its PReLU, then the pixel shuffle, on a 3-frame clip (the 8-bit
+/// residual and rounding after it are the same host code on every backend).
+fn esrgan_check<B: Backend>(p: &mut Pair<'_, B>) {
+    fn run<B: Backend>(be: &B) -> Vec<f32> {
+        use crate::esrgan::{Esrgan, EsrganConfig};
+        let up = Esrgan::load(be, EsrganConfig::tiny(), &Synthetic { seed: 13 }).unwrap();
+        let (f, h, w) = (3, 6, 10);
+        let x: Vec<f32> = (0..f * 3 * h * w)
+            .map(|i| ((i * 37) % 251) as f32 / 255.0)
+            .collect();
+        be.download(&up.network(be, &x, f, h, w))
+    }
+    p.record("esrgan tiny x2 network", run(p.be), run(&Cpu));
 }
 
 fn upscaler_check<B: Backend>(p: &mut Pair<'_, B>) {

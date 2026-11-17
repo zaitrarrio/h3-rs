@@ -572,10 +572,13 @@ fn pad_index(p: isize, n: usize, mode: Pad) -> Option<usize> {
     }
 }
 
+/// `i` indexes the output (the residual), `ch` is its output channel (the
+/// PReLU slope; `conv2d` only).
 fn epilogue(
     ep: &ConvEpilogue<'_, CpuBuf>,
     res: Option<&RwLockReadGuard<'_, Vec<f32>>>,
     i: usize,
+    ch: usize,
     acc: f32,
 ) -> f32 {
     match ep {
@@ -583,12 +586,19 @@ fn epilogue(
         ConvEpilogue::Relu => acc.max(0.0),
         ConvEpilogue::AddRelu(_) => (acc + res.unwrap()[i]).max(0.0),
         ConvEpilogue::Add(_) => acc + res.unwrap()[i],
+        ConvEpilogue::Prelu(_) => {
+            if acc >= 0.0 {
+                acc
+            } else {
+                res.unwrap()[ch] * acc
+            }
+        }
     }
 }
 
 fn residual_of<'a>(ep: &ConvEpilogue<'a, CpuBuf>) -> Option<RwLockReadGuard<'a, Vec<f32>>> {
     match ep {
-        ConvEpilogue::AddRelu(r) | ConvEpilogue::Add(r) => Some(r.r()),
+        ConvEpilogue::AddRelu(r) | ConvEpilogue::Add(r) | ConvEpilogue::Prelu(r) => Some(r.r()),
         _ => None,
     }
 }
@@ -1215,7 +1225,7 @@ impl Backend for Cpu {
                             }
                         }
                         let i = y * ow + xo;
-                        plane[i] = epilogue(&ep, res.as_ref(), fc * oh * ow + i, acc);
+                        plane[i] = epilogue(&ep, res.as_ref(), fc * oh * ow + i, co, acc);
                     }
                 }
             });
@@ -1230,6 +1240,10 @@ impl Backend for Cpu {
         ep: ConvEpilogue<'_, CpuBuf>,
         out: &CpuBuf,
     ) {
+        assert!(
+            !matches!(ep, ConvEpilogue::Prelu(_)),
+            "PReLU is a conv2d epilogue"
+        );
         assert_eq!(w.cols, s.k_len(), "conv3d weight columns");
         assert_eq!(w.rows, s.cout);
         assert_eq!(s.cin % s.groups, 0);
@@ -1282,7 +1296,8 @@ impl Backend for Cpu {
                             }
                         }
                         let i = yo * ow + xo;
-                        plane[i] = epilogue(&ep, res.as_ref(), plane_i * oh * ow + i, acc);
+                        plane[i] =
+                            epilogue(&ep, res.as_ref(), plane_i * oh * ow + i, usize::MAX, acc);
                     }
                 }
             });
@@ -1297,6 +1312,10 @@ impl Backend for Cpu {
         ep: ConvEpilogue<'_, CpuBuf>,
         out: &CpuBuf,
     ) {
+        assert!(
+            !matches!(ep, ConvEpilogue::Prelu(_)),
+            "PReLU is a conv2d epilogue"
+        );
         assert_eq!(w.cols, (s.cin / s.groups) * s.k);
         assert_eq!(w.rows, s.cout);
         let x = x.r();
@@ -1323,7 +1342,7 @@ impl Backend for Cpu {
                             acc += wr[cl * s.k + kk] * x[(g * cg + cl) * s.len + ti as usize];
                         }
                     }
-                    row[t] = epilogue(&ep, res.as_ref(), co * ol + t, acc);
+                    row[t] = epilogue(&ep, res.as_ref(), co * ol + t, usize::MAX, acc);
                 }
             });
     }

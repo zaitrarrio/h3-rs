@@ -162,8 +162,10 @@ struct Shape {
     #[arg(long, default_value = "16:9")]
     aspect: String,
     /// Resolution tier when no width/height is given: 768p (default; the
-    /// model's 1344×768 at 16:9) or 480p (832×480, the draft tier's fast
-    /// setting). Pika H3 Flex samples its own 480p / 768p buckets.
+    /// model's 1344×768 at 16:9), 480p (832×480, the draft tier's fast
+    /// setting) or 272p (480×272: rendered at 480×288, the model's 32-pixel
+    /// grid, and centre-cropped). Pika H3 Flex samples its own 480p / 768p
+    /// buckets.
     #[arg(long)]
     tier: Option<String>,
     /// Frames at 24 fps, aligned up to 17n + 5 (124 = 5.17 s).
@@ -173,6 +175,14 @@ struct Shape {
 
 impl Shape {
     fn geometry(&self, v: &Variant) -> Result<Geometry> {
+        Ok(self.resolve(v)?.0)
+    }
+
+    /// The render canvas (a multiple of 32 on both edges) and the output
+    /// size: equal, unless the request is not on the 32-pixel grid (`--tier
+    /// 272p`, or `--width` / `--height` off the grid), in which case the
+    /// canvas rounds each edge up and the decoded frames are centre-cropped.
+    fn resolve(&self, v: &Variant) -> Result<(Geometry, (usize, usize))> {
         let (aw, ah) = packing::pika::parse_aspect(&self.aspect)?;
         let (height, width, frames) = if v.pika_buckets {
             let tier = packing::pika::tier(self.tier.as_deref().unwrap_or("768p"))?;
@@ -184,25 +194,40 @@ impl Shape {
                     bail!("--tier sets the canvas: give it or --width / --height, not both")
                 }
                 (Some(h), Some(w)) => (h, w),
-                (None, None) => {
-                    let (short, max) = match self.tier.as_deref().unwrap_or("768p") {
-                        "768p" | "p768" | "768" => (packing::SHORT_EDGE, packing::MAX_PIXELS),
-                        "480p" | "p480" | "480" => (480, 832 * 480),
-                        t => bail!("unknown tier `{t}` (480p | 768p)"),
-                    };
-                    packing::canvas_size(aw as f64, ah as f64, short, max)?
-                }
+                (None, None) => match self.tier.as_deref().unwrap_or("768p") {
+                    "768p" | "p768" | "768" => packing::canvas_size(
+                        aw as f64,
+                        ah as f64,
+                        packing::SHORT_EDGE,
+                        packing::MAX_PIXELS,
+                    )?,
+                    "480p" | "p480" | "480" => {
+                        packing::canvas_size(aw as f64, ah as f64, 480, 832 * 480)?
+                    }
+                    "272p" | "p272" | "272" => {
+                        // fastwan-rs's smallest size: 272 on the short edge,
+                        // the long one to the aspect on a 16-pixel grid.
+                        let snap = |v: f64| ((v / 16.0).round() * 16.0).max(16.0) as usize;
+                        if aw >= ah {
+                            (272, snap(272.0 * aw as f64 / ah as f64))
+                        } else {
+                            (snap(272.0 * ah as f64 / aw as f64), 272)
+                        }
+                    }
+                    t => bail!("unknown tier `{t}` (272p | 480p | 768p)"),
+                },
                 _ => bail!("give --width and --height together, or neither"),
             };
             (h, w, packing::resolve_num_frames(self.frames)?)
         };
+        let grid = |v: usize| v.div_ceil(packing::CANVAS_MULTIPLE) * packing::CANVAS_MULTIPLE;
         let g = Geometry {
-            width,
-            height,
+            width: grid(width),
+            height: grid(height),
             frames,
         };
         g.validate(16)?;
-        Ok(g)
+        Ok((g, (width, height)))
     }
 }
 
@@ -328,6 +353,14 @@ enum Cmd {
         /// Decode with TAEH3 (needs --tae) instead of the full VAE decoder.
         #[arg(long, default_value_t = false)]
         preview: bool,
+        /// Upscale the finished frames with Real-ESRGAN `realesr-animevideov3`
+        /// (its safetensors; fastwan-rs's scripts/upscale/convert_esrgan.py).
+        #[arg(long)]
+        upscale: Option<PathBuf>,
+        /// Output scale of --upscale: 4 (the network's), or 3 / 2 (the ×4
+        /// frames Lanczos-resampled). Default 4 up to 480p, 2 above.
+        #[arg(long)]
+        upscale_factor: Option<usize>,
         /// VAE spatial tile in pixels (0 = whole frame).
         #[arg(long, default_value_t = 256)]
         tile: usize,
@@ -788,7 +821,7 @@ fn main() -> Result<()> {
                     &r.adapters,
                 )?;
                 let tables = dit.adaln_tables(&be, src.as_ref(), &r.adapters, &ts, None)?;
-                tables.save(&out, &r.variant.name)?;
+                tables.save(&out, &r.variant.name, &transformer_name(&r.transformer))?;
                 println!(
                     "{} timesteps {:?} → {} ({:.1} MB) in {:.1}s",
                     ts.len(),
@@ -876,12 +909,18 @@ fn main() -> Result<()> {
             continuation,
             seed,
             preview,
+            upscale,
+            upscale_factor,
             tile,
             runs,
             out,
         } => {
             let r = model.resolve()?;
-            let g = shape.geometry(&r.variant)?;
+            let (g, out_size) = shape.resolve(&r.variant)?;
+            let finish = Finish {
+                out_size,
+                upscale: upscale.map(|p| (p, upscale_factor)),
+            };
             with_backend!(backend, |be| generate(
                 &be,
                 &r,
@@ -895,6 +934,7 @@ fn main() -> Result<()> {
                 continuation,
                 seed,
                 preview,
+                &finish,
                 tile,
                 runs,
                 &out
@@ -1135,6 +1175,91 @@ fn frames_at_canvas(frames: &[Image], width: usize, height: usize) -> Vec<Image>
 }
 
 #[allow(clippy::too_many_arguments)]
+/// The DiT a run loads, by its directory or file name (`transformer`,
+/// `transformer_ref`, a quantized file's name).
+fn transformer_name(p: &Path) -> String {
+    p.file_name().map_or_else(
+        || p.display().to_string(),
+        |n| n.to_string_lossy().into_owned(),
+    )
+}
+
+/// What happens to a clip's decoded frames before they are written: the
+/// centre crop to the requested size (canvases off the 32-pixel grid, e.g.
+/// 480×272) and the optional Real-ESRGAN upscale.
+struct Finish {
+    out_size: (usize, usize),
+    /// Weights and the requested factor (2 / 3 / 4; `None` picks).
+    upscale: Option<(PathBuf, Option<usize>)>,
+}
+
+impl Finish {
+    fn apply<B: Backend>(&self, be: &B, g: &mut h3_model::pipeline::Generation) -> Result<()> {
+        let (ow, oh) = self.out_size;
+        if (ow, oh) != (g.width, g.height) {
+            let (l, t) = ((g.width - ow) / 2, (g.height - oh) / 2);
+            let mut rgb = Vec::with_capacity(g.frames * ow * oh * 3);
+            for f in 0..g.frames {
+                for y in t..t + oh {
+                    let row = (f * g.height + y) * g.width;
+                    rgb.extend_from_slice(&g.rgb[(row + l) * 3..(row + l + ow) * 3]);
+                }
+            }
+            println!("crop {}x{} -> {ow}x{oh}", g.width, g.height);
+            (g.rgb, g.width, g.height) = (rgb, ow, oh);
+        }
+        let Some((weights, factor)) = &self.upscale else {
+            return Ok(());
+        };
+        let factor = factor.unwrap_or(if g.width * g.height <= 832 * 480 {
+            4
+        } else {
+            2
+        });
+        if !(2..=4).contains(&factor) {
+            bail!("--upscale-factor is 2, 3 or 4, got {factor}");
+        }
+        let t0 = std::time::Instant::now();
+        let src = SafetensorsDir::open(weights)?;
+        let up = h3_model::esrgan::Esrgan::load(
+            be,
+            h3_model::esrgan::EsrganConfig::anime_video_v3(),
+            &src,
+        )?;
+        let s = up.cfg.scale;
+        let (w, h) = (g.width, g.height);
+        let (tw, th) = (w * factor, h * factor);
+        let batch = up.batch(be, h, w, 1 << 28);
+        let mut rgb = vec![0u8; g.frames * tw * th * 3];
+        up.upscale(be, &g.rgb, g.frames, h, w, batch, &mut |f0, n, x4| {
+            let dst = &mut rgb[f0 * tw * th * 3..(f0 + n) * tw * th * 3];
+            if factor == s {
+                dst.copy_from_slice(&x4);
+            } else {
+                // Real-ESRGAN's --outscale: the ×4 frames resampled.
+                std::thread::scope(|sc| {
+                    for (f, d) in dst.chunks_mut(tw * th * 3).enumerate() {
+                        let fr = &x4[f * w * s * h * s * 3..(f + 1) * w * s * h * s * 3];
+                        sc.spawn(move || {
+                            let im = h3_text::image::Image::new(w * s, h * s, fr.to_vec());
+                            d.copy_from_slice(
+                                &im.resize(tw, th, h3_text::image::Filter::Lanczos).rgb,
+                            );
+                        });
+                    }
+                });
+            }
+            Ok(())
+        })?;
+        println!(
+            "upscale x{factor} ({batch} frames per batch): {w}x{h} -> {tw}x{th} in {:.2}s",
+            t0.elapsed().as_secs_f64()
+        );
+        (g.rgb, g.width, g.height) = (rgb, tw, th);
+        Ok(())
+    }
+}
+
 fn generate<B: Backend>(
     be: &B,
     r: &Resolved,
@@ -1148,6 +1273,7 @@ fn generate<B: Backend>(
     continuation: Option<String>,
     seed: u64,
     preview: bool,
+    finish: &Finish,
     tile: usize,
     runs: usize,
     out: &Path,
@@ -1189,6 +1315,17 @@ fn generate<B: Backend>(
                         r.variant.name
                     );
                 }
+            }
+            // T2VA / FL2VA run `transformer/`, Ref2VA `transformer_ref/`: their
+            // modulation weights differ, so a table from the other one is wrong.
+            if let Some(t) = AdalnTables::transformer_of(p)?
+                && t != transformer_name(&r.transformer)
+            {
+                bail!(
+                    "{} was computed from {t}, this run uses {}: run `h3 adaln-tables` with the same --task",
+                    p.display(),
+                    transformer_name(&r.transformer)
+                );
             }
             Some(AdalnTables::load(p, cfg)?)
         }
@@ -1417,7 +1554,8 @@ fn generate<B: Backend>(
         last = Some(generation);
     }
     stage_report("remainder");
-    let generation = last.expect("at least one run");
+    let mut generation = last.expect("at least one run");
+    finish.apply(be, &mut generation)?;
     media::write_y4m(
         out,
         generation.frames,
@@ -1539,7 +1677,14 @@ fn regen2k<B: Backend>(
             h3_model::regen::DRAFT_FRAMES
         );
     }
-    let (w, h) = (1344, 768);
+    // The draft's own aspect decides both canvases (2560×1440 at 16:9,
+    // 1440×2560 at 9:16, …); a 480p or 480×272 draft is fitted to the 768p one.
+    let (dw, dh) = (frames[0].width, frames[0].height);
+    let ((h, w), output) = h3_model::regen::regen_canvases(dw, dh)?;
+    println!(
+        "draft {dw}x{dh} -> canvas {w}x{h} -> {}x{}",
+        output.1, output.0
+    );
     let mut fr: Vec<Image> = frames[..h3_model::regen::DRAFT_FRAMES]
         .iter()
         .map(|f| f.fit_canvas(w, h, false))
@@ -1558,6 +1703,7 @@ fn regen2k<B: Backend>(
     let req = RegenRequest {
         prompt: prompt_rows,
         draft: draft_vol,
+        output,
         seed,
         steps,
         start_sigma,
