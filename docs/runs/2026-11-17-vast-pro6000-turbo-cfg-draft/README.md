@@ -45,3 +45,29 @@ including the LoRA-branch cases with AdaLN and `norm_out` pairs (6.2e-3).
   from its own variant, the CLI refuses another's).
 
 Not run: the Ref2VA Turbo presets (need `transformer_ref`, 66 GB more).
+
+## Draft tier (`--variant draft` = LongLive-Plug 4-step, `--tier 480p | 768p`)
+
+`h3 adaln-tables --variant draft` once (2 min 51 s including the load;
+the plug adapter leaves the modulation alone, so one file serves both
+tiers), then every draft runs with `--tables`. Fast recipe unless noted:
+
+| draft | denoise | per forward | decode | total after load |
+|---|---|---|---|---|
+| 480p (832×480), TAEH3 decode (`--preview`) | 7.7 s | 1.9–2.0 s | 0.6 s | **8.6 s** |
+| 480p, full VAE | 7.7 s | 1.9–2.0 s | 2.7 s | 10.6 s |
+| 480p, bf16 weights, full VAE | 11.4 s | 2.9 s | 3.7 s | 15.4 s |
+| 768p (1344×768), TAEH3 decode | 28.1 s | 6.9–7.3 s | 1.6 s | 30.1 s |
+| 768p, full VAE | 28.1 s | 6.9–7.3 s | 6.9 s | 35.3 s |
+
+Load is 66–78 s per process (the CLI loads per clip; a server keeps it).
+
+`h3 regen2k --draft` from either draft (2560×1440×121, 3 steps):
+446 s each (prepare 103 s, steps 3 × 103.6 s, base-VAE decode 32 s).
+The 2K clip keeps its draft's composition and motion and resolves fur,
+needles and snow (`regen2k-from-drafts.jpg`: from the 480p draft, from
+the 768p draft; frames 0 / 60 / 120). A 480p draft is its own sample,
+not a small copy of the 768p one: the same seed makes a side-on fox at
+480p and one walking toward the camera at 768p (`drafts-480-768.jpg`:
+480p full VAE, 480p TAEH3, 768p full VAE, 768p TAEH3). So the workflow
+is draft → pick → refine that draft (Regen-2K), not draft → re-render.

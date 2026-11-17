@@ -213,6 +213,24 @@ the native Qwen3-VL port on the chosen backend, streaming its layers from the
 mmapped checkpoint; `h3 encode` stores text-only prompts in a gallery so
 `--embeds` and `serve --gallery` need no text encoder at all.
 
+### Draft tier
+
+A fast LongLive-Plug draft (4 forwards), then a 2K refinement of the one you keep:
+
+```bash
+h3 adaln-tables --variant draft --variant-dir plug4 --model-dir h3 --out draft.tables
+h3 generate --variant draft --variant-dir plug4 --model-dir h3 --tables draft.tables \
+    --tier 480p --weights mxfp8 --decoder-weights mxfp8 --pv8 --preview --tae taeh3.safetensors \
+    --prompt "..." --out draft.y4m
+h3 regen2k --regen-dir regen --model-dir h3 --draft draft.y4m --prompt "..." \
+    --adaln-table adaln_t_table.bin --out final-2k.y4m
+```
+
+`--tier 480p` (832×480) or `768p` (1344×768) works for every variant. On a
+600 W RTX PRO 6000 Server Edition a 480p draft takes 8.6 s after load and
+Regen-2K 446 s; the 2K clip keeps the draft's composition
+(`docs/runs/2026-11-17-vast-pro6000-turbo-cfg-draft`).
+
 ### Regenerate at 2K
 
 ```bash

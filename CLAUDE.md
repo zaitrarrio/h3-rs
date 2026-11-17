@@ -350,6 +350,15 @@ State and invariants only; the reasoning is in `docs/design.md`.
   `norm_out.linear`: the AdaLN tables run them as a branch, and a `--tables`
   file computed for another variant is refused when an adapter touches the
   modulation.
+- Draft tier: `--variant draft` is `h3-plug4` (LongLive-Plug's 4-step
+  distillation), `--tier 480p | 768p` sets any variant's canvas (832×480 /
+  1344×768 at 16:9). A draft is refined with `h3 regen2k --draft`, which
+  keeps its composition; a 480p draft is a different sample from the 768p
+  one for the same seed, so never re-render a picked draft at another
+  tier. On the 600 W Server Edition with `--tables` and the fast recipe: a
+  480p draft in 8.6 s after load (TAEH3), 768p 30–35 s, Regen-2K 446 s
+  (`docs/runs/2026-11-17-vast-pro6000-turbo-cfg-draft`). Without
+  `--tables` every run spends ~46 s on the AdaLN tables.
 - AdaLN: the 13 B modulation weights are never resident. Tables are computed
   per generation by streaming each block's weight through the backend once,
   or loaded from an `h3 adaln-tables` file; `h3 quantize --skip-adaln` then
