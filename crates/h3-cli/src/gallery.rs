@@ -43,7 +43,10 @@ pub fn norm(p: &str) -> String {
 
 fn slug(p: &str) -> String {
     let mut s = String::new();
-    for w in p.split(|c: char| !c.is_ascii_alphanumeric()).filter(|w| !w.is_empty()) {
+    for w in p
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|w| !w.is_empty())
+    {
         if s.len() + w.len() > 40 {
             break;
         }
@@ -58,8 +61,10 @@ fn slug(p: &str) -> String {
 impl Gallery {
     pub fn open(dir: &Path) -> Result<Self> {
         let path = dir.join("gallery.json");
-        let idx: Index = serde_json::from_slice(&std::fs::read(&path).with_context(|| format!("read {}", path.display()))?)
-            .with_context(|| format!("parse {}", path.display()))?;
+        let idx: Index = serde_json::from_slice(
+            &std::fs::read(&path).with_context(|| format!("read {}", path.display()))?,
+        )
+        .with_context(|| format!("parse {}", path.display()))?;
         if idx.prompts.is_empty() {
             bail!("{} lists no prompts", path.display());
         }
@@ -68,7 +73,10 @@ impl Gallery {
                 bail!("{}: missing {}", path.display(), e.file);
             }
         }
-        Ok(Self { dir: dir.to_path_buf(), entries: idx.prompts })
+        Ok(Self {
+            dir: dir.to_path_buf(),
+            entries: idx.prompts,
+        })
     }
 
     pub fn find(&self, prompt: &str) -> Option<&Entry> {
@@ -86,7 +94,9 @@ impl Gallery {
         std::fs::create_dir_all(dir)?;
         let path = dir.join("gallery.json");
         let mut idx: Index = match std::fs::read(&path) {
-            Ok(b) => serde_json::from_slice(&b).with_context(|| format!("parse {}", path.display()))?,
+            Ok(b) => {
+                serde_json::from_slice(&b).with_context(|| format!("parse {}", path.display()))?
+            }
             Err(_) => Index::default(),
         };
         let tokens = p.rows(text_dim);
@@ -96,18 +106,34 @@ impl Gallery {
         } else {
             (safetensors::Dtype::F32, export::f32_bytes(rows))
         };
-        let pos = idx.prompts.iter().position(|e| norm(&e.prompt) == norm(prompt));
+        let pos = idx
+            .prompts
+            .iter()
+            .position(|e| norm(&e.prompt) == norm(prompt));
         let n = pos.map_or(idx.prompts.len() + 1, |i| i + 1);
         let file = format!("{n:02}-{}.safetensors", slug(prompt));
         export::write(
             &dir.join(&file),
             &[
                 ("prompt_embeds".into(), dt, vec![tokens, text_dim], bytes),
-                ("token_tags".into(), safetensors::Dtype::U8, vec![tokens], p.tags.clone()),
+                (
+                    "token_tags".into(),
+                    safetensors::Dtype::U8,
+                    vec![tokens],
+                    p.tags.clone(),
+                ),
             ],
-            [("prompt".to_string(), prompt.to_string()), ("tokens".to_string(), tokens.to_string())].into(),
+            [
+                ("prompt".to_string(), prompt.to_string()),
+                ("tokens".to_string(), tokens.to_string()),
+            ]
+            .into(),
         )?;
-        let e = Entry { prompt: prompt.to_string(), tokens, file };
+        let e = Entry {
+            prompt: prompt.to_string(),
+            tokens,
+            file,
+        };
         match pos {
             Some(i) => {
                 let old = std::mem::replace(&mut idx.prompts[i], e.clone());
@@ -125,14 +151,25 @@ impl Gallery {
 /// `prompt_embeds [L, text_dim]` (+ optional `token_tags [L]`; all text when absent).
 pub fn load_prompt(path: &Path, text_dim: usize) -> Result<Prompt> {
     let st = SafetensorsDir::open(path)?;
-    let name = st.names().find(|n| n.contains("embed")).map(str::to_string).context("no `prompt_embeds` tensor in the embeddings file")?;
+    let name = st
+        .names()
+        .find(|n| n.contains("embed"))
+        .map(str::to_string)
+        .context("no `prompt_embeds` tensor in the embeddings file")?;
     let (_, shape, _) = st.raw(&name)?;
     let rows = shape.iter().product::<usize>() / text_dim;
     if rows * text_dim != shape.iter().product::<usize>() {
         bail!("{name} is {shape:?}, not [L, {text_dim}]");
     }
     let embeds = st.get(&name, &shape)?;
-    let tags = if st.contains("token_tags") { st.get("token_tags", &[rows])?.iter().map(|v| *v as u8).collect() } else { vec![h3_core::packing::TEXT_TAG; rows] };
+    let tags = if st.contains("token_tags") {
+        st.get("token_tags", &[rows])?
+            .iter()
+            .map(|v| *v as u8)
+            .collect()
+    } else {
+        vec![h3_core::packing::TEXT_TAG; rows]
+    };
     Ok(Prompt { embeds, tags })
 }
 
@@ -145,14 +182,20 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("h3-gallery-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let dim = 8;
-        let mk = |n: usize| Prompt { embeds: (0..n * dim).map(|i| (i % 97) as f32 * 0.01 - 0.4).collect(), tags: (0..n).map(|i| (i % 2) as u8).collect() };
+        let mk = |n: usize| Prompt {
+            embeds: (0..n * dim).map(|i| (i % 97) as f32 * 0.01 - 0.4).collect(),
+            tags: (0..n).map(|i| (i % 2) as u8).collect(),
+        };
         Gallery::add(&dir, "A red fox, in snow!", &mk(3), dim).unwrap();
         Gallery::add(&dir, "a  market", &mk(2), dim).unwrap();
         Gallery::add(&dir, "A red fox,   in snow!", &mk(4), dim).unwrap();
         let g = Gallery::open(&dir).unwrap();
         assert_eq!(g.entries.len(), 2);
         let e = g.find("A red fox, in\nsnow!").unwrap();
-        assert_eq!((e.tokens, e.file.as_str()), (4, "01-a-red-fox-in-snow.safetensors"));
+        assert_eq!(
+            (e.tokens, e.file.as_str()),
+            (4, "01-a-red-fox-in-snow.safetensors")
+        );
         let got = g.prompt(e, dim).unwrap();
         assert_eq!(got.tags, vec![0, 1, 0, 1]);
         for (a, b) in got.embeds.iter().zip(&mk(4).embeds) {

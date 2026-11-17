@@ -35,7 +35,13 @@ pub type Patch<'a> = &'a dyn Fn(&str, &mut [f32], &[usize]) -> Result<()>;
 /// The DiT's tensors with the block linears quantized as `quant` says, after
 /// `patch` (if any) has edited each f32 weight. Gate linears are included
 /// when the source has them.
-pub fn quantize_dit(src: &dyn WeightSource, cfg: &H3Config, quant: WeightQuant, patch: Option<Patch<'_>>, skip_adaln: bool) -> Result<Vec<Tensor>> {
+pub fn quantize_dit(
+    src: &dyn WeightSource,
+    cfg: &H3Config,
+    quant: WeightQuant,
+    patch: Option<Patch<'_>>,
+    skip_adaln: bool,
+) -> Result<Vec<Tensor>> {
     let with_gate = src.has_linear("transformer_blocks.0.attn.to_gate_compress");
     let names = h3_manifest(cfg, with_gate);
     let mut out = Vec::new();
@@ -63,30 +69,66 @@ pub fn quantize_dit(src: &dyn WeightSource, cfg: &H3Config, quant: WeightQuant, 
         match fmt {
             WeightQuant::Mxfp8 => {
                 if cols % 32 != 0 {
-                    return Err(Error::Weights(format!("`{name}`: MXFP8 needs a row length divisible by 32, got {cols}")));
+                    return Err(Error::Weights(format!(
+                        "`{name}`: MXFP8 needs a row length divisible by 32, got {cols}"
+                    )));
                 }
                 let q = Mxfp8::quantize(&w, rows, cols);
                 out.push((format!("{name}.mx8"), Dtype::U8, vec![rows, cols], q.codes));
-                out.push((format!("{name}.mxs"), Dtype::U8, vec![q.scales.len()], q.scales));
+                out.push((
+                    format!("{name}.mxs"),
+                    Dtype::U8,
+                    vec![q.scales.len()],
+                    q.scales,
+                ));
             }
             WeightQuant::Int8 => {
                 let q = Q8::quantize(&w, rows, cols);
                 let ng = cols / q.group;
-                out.push((format!("{name}.q8"), Dtype::I8, vec![rows, cols], q.q.iter().map(|&v| v as u8).collect()));
-                out.push((format!("{name}.scale"), Dtype::F32, vec![rows, ng], f32_bytes(&q.scales)));
+                out.push((
+                    format!("{name}.q8"),
+                    Dtype::I8,
+                    vec![rows, cols],
+                    q.q.iter().map(|&v| v as u8).collect(),
+                ));
+                out.push((
+                    format!("{name}.scale"),
+                    Dtype::F32,
+                    vec![rows, ng],
+                    f32_bytes(&q.scales),
+                ));
             }
             WeightQuant::Int4 { group, hqq, .. } => {
                 if cols % 2 != 0 {
-                    return Err(Error::Weights(format!("`{name}`: 4-bit needs an even row length, got {cols}")));
+                    return Err(Error::Weights(format!(
+                        "`{name}`: 4-bit needs an even row length, got {cols}"
+                    )));
                 }
                 let q = Q4::quantize(&w, rows, cols, group, hqq);
                 let ng = cols / q.group;
-                out.push((format!("{name}.q4"), Dtype::U8, vec![rows, cols / 2], q.packed()));
-                out.push((format!("{name}.scale"), Dtype::F16, vec![rows, ng], f16_bytes(&q.scales)));
-                out.push((format!("{name}.zero"), Dtype::F16, vec![rows, ng], f16_bytes(&q.zeros)));
+                out.push((
+                    format!("{name}.q4"),
+                    Dtype::U8,
+                    vec![rows, cols / 2],
+                    q.packed(),
+                ));
+                out.push((
+                    format!("{name}.scale"),
+                    Dtype::F16,
+                    vec![rows, ng],
+                    f16_bytes(&q.scales),
+                ));
+                out.push((
+                    format!("{name}.zero"),
+                    Dtype::F16,
+                    vec![rows, ng],
+                    f16_bytes(&q.zeros),
+                ));
             }
             WeightQuant::Nvfp4 => {
-                return Err(Error::Weights("NVFP4 is a loaded format, not an export target".into()));
+                return Err(Error::Weights(
+                    "NVFP4 is a loaded format, not an export target".into(),
+                ));
             }
             WeightQuant::Native => unreachable!(),
         }
@@ -110,11 +152,15 @@ pub fn f32_bytes(v: &[f32]) -> Vec<u8> {
 }
 
 pub fn f16_bytes(v: &[f32]) -> Vec<u8> {
-    v.iter().flat_map(|&x| half::f16::from_f32(x).to_le_bytes()).collect()
+    v.iter()
+        .flat_map(|&x| half::f16::from_f32(x).to_le_bytes())
+        .collect()
 }
 
 pub fn bf16_bytes(v: &[f32]) -> Vec<u8> {
-    v.iter().flat_map(|&x| half::bf16::from_f32(x).to_le_bytes()).collect()
+    v.iter()
+        .flat_map(|&x| half::bf16::from_f32(x).to_le_bytes())
+        .collect()
 }
 
 /// Write `tensors` as one safetensors file with `metadata`.
@@ -127,7 +173,8 @@ pub fn write(path: &Path, tensors: &[Tensor], metadata: HashMap<String, String>)
                 .map_err(|e| Error::Weights(format!("`{n}`: {e}")))
         })
         .collect::<Result<Vec<_>>>()?;
-    safetensors::serialize_to_file(views, Some(metadata), path).map_err(|e| Error::Weights(e.to_string()))
+    safetensors::serialize_to_file(views, Some(metadata), path)
+        .map_err(|e| Error::Weights(e.to_string()))
 }
 
 /// The metadata a quantized checkpoint carries.
@@ -163,8 +210,17 @@ mod tests {
         let cfg = H3Config::tiny_vsa();
         let syn = Synthetic { seed: 5 };
         let names = h3_manifest(&cfg, true);
-        let src_t: Vec<Tensor> =
-            names.iter().map(|(n, s)| (n.clone(), Dtype::F32, s.clone(), f32_bytes(&syn.get(n, s).unwrap()))).collect();
+        let src_t: Vec<Tensor> = names
+            .iter()
+            .map(|(n, s)| {
+                (
+                    n.clone(),
+                    Dtype::F32,
+                    s.clone(),
+                    f32_bytes(&syn.get(n, s).unwrap()),
+                )
+            })
+            .collect();
         let dir = std::env::temp_dir().join(format!("h3-export-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let f32_path = dir.join("src.safetensors");
@@ -172,31 +228,63 @@ mod tests {
         let src = SafetensorsDir::open(&f32_path).unwrap();
         for quant in [
             WeightQuant::Int8,
-            WeightQuant::Int4 { group: 16, hqq: true, ffn_only: true },
-            WeightQuant::Int4 { group: 32, hqq: false, ffn_only: false },
+            WeightQuant::Int4 {
+                group: 16,
+                hqq: true,
+                ffn_only: true,
+            },
+            WeightQuant::Int4 {
+                group: 32,
+                hqq: false,
+                ffn_only: false,
+            },
             WeightQuant::Mxfp8,
         ] {
             let path = dir.join(format!("{quant}.safetensors"));
-            write(&path, &quantize_dit(&src, &cfg, quant, None, false).unwrap(), metadata(quant, "test")).unwrap();
+            write(
+                &path,
+                &quantize_dit(&src, &cfg, quant, None, false).unwrap(),
+                metadata(quant, "test"),
+            )
+            .unwrap();
             let q = SafetensorsDir::open(&path).unwrap();
             assert!(missing(&q, &h3_manifest(&cfg, true)).is_empty());
-            assert_eq!(q.metadata("h3.weights").as_deref(), Some(quant.to_string().as_str()));
+            assert_eq!(
+                q.metadata("h3.weights").as_deref(),
+                Some(quant.to_string().as_str())
+            );
             for (n, s) in &names {
-                let Some(key) = n.strip_suffix(".weight") else { continue };
+                let Some(key) = n.strip_suffix(".weight") else {
+                    continue;
+                };
                 let (rows, cols) = (s[0], s[1..].iter().product::<usize>());
                 let w = src.get(n, s).unwrap();
                 let st = q.stored(key).unwrap();
-                assert!(stored_matches(&st, quant.for_layer_key(key, cfg.layers)), "{n}: {:?}", st.as_ref().map(|s| s.shape()));
+                assert!(
+                    stored_matches(&st, quant.for_layer_key(key, cfg.layers)),
+                    "{n}: {:?}",
+                    st.as_ref().map(|s| s.shape())
+                );
                 match st {
                     None => {}
                     Some(Stored::Q8(got)) => {
                         let want = Q8::quantize(&w, rows, cols);
-                        assert_eq!((got.q, got.scales, got.group), (want.q, want.scales, want.group), "{n}");
+                        assert_eq!(
+                            (got.q, got.scales, got.group),
+                            (want.q, want.scales, want.group),
+                            "{n}"
+                        );
                     }
                     Some(Stored::Q4(got)) => {
-                        let WeightQuant::Int4 { group, hqq, .. } = quant.for_key(key) else { unreachable!() };
+                        let WeightQuant::Int4 { group, hqq, .. } = quant.for_key(key) else {
+                            unreachable!()
+                        };
                         let want = Q4::quantize(&w, rows, cols, group, hqq);
-                        assert_eq!((got.q, got.scales, got.zeros, got.group), (want.q, want.scales, want.zeros, want.group), "{n}");
+                        assert_eq!(
+                            (got.q, got.scales, got.zeros, got.group),
+                            (want.q, want.scales, want.zeros, want.group),
+                            "{n}"
+                        );
                     }
                     Some(Stored::Mxfp8(got)) => {
                         assert_eq!(got, Mxfp8::quantize(&w, rows, cols), "{n}");
@@ -206,12 +294,18 @@ mod tests {
             }
         }
         // A patch edits weights before they are stored.
-        let patched = quantize_dit(&src, &cfg, WeightQuant::Native, Some(&|n, w, _| {
-            if n == "proj_in.bias" {
-                w.iter_mut().for_each(|x| *x = 7.0);
-            }
-            Ok(())
-        }), true)
+        let patched = quantize_dit(
+            &src,
+            &cfg,
+            WeightQuant::Native,
+            Some(&|n, w, _| {
+                if n == "proj_in.bias" {
+                    w.iter_mut().for_each(|x| *x = 7.0);
+                }
+                Ok(())
+            }),
+            true,
+        )
         .unwrap();
         assert!(!patched.iter().any(|t| t.0.contains("adaln_proj")));
         let (_, dt, _, bytes) = patched.iter().find(|t| t.0 == "proj_in.bias").unwrap();

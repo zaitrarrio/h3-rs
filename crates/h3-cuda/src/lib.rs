@@ -16,10 +16,13 @@
 
 use cudarc::cublas::{CudaBlas, sys as blas_sys};
 use cudarc::cublaslt::{result as lt_result, sys as lt_sys};
-use cudarc::driver::{CudaContext, CudaFunction, CudaModule, CudaSlice, CudaStream, DevicePtr, LaunchConfig, PushKernelArg};
+use cudarc::driver::{
+    CudaContext, CudaFunction, CudaModule, CudaSlice, CudaStream, DevicePtr, LaunchConfig,
+    PushKernelArg,
+};
 use h3_core::backend::{
-    Act, Backend, Conv1dShape, Conv3dShape, ConvEpilogue, ConvShape, ConvT1dShape, FlowStep, Gate, HeadNorm, Modulation, Pad,
-    Rope, Snake,
+    Act, Backend, Conv1dShape, Conv3dShape, ConvEpilogue, ConvShape, ConvT1dShape, FlowStep, Gate,
+    HeadNorm, Modulation, Pad, Rope, Snake,
 };
 use h3_core::quant::{Mxfp8, Nvfp4, Q4, Q8, mx_scale_len};
 use h3_core::vsa::VsaSpec;
@@ -52,7 +55,10 @@ impl Drop for PinGuard {
         // SAFETY: the range was registered by `pin_host` and is still mapped
         // (the guard lives next to its buffer and drops first).
         unsafe { cudarc::driver::sys::cuMemHostUnregister(self.start as *mut _) };
-        self.ranges.lock().unwrap().retain(|&(s, e)| (s, e) != (self.start, self.end));
+        self.ranges
+            .lock()
+            .unwrap()
+            .retain(|&(s, e)| (s, e) != (self.start, self.end));
     }
 }
 
@@ -113,7 +119,10 @@ enum Quant {
     Q8,
     Q4,
     /// E2M1 codes (2 per byte) with E4M3 per-16 scales in the table buffer.
-    Nvfp4 { alpha: f32, first_high: bool },
+    Nvfp4 {
+        alpha: f32,
+        first_high: bool,
+    },
     /// E4M3 codes (1 per byte) with E8M0 per-32 scales in cuBLASLt's
     /// `VEC32_UE8M0` swizzle in the table buffer: the FP8 tensor-core GEMM on
     /// sm_100+ (activations quantized per call), expanded to bf16 elsewhere.
@@ -123,7 +132,11 @@ enum Quant {
 #[derive(Default)]
 struct Stall {
     waits: Vec<(cudarc::driver::CudaEvent, cudarc::driver::CudaEvent)>,
-    copies: Vec<(cudarc::driver::CudaEvent, Arc<cudarc::driver::CudaEvent>, usize)>,
+    copies: Vec<(
+        cudarc::driver::CudaEvent,
+        Arc<cudarc::driver::CudaEvent>,
+        usize,
+    )>,
     open: Option<cudarc::driver::CudaEvent>,
     bytes: usize,
 }
@@ -186,9 +199,15 @@ pub struct Cuda {
     /// INT8 dense attention scratch for the last shape: (heads, kv_heads, sq,
     /// sk, d) and (q8, k8, qsc, ksc, kmean, kpart).
     #[allow(clippy::type_complexity)]
-    attn_qk8_scratch: std::sync::Mutex<Option<((usize, usize, usize, usize, usize), (CuBuf, CuBuf, CuBuf, CuBuf, CuBuf, CuBuf))>>,
+    attn_qk8_scratch: std::sync::Mutex<
+        Option<(
+            (usize, usize, usize, usize, usize),
+            (CuBuf, CuBuf, CuBuf, CuBuf, CuBuf, CuBuf),
+        )>,
+    >,
     /// FP8 P·V scratch keyed by (kv_heads, sk, d): transposed V codes, V mean, partial maxima, scales.
-    attn_pv8_scratch: std::sync::Mutex<Option<((usize, usize, usize), (CuBuf, CuBuf, CuBuf, CuBuf))>>,
+    attn_pv8_scratch:
+        std::sync::Mutex<Option<((usize, usize, usize), (CuBuf, CuBuf, CuBuf, CuBuf))>>,
     /// MXFP8 activations per GEMM: (E4M3 codes, swizzled E8M0 scales, bf16
     /// rounded copy for the emulation path), grown on demand.
     mx_scratch: std::sync::Mutex<Option<(CuBuf, CuBuf, CuBuf)>>,
@@ -325,7 +344,11 @@ fn err(e: impl std::fmt::Debug) -> CudaError {
 pub fn compile_kernels(arch: &'static str) -> Result<cudarc::nvrtc::Ptx, CudaError> {
     cudarc::nvrtc::compile_ptx_with_opts(
         KERNELS,
-        cudarc::nvrtc::CompileOptions { arch: Some(arch), options: vec!["--std=c++17".into()], ..Default::default() },
+        cudarc::nvrtc::CompileOptions {
+            arch: Some(arch),
+            options: vec!["--std=c++17".into()],
+            ..Default::default()
+        },
     )
     .map_err(err)
 }
@@ -353,7 +376,9 @@ struct Lt {
     workspace: CudaSlice<u8>,
     plans: std::sync::Mutex<PlanCache>,
     /// MXFP8 plans: (n, k, rows, ldc, epilogue 0 none / 1 bias / 2 bias + tanh-GELU).
-    mx_plans: std::sync::Mutex<std::collections::HashMap<(usize, usize, usize, usize, u8), Option<LtPlan>>>,
+    mx_plans: std::sync::Mutex<
+        std::collections::HashMap<(usize, usize, usize, usize, u8), Option<LtPlan>>,
+    >,
 }
 
 // SAFETY: the handles are only used from the thread that owns the backend,
@@ -367,7 +392,12 @@ impl Lt {
     fn new(stream: &Arc<CudaStream>) -> Result<Self, CudaError> {
         let handle = lt_result::create_handle().map_err(err)?;
         let workspace = stream.alloc_zeros::<u8>(LT_WORKSPACE).map_err(err)?;
-        Ok(Self { handle, workspace, plans: Default::default(), mx_plans: Default::default() })
+        Ok(Self {
+            handle,
+            workspace,
+            plans: Default::default(),
+            mx_plans: Default::default(),
+        })
     }
 
     /// Column-major yᵀ[n, rows] = Wᵀ…: A = W (op T, stored k × n), B = x
@@ -376,9 +406,15 @@ impl Lt {
     fn plan(&self, n: usize, k: usize, rows: usize, epi: u8) -> Option<LtPlan> {
         use lt_sys::cudaDataType_t::{CUDA_R_16BF, CUDA_R_32F};
         let a = lt_result::create_matrix_layout(CUDA_R_16BF, k as u64, n as u64, k as i64).ok()?;
-        let b = lt_result::create_matrix_layout(CUDA_R_16BF, k as u64, rows as u64, k as i64).ok()?;
-        let c = lt_result::create_matrix_layout(CUDA_R_16BF, n as u64, rows as u64, n as i64).ok()?;
-        let desc = lt_result::create_matmul_desc(lt_sys::cublasComputeType_t::CUBLAS_COMPUTE_32F, CUDA_R_32F).ok()?;
+        let b =
+            lt_result::create_matrix_layout(CUDA_R_16BF, k as u64, rows as u64, k as i64).ok()?;
+        let c =
+            lt_result::create_matrix_layout(CUDA_R_16BF, n as u64, rows as u64, n as i64).ok()?;
+        let desc = lt_result::create_matmul_desc(
+            lt_sys::cublasComputeType_t::CUBLAS_COMPUTE_32F,
+            CUDA_R_32F,
+        )
+        .ok()?;
         let t: i32 = 1;
         let epilogue = if epi == 1 {
             lt_sys::cublasLtEpilogue_t::CUBLASLT_EPILOGUE_GELU_BIAS
@@ -420,7 +456,15 @@ impl Lt {
             .ok()?;
             let h = lt_result::get_matmul_algo_heuristic(self.handle, desc, a, b, c, c, pref);
             let _ = lt_result::destroy_matmul_pref(pref);
-            Some(LtPlan { desc, a, b, c, algo: h.ok()?.algo, candidates: Vec::new(), tuned: true })
+            Some(LtPlan {
+                desc,
+                a,
+                b,
+                c,
+                algo: h.ok()?.algo,
+                candidates: Vec::new(),
+                tuned: true,
+            })
         }
     }
 
@@ -431,10 +475,17 @@ impl Lt {
     /// cuBLASLt has no kernel (pre-Blackwell, or a shape it declines).
     fn plan_mx(&self, n: usize, k: usize, rows: usize, ldc: usize, epi: u8) -> Option<LtPlan> {
         use lt_sys::cudaDataType_t::{CUDA_R_8F_E4M3, CUDA_R_16BF, CUDA_R_32F};
-        let a = lt_result::create_matrix_layout(CUDA_R_8F_E4M3, k as u64, n as u64, k as i64).ok()?;
-        let b = lt_result::create_matrix_layout(CUDA_R_8F_E4M3, k as u64, rows as u64, k as i64).ok()?;
-        let c = lt_result::create_matrix_layout(CUDA_R_16BF, n as u64, rows as u64, ldc as i64).ok()?;
-        let desc = lt_result::create_matmul_desc(lt_sys::cublasComputeType_t::CUBLAS_COMPUTE_32F, CUDA_R_32F).ok()?;
+        let a =
+            lt_result::create_matrix_layout(CUDA_R_8F_E4M3, k as u64, n as u64, k as i64).ok()?;
+        let b = lt_result::create_matrix_layout(CUDA_R_8F_E4M3, k as u64, rows as u64, k as i64)
+            .ok()?;
+        let c =
+            lt_result::create_matrix_layout(CUDA_R_16BF, n as u64, rows as u64, ldc as i64).ok()?;
+        let desc = lt_result::create_matmul_desc(
+            lt_sys::cublasComputeType_t::CUBLAS_COMPUTE_32F,
+            CUDA_R_32F,
+        )
+        .ok()?;
         let t: i32 = 1;
         let epilogue = match epi {
             0 => lt_sys::cublasLtEpilogue_t::CUBLASLT_EPILOGUE_DEFAULT,
@@ -448,17 +499,51 @@ impl Lt {
         use lt_sys::cublasLtMatmulDescAttributes_t as A;
         // SAFETY: freshly created descriptors; attribute buffers outlive the calls.
         unsafe {
-            let set = |attr: A, p: *const std::ffi::c_void, sz: usize| lt_result::set_matmul_desc_attribute(desc, attr, p, sz).ok();
-            set(A::CUBLASLT_MATMUL_DESC_TRANSA, (&t) as *const i32 as *const _, 4)?;
-            set(A::CUBLASLT_MATMUL_DESC_A_SCALE_MODE, (&mode) as *const _ as *const _, std::mem::size_of_val(&mode))?;
-            set(A::CUBLASLT_MATMUL_DESC_B_SCALE_MODE, (&mode) as *const _ as *const _, std::mem::size_of_val(&mode))?;
+            let set = |attr: A, p: *const std::ffi::c_void, sz: usize| {
+                lt_result::set_matmul_desc_attribute(desc, attr, p, sz).ok()
+            };
+            set(
+                A::CUBLASLT_MATMUL_DESC_TRANSA,
+                (&t) as *const i32 as *const _,
+                4,
+            )?;
+            set(
+                A::CUBLASLT_MATMUL_DESC_A_SCALE_MODE,
+                (&mode) as *const _ as *const _,
+                std::mem::size_of_val(&mode),
+            )?;
+            set(
+                A::CUBLASLT_MATMUL_DESC_B_SCALE_MODE,
+                (&mode) as *const _ as *const _,
+                std::mem::size_of_val(&mode),
+            )?;
             let dummy: u64 = self.workspace_ptr();
-            set(A::CUBLASLT_MATMUL_DESC_A_SCALE_POINTER, (&dummy) as *const u64 as *const _, 8)?;
-            set(A::CUBLASLT_MATMUL_DESC_B_SCALE_POINTER, (&dummy) as *const u64 as *const _, 8)?;
+            set(
+                A::CUBLASLT_MATMUL_DESC_A_SCALE_POINTER,
+                (&dummy) as *const u64 as *const _,
+                8,
+            )?;
+            set(
+                A::CUBLASLT_MATMUL_DESC_B_SCALE_POINTER,
+                (&dummy) as *const u64 as *const _,
+                8,
+            )?;
             if epi > 0 {
-                set(A::CUBLASLT_MATMUL_DESC_EPILOGUE, (&epilogue) as *const _ as *const _, std::mem::size_of_val(&epilogue))?;
-                set(A::CUBLASLT_MATMUL_DESC_BIAS_DATA_TYPE, (&bias_ty) as *const _ as *const _, std::mem::size_of_val(&bias_ty))?;
-                set(A::CUBLASLT_MATMUL_DESC_BIAS_POINTER, (&dummy) as *const u64 as *const _, 8)?;
+                set(
+                    A::CUBLASLT_MATMUL_DESC_EPILOGUE,
+                    (&epilogue) as *const _ as *const _,
+                    std::mem::size_of_val(&epilogue),
+                )?;
+                set(
+                    A::CUBLASLT_MATMUL_DESC_BIAS_DATA_TYPE,
+                    (&bias_ty) as *const _ as *const _,
+                    std::mem::size_of_val(&bias_ty),
+                )?;
+                set(
+                    A::CUBLASLT_MATMUL_DESC_BIAS_POINTER,
+                    (&dummy) as *const u64 as *const _,
+                    8,
+                )?;
             }
             lt_result::set_matmul_pref_attribute(
                 pref,
@@ -470,14 +555,33 @@ impl Lt {
             // Up to 8 candidates; the first call on the shape times them.
             let mut hs: Vec<lt_sys::cublasLtMatmulHeuristicResult_t> = vec![std::mem::zeroed(); 8];
             let mut found: i32 = 0;
-            let st = lt_sys::cublasLtMatmulAlgoGetHeuristic(self.handle, desc, a, b, c, c, pref, 8, hs.as_mut_ptr(), &mut found);
+            let st = lt_sys::cublasLtMatmulAlgoGetHeuristic(
+                self.handle,
+                desc,
+                a,
+                b,
+                c,
+                c,
+                pref,
+                8,
+                hs.as_mut_ptr(),
+                &mut found,
+            );
             let _ = lt_result::destroy_matmul_pref(pref);
             if st != lt_sys::cublasStatus_t::CUBLAS_STATUS_SUCCESS || found <= 0 {
                 return None;
             }
             hs.truncate(found as usize);
             let candidates: Vec<_> = hs.iter().map(|h| h.algo).collect();
-            Some(LtPlan { desc, a, b, c, algo: candidates[0], tuned: candidates.len() == 1, candidates })
+            Some(LtPlan {
+                desc,
+                a,
+                b,
+                c,
+                algo: candidates[0],
+                tuned: candidates.len() == 1,
+                candidates,
+            })
         }
     }
 
@@ -486,28 +590,60 @@ impl Lt {
     /// `VEC32_UE8M0` scaling (item 2 of the 5090 round).
     fn plan_fp8_plain(&self, n: usize, k: usize, rows: usize, ldc: usize) -> Option<LtPlan> {
         use lt_sys::cudaDataType_t::{CUDA_R_8F_E4M3, CUDA_R_16BF, CUDA_R_32F};
-        let a = lt_result::create_matrix_layout(CUDA_R_8F_E4M3, k as u64, n as u64, k as i64).ok()?;
-        let b = lt_result::create_matrix_layout(CUDA_R_8F_E4M3, k as u64, rows as u64, k as i64).ok()?;
-        let c = lt_result::create_matrix_layout(CUDA_R_16BF, n as u64, rows as u64, ldc as i64).ok()?;
-        let desc = lt_result::create_matmul_desc(lt_sys::cublasComputeType_t::CUBLAS_COMPUTE_32F, CUDA_R_32F).ok()?;
+        let a =
+            lt_result::create_matrix_layout(CUDA_R_8F_E4M3, k as u64, n as u64, k as i64).ok()?;
+        let b = lt_result::create_matrix_layout(CUDA_R_8F_E4M3, k as u64, rows as u64, k as i64)
+            .ok()?;
+        let c =
+            lt_result::create_matrix_layout(CUDA_R_16BF, n as u64, rows as u64, ldc as i64).ok()?;
+        let desc = lt_result::create_matmul_desc(
+            lt_sys::cublasComputeType_t::CUBLAS_COMPUTE_32F,
+            CUDA_R_32F,
+        )
+        .ok()?;
         let t: i32 = 1;
         let pref = lt_result::create_matmul_pref().ok()?;
         let ws = LT_WORKSPACE as u64;
         use lt_sys::cublasLtMatmulDescAttributes_t as A;
         // SAFETY: freshly created descriptors; attribute buffers outlive the calls.
         unsafe {
-            lt_result::set_matmul_desc_attribute(desc, A::CUBLASLT_MATMUL_DESC_TRANSA, (&t) as *const i32 as *const _, 4).ok()?;
+            lt_result::set_matmul_desc_attribute(
+                desc,
+                A::CUBLASLT_MATMUL_DESC_TRANSA,
+                (&t) as *const i32 as *const _,
+                4,
+            )
+            .ok()?;
             lt_result::set_matmul_pref_attribute(pref, lt_sys::cublasLtMatmulPreferenceAttributes_t::CUBLASLT_MATMUL_PREF_MAX_WORKSPACE_BYTES, (&ws) as *const u64 as *const _, 8).ok()?;
             let mut hs: Vec<lt_sys::cublasLtMatmulHeuristicResult_t> = vec![std::mem::zeroed(); 8];
             let mut found: i32 = 0;
-            let st = lt_sys::cublasLtMatmulAlgoGetHeuristic(self.handle, desc, a, b, c, c, pref, 8, hs.as_mut_ptr(), &mut found);
+            let st = lt_sys::cublasLtMatmulAlgoGetHeuristic(
+                self.handle,
+                desc,
+                a,
+                b,
+                c,
+                c,
+                pref,
+                8,
+                hs.as_mut_ptr(),
+                &mut found,
+            );
             let _ = lt_result::destroy_matmul_pref(pref);
             if st != lt_sys::cublasStatus_t::CUBLAS_STATUS_SUCCESS || found <= 0 {
                 return None;
             }
             hs.truncate(found as usize);
             let candidates: Vec<_> = hs.iter().map(|h| h.algo).collect();
-            Some(LtPlan { desc, a, b, c, algo: candidates[0], tuned: candidates.len() == 1, candidates })
+            Some(LtPlan {
+                desc,
+                a,
+                b,
+                c,
+                algo: candidates[0],
+                tuned: candidates.len() == 1,
+                candidates,
+            })
         }
     }
 
@@ -588,8 +724,24 @@ impl Cuda {
             vsa_coarse4: get("fw_vsa_coarse4")?,
             vsa_pool_scalar: get("fw_vsa_pool_scalar")?,
             vsa_fine3: [
-                [get("fw_vsa_fine3a_mma64")?, get("fw_vsa_fine3b_mma64")?, get("fw_vsa_fine3c_mma64")?, get("fw_vsa_fine3d_mma64")?, get("fw_vsa_fine3e_mma64")?, get("fw_vsa_fine3f_mma64")?, get("fw_vsa_fine3g_mma64")?],
-                [get("fw_vsa_fine3a_mma128")?, get("fw_vsa_fine3b_mma128")?, get("fw_vsa_fine3c_mma128")?, get("fw_vsa_fine3d_mma128")?, get("fw_vsa_fine3e_mma128")?, get("fw_vsa_fine3f_mma128")?, get("fw_vsa_fine3g_mma128")?],
+                [
+                    get("fw_vsa_fine3a_mma64")?,
+                    get("fw_vsa_fine3b_mma64")?,
+                    get("fw_vsa_fine3c_mma64")?,
+                    get("fw_vsa_fine3d_mma64")?,
+                    get("fw_vsa_fine3e_mma64")?,
+                    get("fw_vsa_fine3f_mma64")?,
+                    get("fw_vsa_fine3g_mma64")?,
+                ],
+                [
+                    get("fw_vsa_fine3a_mma128")?,
+                    get("fw_vsa_fine3b_mma128")?,
+                    get("fw_vsa_fine3c_mma128")?,
+                    get("fw_vsa_fine3d_mma128")?,
+                    get("fw_vsa_fine3e_mma128")?,
+                    get("fw_vsa_fine3f_mma128")?,
+                    get("fw_vsa_fine3g_mma128")?,
+                ],
             ],
             vsa_kmean: get("fw_vsa_kmean")?,
             vsa_kmean2: get("fw_vsa_kmean2")?,
@@ -608,7 +760,11 @@ impl Cuda {
         let stream = ctx.default_stream();
         let copy = ctx.new_stream().map_err(err)?;
         let blas = CudaBlas::new(stream.clone()).map_err(err)?;
-        let lt = if env1("H3_CUDA_NO_LT") { None } else { Lt::new(&stream).ok() };
+        let lt = if env1("H3_CUDA_NO_LT") {
+            None
+        } else {
+            Lt::new(&stream).ok()
+        };
         let name = format!("cuda {} (sm_{maj}{min})", ctx.name().unwrap_or_default());
         let me = Self {
             ctx,
@@ -637,9 +793,17 @@ impl Cuda {
             mx_scratch: std::sync::Mutex::new(None),
             sm_major: maj as u32,
             no_fp8: env1("H3_CUDA_NO_FP8"),
-            lt_nth: std::env::var("H3_CUDA_LT_NTH").ok().and_then(|v| v.parse().ok()),
-            mx_split: std::env::var("H3_CUDA_MX_SPLIT").ok().and_then(|v| v.parse().ok()).unwrap_or(2).max(1),
-            mx_split_min: std::env::var("H3_CUDA_MX_SPLIT_MIN").ok().and_then(|v| v.parse().ok()),
+            lt_nth: std::env::var("H3_CUDA_LT_NTH")
+                .ok()
+                .and_then(|v| v.parse().ok()),
+            mx_split: std::env::var("H3_CUDA_MX_SPLIT")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(2)
+                .max(1),
+            mx_split_min: std::env::var("H3_CUDA_MX_SPLIT_MIN")
+                .ok()
+                .and_then(|v| v.parse().ok()),
             mx_choice: std::sync::Mutex::new(std::collections::HashMap::new()),
             scalar_conv: env1("H3_CUDA_SCALAR_CONV"),
             scalar_attn: env1("H3_CUDA_SCALAR_ATTN"),
@@ -647,7 +811,10 @@ impl Cuda {
             vsa_v2: env1("H3_CUDA_VSA_V2"),
             vsa_pair: env1("H3_CUDA_VSA_PAIR"),
             vsa_coarse1: env1("H3_CUDA_VSA_COARSE1"),
-            vsa_dbg: std::env::var("H3_CUDA_VSA_DBG").ok().and_then(|v| v.parse().ok()).unwrap_or(0),
+            vsa_dbg: std::env::var("H3_CUDA_VSA_DBG")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0),
             vsa_fine3: match std::env::var("H3_CUDA_VSA_FINE").as_deref() {
                 Ok("a") => Some(0),
                 Ok("c") => Some(2),
@@ -673,7 +840,11 @@ impl Cuda {
 
     /// The stream uploads run on: the side stream while a prefetch is open.
     fn ustream(&self) -> &Arc<CudaStream> {
-        if self.staging.load(std::sync::atomic::Ordering::Relaxed) { &self.copy } else { &self.stream }
+        if self.staging.load(std::sync::atomic::Ordering::Relaxed) {
+            &self.copy
+        } else {
+            &self.stream
+        }
     }
 
     /// `data` uploaded as is (bf16 or f32 pairs, as `f32` says). Allocated on
@@ -682,15 +853,24 @@ impl Cuda {
         let st = self.ustream();
         let n = data.len().max(1);
         // SAFETY: fully overwritten below (or a one-word pad nothing reads).
-        let s = if self.stream_stress { st.alloc_zeros::<u16>(n).expect("cuda alloc") } else { unsafe { st.alloc::<u16>(n) }.expect("cuda alloc") };
+        let s = if self.stream_stress {
+            st.alloc_zeros::<u16>(n).expect("cuda alloc")
+        } else {
+            unsafe { st.alloc::<u16>(n) }.expect("cuda alloc")
+        };
         if !data.is_empty() {
             self.stress_delay(st);
             let (p, _g) = s.device_ptr(st);
             // SAFETY: `u16` reinterpreted as its bytes.
-            let bytes = unsafe { std::slice::from_raw_parts(data.as_ptr() as *const u8, data.len() * 2) };
+            let bytes =
+                unsafe { std::slice::from_raw_parts(data.as_ptr() as *const u8, data.len() * 2) };
             self.htod(p, bytes, st);
         }
-        CuBuf { s: Arc::new(s), len, f32 }
+        CuBuf {
+            s: Arc::new(s),
+            len,
+            f32,
+        }
     }
 
     /// Copy `src` to the device at `dst` on the upload stream. During a
@@ -716,19 +896,25 @@ impl Cuda {
                     *used = (off + src.len()).div_ceil(256) * 256;
                     // SAFETY: the bounce region stays untouched until the next
                     // `prefetch_begin`, which waits for this prefetch's copies.
-                    unsafe { cudarc::driver::result::memcpy_htod_async(dst, &*slot, st.cu_stream()).expect("upload") };
+                    unsafe {
+                        cudarc::driver::result::memcpy_htod_async(dst, &*slot, st.cu_stream())
+                            .expect("upload")
+                    };
                     return;
                 }
             }
         }
         // SAFETY: `src` outlives the copy: the stream is synchronised before returning.
-        unsafe { cudarc::driver::result::memcpy_htod_async(dst, src, st.cu_stream()).expect("upload") };
+        unsafe {
+            cudarc::driver::result::memcpy_htod_async(dst, src, st.cu_stream()).expect("upload")
+        };
         st.synchronize().expect("sync");
     }
 
     /// An event with timing enabled (cudarc's default disables it), recorded on `st`.
     fn timed_event(&self, st: &Arc<CudaStream>) -> cudarc::driver::CudaEvent {
-        st.record_event(Some(cudarc::driver::sys::CUevent_flags::CU_EVENT_DEFAULT)).expect("event")
+        st.record_event(Some(cudarc::driver::sys::CUevent_flags::CU_EVENT_DEFAULT))
+            .expect("event")
     }
 
     /// `H3_STREAM_STRESS=1`, during a prefetch: the destination is already
@@ -745,7 +931,14 @@ impl Cuda {
         let ns: i64 = 5_000_000;
         lb.arg(&ns);
         // SAFETY: a kernel with one scalar argument and no memory access.
-        unsafe { lb.launch(LaunchConfig { grid_dim: (1, 1, 1), block_dim: (1, 1, 1), shared_mem_bytes: 0 }) }.expect("spin");
+        unsafe {
+            lb.launch(LaunchConfig {
+                grid_dim: (1, 1, 1),
+                block_dim: (1, 1, 1),
+                shared_mem_bytes: 0,
+            })
+        }
+        .expect("spin");
     }
 
     /// Bytes of an upload issued during a prefetch, for the stall summary.
@@ -768,12 +961,18 @@ impl Cuda {
         let pageable = vec![1u8; N];
         // SAFETY: `pinned` is written before it is read; both sources outlive their copies (synchronised below).
         let pinned = unsafe { self.ctx.alloc_pinned_with_flags::<u8>(N, 0) }.ok();
-        for (name, src) in [("pageable", Some(&pageable[..])), ("pinned", pinned.as_ref().and_then(|b| b.as_slice().ok()))] {
+        for (name, src) in [
+            ("pageable", Some(&pageable[..])),
+            ("pinned", pinned.as_ref().and_then(|b| b.as_slice().ok())),
+        ] {
             let Some(src) = src else { continue };
             let mut best = f32::INFINITY;
             for _ in 0..3 {
                 let e0 = self.timed_event(&self.stream);
-                unsafe { cudarc::driver::result::memcpy_htod_async(p, src, self.stream.cu_stream()).ok()? };
+                unsafe {
+                    cudarc::driver::result::memcpy_htod_async(p, src, self.stream.cu_stream())
+                        .ok()?
+                };
                 let e1 = self.timed_event(&self.stream);
                 self.stream.synchronize().ok()?;
                 best = best.min(e0.elapsed_ms(&e1).ok()?);
@@ -786,7 +985,10 @@ impl Cuda {
     /// The part of `bytes` that lies in a page-locked range, as (start, end)
     /// offsets into `bytes`; empty when none does.
     fn pinned_part(&self, bytes: &[u8]) -> (usize, usize) {
-        let (a, b) = (bytes.as_ptr() as usize, bytes.as_ptr() as usize + bytes.len());
+        let (a, b) = (
+            bytes.as_ptr() as usize,
+            bytes.as_ptr() as usize + bytes.len(),
+        );
         for &(s, e) in self.pinned.lock().unwrap().iter() {
             if s < b && e > a {
                 return (s.max(a) - a, e.min(b) - a);
@@ -821,12 +1023,23 @@ impl Cuda {
                 // SAFETY: the locked pages stay mapped and locked while the DiT
                 // that owns them (and their guard) lives.
                 self.count_upload(i1 - i0);
-                unsafe { cudarc::driver::result::memcpy_htod_async(p + i0 as u64, &bytes[i0..i1], st.cu_stream()).expect("upload") };
+                unsafe {
+                    cudarc::driver::result::memcpy_htod_async(
+                        p + i0 as u64,
+                        &bytes[i0..i1],
+                        st.cu_stream(),
+                    )
+                    .expect("upload")
+                };
             } else {
                 self.htod(p, bytes, st);
             }
         }
-        CuBuf { s: Arc::new(s), len: words, f32: false }
+        CuBuf {
+            s: Arc::new(s),
+            len: words,
+            f32: false,
+        }
     }
 
     fn opt(&self, b: Option<&CuBuf>) -> u64 {
@@ -838,7 +1051,13 @@ impl Cuda {
         self.ptr(b) + (elems * 2) as u64
     }
 
-    fn launch(&self, f: &CudaFunction, grid: (u32, u32, u32), block: (u32, u32, u32), args: &[Arg]) {
+    fn launch(
+        &self,
+        f: &CudaFunction,
+        grid: (u32, u32, u32),
+        block: (u32, u32, u32),
+        args: &[Arg],
+    ) {
         let mut lb = self.stream.launch_builder(f);
         for a in args {
             match a {
@@ -848,11 +1067,18 @@ impl Cuda {
                 Arg::F(v) => lb.arg(v),
             };
         }
-        let cfg = LaunchConfig { grid_dim: grid, block_dim: block, shared_mem_bytes: 0 };
+        let cfg = LaunchConfig {
+            grid_dim: grid,
+            block_dim: block,
+            shared_mem_bytes: 0,
+        };
         // SAFETY: every kernel's parameter list is matched by the `args`
         // built next to its launch, and every pointer is a live allocation of
         // at least the extent the kernel indexes (lengths asserted by callers).
-        self.timed(|| self.kernel_name(f).to_string(), || unsafe { lb.launch(cfg) }.expect("kernel launch"));
+        self.timed(
+            || self.kernel_name(f).to_string(),
+            || unsafe { lb.launch(cfg) }.expect("kernel launch"),
+        );
     }
 
     /// Run `op`; with profiling on, wall time between stream syncs under `tag`.
@@ -953,7 +1179,9 @@ impl Cuda {
             (&k.conv3d, "conv3d (scalar)"),
             (&k.conv3d_mma, "conv3d (mma)"),
         ];
-        all.iter().find(|(g, _)| std::ptr::eq(*g, f)).map_or("kernel", |(_, n)| n)
+        all.iter()
+            .find(|(g, _)| std::ptr::eq(*g, f))
+            .map_or("kernel", |(_, n)| n)
     }
 
     fn elems(n: usize) -> (u32, u32, u32) {
@@ -970,9 +1198,26 @@ impl Cuda {
             None => (0, 0, 1),
         };
         let vec = xp % 16 == 0 && total % 8 == 0;
-        let f = if vec { &self.f.mx_quant8 } else { &self.f.mx_quant };
+        let f = if vec {
+            &self.f.mx_quant8
+        } else {
+            &self.f.mx_quant
+        };
         let threads = if vec { total / 8 } else { total };
-        self.launch(f, Self::elems(threads), (256, 1, 1), &[Arg::P(xp), Arg::L(if vec { total } else { total / 32 } as i64), Arg::I(k as i32), Arg::P(cp), Arg::P(sp), Arg::P(out), Arg::I(mode)]);
+        self.launch(
+            f,
+            Self::elems(threads),
+            (256, 1, 1),
+            &[
+                Arg::P(xp),
+                Arg::L(if vec { total } else { total / 32 } as i64),
+                Arg::I(k as i32),
+                Arg::P(cp),
+                Arg::P(sp),
+                Arg::P(out),
+                Arg::I(mode),
+            ],
+        );
     }
 
     /// Time every heuristic candidate of an MXFP8 plan once on the real
@@ -1035,10 +1280,17 @@ impl Cuda {
         let prof = self.prof.as_ref()?;
         let m = prof.lock().unwrap();
         let flops = m.get("gemm FLOP (total)").map_or(0.0, |e| e.0);
-        let mut rows: Vec<(&String, &(f64, usize))> = m.iter().filter(|(k, _)| k.as_str() != "gemm FLOP (total)").collect();
+        let mut rows: Vec<(&String, &(f64, usize))> = m
+            .iter()
+            .filter(|(k, _)| k.as_str() != "gemm FLOP (total)")
+            .collect();
         rows.sort_by(|a, b| b.1.0.total_cmp(&a.1.0));
         let total: f64 = rows.iter().map(|r| r.1.0).sum();
-        let gemm: f64 = rows.iter().filter(|r| r.0.starts_with("gemm")).map(|r| r.1.0).sum();
+        let gemm: f64 = rows
+            .iter()
+            .filter(|r| r.0.starts_with("gemm"))
+            .map(|r| r.1.0)
+            .sum();
         let mut out = format!(
             "profile (CUDA, synced per op): {:.1} ms in ops; GEMMs {:.1} ms at {:.1} TFLOP/s\n",
             total * 1e3,
@@ -1046,7 +1298,12 @@ impl Cuda {
             if gemm > 0.0 { flops / gemm / 1e12 } else { 0.0 }
         );
         for (k, (t, n)) in rows {
-            out += &format!("  {k:40} {:9.1} ms {:5.1}%  {n:6} calls  {:8.3} ms/call\n", t * 1e3, 100.0 * t / total.max(1e-12), t * 1e3 / *n as f64);
+            out += &format!(
+                "  {k:40} {:9.1} ms {:5.1}%  {n:6} calls  {:8.3} ms/call\n",
+                t * 1e3,
+                100.0 * t / total.max(1e-12),
+                t * 1e3 / *n as f64
+            );
         }
         Some(out)
     }
@@ -1063,11 +1320,35 @@ impl Cuda {
     /// Gate arguments: kind, vector, table, idx, slots, slot.
     fn gate_args(&self, g: &Gate<'_, CuBuf>) -> [Arg; 6] {
         match g {
-            Gate::None => [Arg::I(0), Arg::P(0), Arg::P(0), Arg::P(0), Arg::I(0), Arg::I(0)],
-            Gate::Vector(v) => [Arg::I(1), Arg::P(self.ptr(v)), Arg::P(0), Arg::P(0), Arg::I(0), Arg::I(0)],
+            Gate::None => [
+                Arg::I(0),
+                Arg::P(0),
+                Arg::P(0),
+                Arg::P(0),
+                Arg::I(0),
+                Arg::I(0),
+            ],
+            Gate::Vector(v) => [
+                Arg::I(1),
+                Arg::P(self.ptr(v)),
+                Arg::P(0),
+                Arg::P(0),
+                Arg::I(0),
+                Arg::I(0),
+            ],
             Gate::Table(m) => {
-                assert!(m.table.table.f32 && m.table.idx.f32, "modulation tables come from upload_table / upload_u32");
-                [Arg::I(2), Arg::P(0), Arg::P(self.ptr(m.table.table)), Arg::P(self.ptr(m.table.idx)), Arg::I(m.table.slots as i32), Arg::I(m.slot as i32)]
+                assert!(
+                    m.table.table.f32 && m.table.idx.f32,
+                    "modulation tables come from upload_table / upload_u32"
+                );
+                [
+                    Arg::I(2),
+                    Arg::P(0),
+                    Arg::P(self.ptr(m.table.table)),
+                    Arg::P(self.ptr(m.table.idx)),
+                    Arg::I(m.table.slots as i32),
+                    Arg::I(m.slot as i32),
+                ]
             }
         }
     }
@@ -1075,10 +1356,27 @@ impl Cuda {
     /// Modulation arguments: has_mod, table, idx, slots, scale, shift.
     fn mod_args(&self, m: &Modulation<'_, CuBuf>) -> [Arg; 6] {
         match m {
-            Modulation::None => [Arg::I(0), Arg::P(0), Arg::P(0), Arg::I(0), Arg::I(0), Arg::I(0)],
+            Modulation::None => [
+                Arg::I(0),
+                Arg::P(0),
+                Arg::P(0),
+                Arg::I(0),
+                Arg::I(0),
+                Arg::I(0),
+            ],
             Modulation::Table { m, scale, shift } => {
-                assert!(m.table.f32 && m.idx.f32, "modulation tables come from upload_table / upload_u32");
-                [Arg::I(1), Arg::P(self.ptr(m.table)), Arg::P(self.ptr(m.idx)), Arg::I(m.slots as i32), Arg::I(*scale as i32), Arg::I(*shift as i32)]
+                assert!(
+                    m.table.f32 && m.idx.f32,
+                    "modulation tables come from upload_table / upload_u32"
+                );
+                [
+                    Arg::I(1),
+                    Arg::P(self.ptr(m.table)),
+                    Arg::P(self.ptr(m.idx)),
+                    Arg::I(m.slots as i32),
+                    Arg::I(*scale as i32),
+                    Arg::I(*shift as i32),
+                ]
             }
         }
     }
@@ -1096,7 +1394,14 @@ impl Cuda {
         out: &CuBuf,
     ) {
         assert!(rows * dim <= h.len && rows * dim <= out.len);
-        let mut args = vec![Arg::P(self.ptr(h)), Arg::P(self.opt(a)), Arg::P(self.ptr(out)), Arg::I(rows as i32), Arg::I(dim as i32), Arg::I(a.is_some() as i32)];
+        let mut args = vec![
+            Arg::P(self.ptr(h)),
+            Arg::P(self.opt(a)),
+            Arg::P(self.ptr(out)),
+            Arg::I(rows as i32),
+            Arg::I(dim as i32),
+            Arg::I(a.is_some() as i32),
+        ];
         args.extend(self.gate_args(&gate));
         args.push(Arg::I(w.is_some() as i32));
         args.push(Arg::P(self.opt(w)));
@@ -1126,7 +1431,10 @@ impl Cuda {
 }
 
 /// Run the backend conformance checks on device `ordinal`.
-pub fn conformance(ordinal: usize, tol: f32) -> Result<Vec<h3_model::check::CheckResult>, CudaError> {
+pub fn conformance(
+    ordinal: usize,
+    tol: f32,
+) -> Result<Vec<h3_model::check::CheckResult>, CudaError> {
     let be = Cuda::new(ordinal)?;
     Ok(h3_model::check::run_all(&be, tol))
 }
@@ -1141,7 +1449,15 @@ impl Backend for Cuda {
     }
 
     fn alloc(&self, len: usize) -> CuBuf {
-        CuBuf { s: Arc::new(self.stream.alloc_zeros::<u16>(len.max(1)).expect("cuda alloc")), len, f32: false }
+        CuBuf {
+            s: Arc::new(
+                self.stream
+                    .alloc_zeros::<u16>(len.max(1))
+                    .expect("cuda alloc"),
+            ),
+            len,
+            f32: false,
+        }
     }
 
     fn upload(&self, data: &[f32]) -> CuBuf {
@@ -1178,13 +1494,27 @@ impl Backend for Cuda {
                 })
                 .collect();
             // SAFETY: `h` holds 2·data.len() u16 and the destination at least that many.
-            unsafe { cudarc::driver::result::memcpy_htod_async(self.ptr(buf), &h, self.stream.cu_stream()).expect("write") };
+            unsafe {
+                cudarc::driver::result::memcpy_htod_async(
+                    self.ptr(buf),
+                    &h,
+                    self.stream.cu_stream(),
+                )
+                .expect("write")
+            };
         } else {
             let h: Vec<u16> = data.iter().map(|&v| bf16::from_f32(v).to_bits()).collect();
             // SAFETY: `h` is a host slice of `data.len()` u16s and the
             // destination holds at least that many; the copy is ordered on this
             // stream and `h` is kept alive until the stream is synchronised.
-            unsafe { cudarc::driver::result::memcpy_htod_async(self.ptr(buf), &h, self.stream.cu_stream()).expect("write") };
+            unsafe {
+                cudarc::driver::result::memcpy_htod_async(
+                    self.ptr(buf),
+                    &h,
+                    self.stream.cu_stream(),
+                )
+                .expect("write")
+            };
         }
         self.stream.synchronize().expect("sync");
     }
@@ -1192,9 +1522,15 @@ impl Backend for Cuda {
     fn download(&self, buf: &CuBuf) -> Vec<f32> {
         let h = self.stream.clone_dtoh(&*buf.s).expect("download");
         if buf.f32 {
-            h[..2 * buf.len].par_chunks_exact(2).map(|p| f32::from_bits(p[0] as u32 | (p[1] as u32) << 16)).collect()
+            h[..2 * buf.len]
+                .par_chunks_exact(2)
+                .map(|p| f32::from_bits(p[0] as u32 | (p[1] as u32) << 16))
+                .collect()
         } else {
-            h[..buf.len].par_iter().map(|&b| bf16::from_bits(b).to_f32()).collect()
+            h[..buf.len]
+                .par_iter()
+                .map(|&b| bf16::from_bits(b).to_f32())
+                .collect()
         }
     }
 
@@ -1228,12 +1564,27 @@ impl Backend for Cuda {
             return;
         }
         assert!(!buf.f32 && off + len <= buf.len);
-        self.launch(&self.f.fill, Self::elems(len), (256, 1, 1), &[Arg::P(self.ptr(buf)), Arg::L(off as i64), Arg::L(len as i64), Arg::F(value)]);
+        self.launch(
+            &self.f.fill,
+            Self::elems(len),
+            (256, 1, 1),
+            &[
+                Arg::P(self.ptr(buf)),
+                Arg::L(off as i64),
+                Arg::L(len as i64),
+                Arg::F(value),
+            ],
+        );
     }
 
     fn weight(&self, data: &[f32], rows: usize, cols: usize) -> CuWeight {
         assert_eq!(data.len(), rows * cols);
-        CuWeight { buf: self.upload(data), rows, cols, quant: None }
+        CuWeight {
+            buf: self.upload(data),
+            rows,
+            cols,
+            quant: None,
+        }
     }
 
     fn bf16_weights(&self) -> bool {
@@ -1244,22 +1595,44 @@ impl Backend for Cuda {
         assert_eq!(data.len(), rows * cols);
         // SAFETY: the bf16 bits reinterpreted as their bytes; `upload_bytes` keeps the
         // page-locked interior as a DMA (streamed edge blocks: 770 MB each, no host pass).
-        let bytes: &[u8] = unsafe { std::slice::from_raw_parts(data.as_ptr() as *const u8, data.len() * 2) };
+        let bytes: &[u8] =
+            unsafe { std::slice::from_raw_parts(data.as_ptr() as *const u8, data.len() * 2) };
         let mut buf = self.upload_bytes(bytes);
         buf.len = data.len();
-        CuWeight { buf, rows, cols, quant: None }
+        CuWeight {
+            buf,
+            rows,
+            cols,
+            quant: None,
+        }
     }
 
     fn weight_q8(&self, q: &Q8) -> CuWeight {
         // SAFETY: `i8` and `u8` share size and alignment; the device reads the bit pattern.
-        let bytes: &[u8] = unsafe { std::slice::from_raw_parts(q.q.as_ptr() as *const u8, q.q.len()) };
-        CuWeight { buf: self.upload_bytes(bytes), rows: q.rows, cols: q.cols, quant: Some((Quant::Q8, Backend::upload_table(self, &q.scales), q.group)) }
+        let bytes: &[u8] =
+            unsafe { std::slice::from_raw_parts(q.q.as_ptr() as *const u8, q.q.len()) };
+        CuWeight {
+            buf: self.upload_bytes(bytes),
+            rows: q.rows,
+            cols: q.cols,
+            quant: Some((Quant::Q8, Backend::upload_table(self, &q.scales), q.group)),
+        }
     }
 
     fn weight_q4(&self, q: &Q4) -> CuWeight {
         let bytes = q.packed();
-        let sz: Vec<f32> = q.scales.iter().zip(&q.zeros).flat_map(|(&s, &z)| [s, z]).collect();
-        CuWeight { buf: self.upload_bytes(&bytes), rows: q.rows, cols: q.cols, quant: Some((Quant::Q4, Backend::upload_table(self, &sz), q.group)) }
+        let sz: Vec<f32> = q
+            .scales
+            .iter()
+            .zip(&q.zeros)
+            .flat_map(|(&s, &z)| [s, z])
+            .collect();
+        CuWeight {
+            buf: self.upload_bytes(&bytes),
+            rows: q.rows,
+            cols: q.cols,
+            quant: Some((Quant::Q4, Backend::upload_table(self, &sz), q.group)),
+        }
     }
 
     /// NVFP4 stays 4-bit on the device (codes + E4M3 scales, 0.53 B per
@@ -1270,11 +1643,28 @@ impl Backend for Cuda {
     fn weight_nvfp4(&self, q: &Nvfp4) -> CuWeight {
         let gc = self.upload_bytes(&q.packed);
         let gs = self.upload_bytes(&q.scales);
-        CuWeight { buf: gc, rows: q.rows, cols: q.cols, quant: Some((Quant::Nvfp4 { alpha: q.alpha, first_high: q.first_high }, gs, 16)) }
+        CuWeight {
+            buf: gc,
+            rows: q.rows,
+            cols: q.cols,
+            quant: Some((
+                Quant::Nvfp4 {
+                    alpha: q.alpha,
+                    first_high: q.first_high,
+                },
+                gs,
+                16,
+            )),
+        }
     }
 
     fn weight_mxfp8(&self, q: &Mxfp8) -> CuWeight {
-        CuWeight { buf: self.upload_bytes(&q.codes), rows: q.rows, cols: q.cols, quant: Some((Quant::Mxfp8, self.upload_bytes(&q.scales), 32)) }
+        CuWeight {
+            buf: self.upload_bytes(&q.codes),
+            rows: q.rows,
+            cols: q.cols,
+            quant: Some((Quant::Mxfp8, self.upload_bytes(&q.scales), 32)),
+        }
     }
 
     fn prefetch_begin(&self) {
@@ -1294,12 +1684,18 @@ impl Backend for Cuda {
             // stream, so it marks when this prefetch's copies actually start.
             st.open = Some(self.timed_event(&self.copy));
         }
-        self.staging.store(true, std::sync::atomic::Ordering::Relaxed);
+        self.staging
+            .store(true, std::sync::atomic::Ordering::Relaxed);
     }
 
     fn prefetch_end(&self) {
-        self.staging.store(false, std::sync::atomic::Ordering::Relaxed);
-        let ev = Arc::new(if self.stall.is_some() { self.timed_event(&self.copy) } else { self.copy.record_event(None).expect("event") });
+        self.staging
+            .store(false, std::sync::atomic::Ordering::Relaxed);
+        let ev = Arc::new(if self.stall.is_some() {
+            self.timed_event(&self.copy)
+        } else {
+            self.copy.record_event(None).expect("event")
+        });
         if let Some(st) = &self.stall {
             let mut st = st.lock().unwrap();
             if let Some(e0) = st.open.take() {
@@ -1332,13 +1728,23 @@ impl Backend for Cuda {
         }
         // SAFETY: whole pages owned by this allocation, readable; the guard
         // unregisters them before the allocation is freed (it is dropped first).
-        let r = unsafe { cudarc::driver::sys::cuMemHostRegister_v2(start as *mut _, end - start, 0) };
+        let r =
+            unsafe { cudarc::driver::sys::cuMemHostRegister_v2(start as *mut _, end - start, 0) };
         if r == cudarc::driver::sys::CUresult::CUDA_SUCCESS {
             reg.push((start, end));
-            Some(Box::new(PinGuard { start, end, ranges: Arc::clone(&self.pinned) }))
+            Some(Box::new(PinGuard {
+                start,
+                end,
+                ranges: Arc::clone(&self.pinned),
+            }))
         } else {
-            if !self.pin_warned.swap(true, std::sync::atomic::Ordering::Relaxed) {
-                eprintln!("warning: cuMemHostRegister failed ({r:?}); streamed weights copy from pageable memory");
+            if !self
+                .pin_warned
+                .swap(true, std::sync::atomic::Ordering::Relaxed)
+            {
+                eprintln!(
+                    "warning: cuMemHostRegister failed ({r:?}); streamed weights copy from pageable memory"
+                );
             }
             None
         }
@@ -1371,7 +1777,10 @@ impl Backend for Cuda {
     }
 
     fn weight_bytes(&self, w: &CuWeight) -> usize {
-        w.buf.len * 2 + w.quant.as_ref().map_or(0, |(_, s, _)| s.len * if s.f32 { 4 } else { 2 })
+        w.buf.len * 2
+            + w.quant
+                .as_ref()
+                .map_or(0, |(_, s, _)| s.len * if s.f32 { 4 } else { 2 })
     }
 
     fn sync(&self) {
@@ -1385,9 +1794,21 @@ impl Backend for Cuda {
             self.copy.synchronize().expect("sync");
             let mut st = st.lock().unwrap();
             if !st.waits.is_empty() || !st.copies.is_empty() {
-                let wait: f64 = st.waits.iter().map(|(a, b)| a.elapsed_ms(b).unwrap_or(0.0) as f64).sum();
-                let worst = st.waits.iter().map(|(a, b)| a.elapsed_ms(b).unwrap_or(0.0)).fold(0f32, f32::max);
-                let copy: f64 = st.copies.iter().map(|(a, b, _)| a.elapsed_ms(b).unwrap_or(0.0) as f64).sum();
+                let wait: f64 = st
+                    .waits
+                    .iter()
+                    .map(|(a, b)| a.elapsed_ms(b).unwrap_or(0.0) as f64)
+                    .sum();
+                let worst = st
+                    .waits
+                    .iter()
+                    .map(|(a, b)| a.elapsed_ms(b).unwrap_or(0.0))
+                    .fold(0f32, f32::max);
+                let copy: f64 = st
+                    .copies
+                    .iter()
+                    .map(|(a, b, _)| a.elapsed_ms(b).unwrap_or(0.0) as f64)
+                    .sum();
                 let bytes: usize = st.copies.iter().map(|c| c.2).sum();
                 out += &format!(
                     "prefetch: {} blocks; compute stream waited {:.0} ms total, {:.1} ms/block, worst {:.1} ms; copies {:.0} ms for {:.2} GB ({:.1} GB/s while copying, {:.2} GB/block)\n",
@@ -1397,7 +1818,11 @@ impl Backend for Cuda {
                     worst,
                     copy,
                     bytes as f64 / 1e9,
-                    if copy > 0.0 { bytes as f64 / 1e9 / (copy / 1e3) } else { 0.0 },
+                    if copy > 0.0 {
+                        bytes as f64 / 1e9 / (copy / 1e3)
+                    } else {
+                        0.0
+                    },
                     bytes as f64 / 1e9 / st.copies.len().max(1) as f64,
                 );
                 st.waits.clear();
@@ -1421,7 +1846,17 @@ impl Backend for Cuda {
         }
     }
 
-    fn linear(&self, x: &CuBuf, x_row: usize, rows: usize, w: &CuWeight, bias: Option<&CuBuf>, act: Act, y: &CuBuf, y_row: usize) {
+    fn linear(
+        &self,
+        x: &CuBuf,
+        x_row: usize,
+        rows: usize,
+        w: &CuWeight,
+        bias: Option<&CuBuf>,
+        act: Act,
+        y: &CuBuf,
+        y_row: usize,
+    ) {
         let (n, k) = (w.rows, w.cols);
         assert!((x_row + rows) * k <= x.len && (y_row + rows) * n <= y.len);
         if rows == 0 {
@@ -1441,12 +1876,24 @@ impl Backend for Cuda {
             // W8A8 on the FP8 tensor cores (sm_100+): quantize the activation
             // rows to E4M3 codes + swizzled E8M0 scales, then cuBLASLt with
             // VEC32_UE8M0 block scaling. Anything else emulates in bf16 below.
-            if mx_scratch.as_ref().is_none_or(|(c, s, a)| c.len < (rows * k).div_ceil(2) || s.len < mx_scale_len(rows, k).div_ceil(2) || a.len < rows * k) {
-                *mx_scratch = Some((self.alloc((rows * k).div_ceil(2)), self.alloc(mx_scale_len(rows, k).div_ceil(2)), self.alloc(rows * k)));
+            if mx_scratch.as_ref().is_none_or(|(c, s, a)| {
+                c.len < (rows * k).div_ceil(2)
+                    || s.len < mx_scale_len(rows, k).div_ceil(2)
+                    || a.len < rows * k
+            }) {
+                *mx_scratch = Some((
+                    self.alloc((rows * k).div_ceil(2)),
+                    self.alloc(mx_scale_len(rows, k).div_ceil(2)),
+                    self.alloc(rows * k),
+                ));
             }
             let (codes, ascales, xround) = mx_scratch.as_ref().unwrap();
             let aligned = (y_row * n) % 8 == 0 && (x_row * k) % 8 == 0 && n % 8 == 0;
-            if let (Some(lt), true, true) = (&self.lt, self.sm_major >= 10 && !self.no_fp8 && aligned, k % 32 == 0) {
+            if let (Some(lt), true, true) = (
+                &self.lt,
+                self.sm_major >= 10 && !self.no_fp8 && aligned,
+                k % 32 == 0,
+            ) {
                 let epi: u8 = match (bias.is_some(), act) {
                     (false, _) => 0,
                     (true, Act::GeluTanh) => 2,
@@ -1467,13 +1914,38 @@ impl Backend for Cuda {
                             1
                         }
                     }
-                    None => self.mx_choice.lock().unwrap().get(&key).copied().unwrap_or(1),
+                    None => self
+                        .mx_choice
+                        .lock()
+                        .unwrap()
+                        .get(&key)
+                        .copied()
+                        .unwrap_or(1),
                 };
                 let np = n / parts;
                 // A GELU epilogue cuBLASLt declines falls back to bias-only + a pass.
-                let epi = if epi == 2 && plans.entry((np, k, rows, n, 2)).or_insert_with(|| lt.plan_mx(np, k, rows, n, 2)).is_none() { 1 } else { epi };
-                if plans.entry((np, k, rows, n, epi)).or_insert_with(|| lt.plan_mx(np, k, rows, n, epi)).is_some() {
-                    self.mx_quantize(xp, rows * k, k, Some((self.ptr(codes), self.ptr(ascales))), 0);
+                let epi = if epi == 2
+                    && plans
+                        .entry((np, k, rows, n, 2))
+                        .or_insert_with(|| lt.plan_mx(np, k, rows, n, 2))
+                        .is_none()
+                {
+                    1
+                } else {
+                    epi
+                };
+                if plans
+                    .entry((np, k, rows, n, epi))
+                    .or_insert_with(|| lt.plan_mx(np, k, rows, n, epi))
+                    .is_some()
+                {
+                    self.mx_quantize(
+                        xp,
+                        rows * k,
+                        k,
+                        Some((self.ptr(codes), self.ptr(ascales))),
+                        0,
+                    );
                     let (ap0, bp) = (self.ptr(&w.buf), self.ptr(codes));
                     let (asp0, bsp) = (self.ptr(wscales), self.ptr(ascales));
                     let biasp0 = bias.map(|b| self.ptr(b));
@@ -1481,7 +1953,14 @@ impl Backend for Cuda {
                     let (alpha, beta) = (1.0f32, 0.0f32);
                     // Part i of `parts`: weight rows [i·np, (i+1)·np) (codes contiguous,
                     // scales whole 128-row tiles), output columns i·np.. of the n-wide y.
-                    let slice = |i: usize, np: usize| (ap0 + (i * np * k) as u64, asp0 + (i * mx_scale_len(np, k)) as u64, yp + (i * np * 2) as u64, biasp0.map(|b| b + (i * np * 2) as u64));
+                    let slice = |i: usize, np: usize| {
+                        (
+                            ap0 + (i * np * k) as u64,
+                            asp0 + (i * mx_scale_len(np, k)) as u64,
+                            yp + (i * np * 2) as u64,
+                            biasp0.map(|b| b + (i * np * 2) as u64),
+                        )
+                    };
                     // SAFETY (the closure): the plan's layouts match these extents;
                     // the scale tensors are VEC32_UE8M0 of the two operands; bias
                     // holds n bf16 values; workspace is LT_WORKSPACE.
@@ -1490,10 +1969,28 @@ impl Backend for Cuda {
                         let np = n / parts;
                         for i in 0..parts {
                             let (ap, asp, dp, bias_p) = slice(i, np);
-                            lt_result::set_matmul_desc_attribute(p.desc, A::CUBLASLT_MATMUL_DESC_A_SCALE_POINTER, (&asp) as *const u64 as *const _, 8).expect("lt a scale");
-                            lt_result::set_matmul_desc_attribute(p.desc, A::CUBLASLT_MATMUL_DESC_B_SCALE_POINTER, (&bsp) as *const u64 as *const _, 8).expect("lt b scale");
+                            lt_result::set_matmul_desc_attribute(
+                                p.desc,
+                                A::CUBLASLT_MATMUL_DESC_A_SCALE_POINTER,
+                                (&asp) as *const u64 as *const _,
+                                8,
+                            )
+                            .expect("lt a scale");
+                            lt_result::set_matmul_desc_attribute(
+                                p.desc,
+                                A::CUBLASLT_MATMUL_DESC_B_SCALE_POINTER,
+                                (&bsp) as *const u64 as *const _,
+                                8,
+                            )
+                            .expect("lt b scale");
                             if let Some(bp) = bias_p {
-                                lt_result::set_matmul_desc_attribute(p.desc, A::CUBLASLT_MATMUL_DESC_BIAS_POINTER, (&bp) as *const u64 as *const _, 8).expect("lt bias pointer");
+                                lt_result::set_matmul_desc_attribute(
+                                    p.desc,
+                                    A::CUBLASLT_MATMUL_DESC_BIAS_POINTER,
+                                    (&bp) as *const u64 as *const _,
+                                    8,
+                                )
+                                .expect("lt bias pointer");
                             }
                             lt_result::matmul(
                                 lt.handle,
@@ -1522,18 +2019,51 @@ impl Backend for Cuda {
                         // SAFETY: the pointers of part 0, as `run` uses them.
                         unsafe {
                             use lt_sys::cublasLtMatmulDescAttributes_t as A;
-                            lt_result::set_matmul_desc_attribute(p.desc, A::CUBLASLT_MATMUL_DESC_A_SCALE_POINTER, (&asp) as *const u64 as *const _, 8).expect("lt a scale");
-                            lt_result::set_matmul_desc_attribute(p.desc, A::CUBLASLT_MATMUL_DESC_B_SCALE_POINTER, (&bsp) as *const u64 as *const _, 8).expect("lt b scale");
+                            lt_result::set_matmul_desc_attribute(
+                                p.desc,
+                                A::CUBLASLT_MATMUL_DESC_A_SCALE_POINTER,
+                                (&asp) as *const u64 as *const _,
+                                8,
+                            )
+                            .expect("lt a scale");
+                            lt_result::set_matmul_desc_attribute(
+                                p.desc,
+                                A::CUBLASLT_MATMUL_DESC_B_SCALE_POINTER,
+                                (&bsp) as *const u64 as *const _,
+                                8,
+                            )
+                            .expect("lt b scale");
                             if let Some(bp) = bias_p {
-                                lt_result::set_matmul_desc_attribute(p.desc, A::CUBLASLT_MATMUL_DESC_BIAS_POINTER, (&bp) as *const u64 as *const _, 8).expect("lt bias pointer");
+                                lt_result::set_matmul_desc_attribute(
+                                    p.desc,
+                                    A::CUBLASLT_MATMUL_DESC_BIAS_POINTER,
+                                    (&bp) as *const u64 as *const _,
+                                    8,
+                                )
+                                .expect("lt bias pointer");
                             }
                         }
                         this.tune_mx(lt, p, ap, bp, dp);
                     };
                     {
-                        let p = plans.get_mut(&(np, k, rows, n, epi)).unwrap().as_mut().unwrap();
+                        let p = plans
+                            .get_mut(&(np, k, rows, n, epi))
+                            .unwrap()
+                            .as_mut()
+                            .unwrap();
                         self.timed(
-                            || format!("gemm mxfp8{} n={n} k={k}{}{}", if epi == 2 { "+gelu" } else { "" }, if parts > 1 { format!(" (×{parts})") } else { String::new() }, if rows < 1024 { " (small)" } else { "" }),
+                            || {
+                                format!(
+                                    "gemm mxfp8{} n={n} k={k}{}{}",
+                                    if epi == 2 { "+gelu" } else { "" },
+                                    if parts > 1 {
+                                        format!(" (×{parts})")
+                                    } else {
+                                        String::new()
+                                    },
+                                    if rows < 1024 { " (small)" } else { "" }
+                                )
+                            },
                             || run(p, parts),
                         );
                         self.count_flops(rows, n, k);
@@ -1541,11 +2071,18 @@ impl Backend for Cuda {
                             tune(self, p, parts);
                         }
                     }
-                    if self.mx_split_min.is_none() && splittable && !self.mx_choice.lock().unwrap().contains_key(&key) {
+                    if self.mx_split_min.is_none()
+                        && splittable
+                        && !self.mx_choice.lock().unwrap().contains_key(&key)
+                    {
                         // First call on this shape: the split plan, tuned, against the whole one.
                         let sp = self.mx_split;
                         let sk = (n / sp, k, rows, n, epi);
-                        if let Some(p) = plans.entry(sk).or_insert_with(|| lt.plan_mx(n / sp, k, rows, n, epi)).as_mut() {
+                        if let Some(p) = plans
+                            .entry(sk)
+                            .or_insert_with(|| lt.plan_mx(n / sp, k, rows, n, epi))
+                            .as_mut()
+                        {
                             if !p.tuned {
                                 tune(self, p, sp);
                             }
@@ -1553,7 +2090,9 @@ impl Backend for Cuda {
                         let mut choice = 1;
                         // The plain-FP8 probe below writes y too (unscaled codes: garbage).
                         let mut probed = false;
-                        if let (Some(Some(whole)), Some(Some(split))) = (plans.get(&(n, k, rows, n, epi)), plans.get(&sk)) {
+                        if let (Some(Some(whole)), Some(Some(split))) =
+                            (plans.get(&(n, k, rows, n, epi)), plans.get(&sk))
+                        {
                             let time = |p: &LtPlan, parts: usize| {
                                 self.stream.synchronize().expect("sync");
                                 let t = std::time::Instant::now();
@@ -1574,7 +2113,25 @@ impl Backend for Cuda {
                                         self.stream.synchronize().expect("sync");
                                         let t = std::time::Instant::now();
                                         unsafe {
-                                            lt_result::matmul(lt.handle, pp.desc, (&alpha) as *const f32 as *const _, (&beta) as *const f32 as *const _, ap as *const _, pp.a, bp as *const _, pp.b, dp as *const _, pp.c, dp as *mut _, pp.c, &pp.algo, ws as *mut _, LT_WORKSPACE, self.stream.cu_stream() as *mut _).expect("plain fp8");
+                                            lt_result::matmul(
+                                                lt.handle,
+                                                pp.desc,
+                                                (&alpha) as *const f32 as *const _,
+                                                (&beta) as *const f32 as *const _,
+                                                ap as *const _,
+                                                pp.a,
+                                                bp as *const _,
+                                                pp.b,
+                                                dp as *const _,
+                                                pp.c,
+                                                dp as *mut _,
+                                                pp.c,
+                                                &pp.algo,
+                                                ws as *mut _,
+                                                LT_WORKSPACE,
+                                                self.stream.cu_stream() as *mut _,
+                                            )
+                                            .expect("plain fp8");
                                         }
                                         self.stream.synchronize().expect("sync");
                                         best = best.min(t.elapsed().as_secs_f32());
@@ -1598,8 +2155,15 @@ impl Backend for Cuda {
                                     "mxfp8 n={n} k={k} rows={rows}: whole {:.2} ms, ×{sp} {:.2} ms → {}{}",
                                     tw * 1e3,
                                     ts * 1e3,
-                                    if choice > 1 { format!("×{sp}") } else { "whole".into() },
-                                    plain.map_or(String::new(), |t| format!("; plain fp8 (per-tensor scale) {:.2} ms", t * 1e3))
+                                    if choice > 1 {
+                                        format!("×{sp}")
+                                    } else {
+                                        "whole".into()
+                                    },
+                                    plain.map_or(String::new(), |t| format!(
+                                        "; plain fp8 (per-tensor scale) {:.2} ms",
+                                        t * 1e3
+                                    ))
                                 );
                             }
                         }
@@ -1614,19 +2178,34 @@ impl Backend for Cuda {
                             // shape stays whole) and, under `H3_STALL=1` / `H3_PROFILE=1`, the
                             // probe's garbage (every diagnostic clip of that run, and a decoder
                             // tile on the 5090; `docs/runs/2026-11-14-runpod-6000s-probe-bug`).
-                            let p = plans.get(&(n / choice, k, rows, n, epi)).unwrap().as_ref().unwrap();
+                            let p = plans
+                                .get(&(n / choice, k, rows, n, epi))
+                                .unwrap()
+                                .as_ref()
+                                .unwrap();
                             run(p, choice);
                         }
                     }
                     // The epilogue did the bias (and tanh-GELU when epi == 2); apply what is left.
-                    let left = if act == Act::GeluTanh && epi == 2 { 0 } else { act_code };
+                    let left = if act == Act::GeluTanh && epi == 2 {
+                        0
+                    } else {
+                        act_code
+                    };
                     if left != 0 || bias.is_some() && epi == 0 {
                         let total = rows * n;
                         self.launch(
                             &self.f.bias_act,
                             Self::elems(total),
                             (256, 1, 1),
-                            &[Arg::P(yp), Arg::P(0), Arg::L(total as i64), Arg::I(n as i32), Arg::I(0), Arg::I(left)],
+                            &[
+                                Arg::P(yp),
+                                Arg::P(0),
+                                Arg::L(total as i64),
+                                Arg::I(n as i32),
+                                Arg::I(0),
+                                Arg::I(left),
+                            ],
                         );
                     }
                     return;
@@ -1645,22 +2224,46 @@ impl Backend for Cuda {
                 let dst = scratch.as_ref().unwrap();
                 match kind {
                     Quant::Q8 | Quant::Q4 => self.launch(
-                        if *kind == Quant::Q8 { &self.f.dequant_q8 } else { &self.f.dequant_q4 },
+                        if *kind == Quant::Q8 {
+                            &self.f.dequant_q8
+                        } else {
+                            &self.f.dequant_q4
+                        },
                         Self::elems(n * k),
                         (256, 1, 1),
-                        &[Arg::P(self.ptr(dst)), Arg::P(self.ptr(&w.buf)), Arg::P(self.ptr(scales)), Arg::L((n * k) as i64), Arg::I(*group as i32)],
+                        &[
+                            Arg::P(self.ptr(dst)),
+                            Arg::P(self.ptr(&w.buf)),
+                            Arg::P(self.ptr(scales)),
+                            Arg::L((n * k) as i64),
+                            Arg::I(*group as i32),
+                        ],
                     ),
                     Quant::Nvfp4 { alpha, first_high } => self.launch(
                         &self.f.dequant_nvfp4,
                         Self::elems(n * k),
                         (256, 1, 1),
-                        &[Arg::P(self.ptr(dst)), Arg::P(self.ptr(&w.buf)), Arg::P(self.ptr(scales)), Arg::L((n * k) as i64), Arg::I(k as i32), Arg::F(*alpha), Arg::I(*first_high as i32)],
+                        &[
+                            Arg::P(self.ptr(dst)),
+                            Arg::P(self.ptr(&w.buf)),
+                            Arg::P(self.ptr(scales)),
+                            Arg::L((n * k) as i64),
+                            Arg::I(k as i32),
+                            Arg::F(*alpha),
+                            Arg::I(*first_high as i32),
+                        ],
                     ),
                     Quant::Mxfp8 => self.launch(
                         &self.f.dequant_mxfp8,
                         Self::elems(n * k),
                         (256, 1, 1),
-                        &[Arg::P(self.ptr(dst)), Arg::P(self.ptr(&w.buf)), Arg::P(self.ptr(scales)), Arg::L((n * k) as i64), Arg::I(k as i32)],
+                        &[
+                            Arg::P(self.ptr(dst)),
+                            Arg::P(self.ptr(&w.buf)),
+                            Arg::P(self.ptr(scales)),
+                            Arg::L((n * k) as i64),
+                            Arg::I(k as i32),
+                        ],
                     ),
                 }
                 self.ptr(dst)
@@ -1671,7 +2274,9 @@ impl Backend for Cuda {
         if let (Some(lt), Some(b)) = (&self.lt, bias) {
             let epi = (act == Act::GeluTanh) as u8;
             let mut plans = lt.plans.lock().unwrap();
-            let plan = plans.entry((n, k, rows, epi)).or_insert_with(|| lt.plan(n, k, rows, epi));
+            let plan = plans
+                .entry((n, k, rows, epi))
+                .or_insert_with(|| lt.plan(n, k, rows, epi));
             if let Some(p) = plan {
                 let bp = self.ptr(b);
                 let ws = lt.workspace_ptr();
@@ -1715,7 +2320,14 @@ impl Backend for Cuda {
                         &self.f.bias_act,
                         Self::elems(total),
                         (256, 1, 1),
-                        &[Arg::P(yp), Arg::P(0), Arg::L(total as i64), Arg::I(n as i32), Arg::I(0), Arg::I(act_code)],
+                        &[
+                            Arg::P(yp),
+                            Arg::P(0),
+                            Arg::L(total as i64),
+                            Arg::I(n as i32),
+                            Arg::I(0),
+                            Arg::I(act_code),
+                        ],
                     );
                 }
                 return;
@@ -1725,7 +2337,12 @@ impl Backend for Cuda {
         // A = W (transposed), B = x, C = y, all with leading dims k, k, n.
         // SAFETY: pointers and extents checked above; alpha/beta outlive the call.
         self.timed(
-            || format!("gemm n={n} k={k}{}", if rows < 1024 { " (small)" } else { "" }),
+            || {
+                format!(
+                    "gemm n={n} k={k}{}",
+                    if rows < 1024 { " (small)" } else { "" }
+                )
+            },
             || unsafe {
                 cudarc::cublas::result::gemm_ex(
                     *self.blas.handle(),
@@ -1758,12 +2375,28 @@ impl Backend for Cuda {
                 &self.f.bias_act,
                 Self::elems(total),
                 (256, 1, 1),
-                &[Arg::P(yp), Arg::P(self.opt(bias)), Arg::L(total as i64), Arg::I(n as i32), Arg::I(bias.is_some() as i32), Arg::I(act_code)],
+                &[
+                    Arg::P(yp),
+                    Arg::P(self.opt(bias)),
+                    Arg::L(total as i64),
+                    Arg::I(n as i32),
+                    Arg::I(bias.is_some() as i32),
+                    Arg::I(act_code),
+                ],
             );
         }
     }
 
-    fn linear_add(&self, x: &CuBuf, x_row: usize, rows: usize, w: &CuWeight, out: usize, y: &CuBuf, y_row: usize) {
+    fn linear_add(
+        &self,
+        x: &CuBuf,
+        x_row: usize,
+        rows: usize,
+        w: &CuWeight,
+        out: usize,
+        y: &CuBuf,
+        y_row: usize,
+    ) {
         let (n, k) = (w.rows, w.cols);
         assert_eq!(n, out, "linear_add: weight rows {n} != output width {out}");
         assert!((x_row + rows) * k <= x.len && (y_row + rows) * n <= y.len);
@@ -1783,13 +2416,22 @@ impl Backend for Cuda {
             }
             return;
         }
-        let (yp, xp, wp) = (self.ptr_at(y, y_row * n), self.ptr_at(x, x_row * k), self.ptr(&w.buf));
+        let (yp, xp, wp) = (
+            self.ptr_at(y, y_row * n),
+            self.ptr_at(x, x_row * k),
+            self.ptr(&w.buf),
+        );
         let (alpha, beta) = (1.0f32, 1.0f32);
         // As in `linear`'s fallback (column-major yᵀ = W·xᵀ), with beta = 1:
         // the GEMM reads y and writes y + x·Wᵀ in one pass.
         // SAFETY: pointers and extents checked above; alpha/beta outlive the call.
         self.timed(
-            || format!("gemm+acc n={n} k={k}{}", if rows < 1024 { " (small)" } else { "" }),
+            || {
+                format!(
+                    "gemm+acc n={n} k={k}{}",
+                    if rows < 1024 { " (small)" } else { "" }
+                )
+            },
             || unsafe {
                 cudarc::cublas::result::gemm_ex(
                     *self.blas.handle(),
@@ -1821,10 +2463,29 @@ impl Backend for Cuda {
     fn swiglu(&self, x: &CuBuf, rows: usize, dim: usize, out: &CuBuf) {
         let n = rows * dim;
         assert!(2 * n <= x.len && n <= out.len);
-        self.launch(&self.f.swiglu, Self::elems(n), (256, 1, 1), &[Arg::P(self.ptr(x)), Arg::P(self.ptr(out)), Arg::L(n as i64), Arg::I(dim as i32)]);
+        self.launch(
+            &self.f.swiglu,
+            Self::elems(n),
+            (256, 1, 1),
+            &[
+                Arg::P(self.ptr(x)),
+                Arg::P(self.ptr(out)),
+                Arg::L(n as i64),
+                Arg::I(dim as i32),
+            ],
+        );
     }
 
-    fn rms_norm(&self, x: &CuBuf, rows: usize, dim: usize, w: Option<&CuBuf>, modulation: Modulation<'_, CuBuf>, eps: f32, out: &CuBuf) {
+    fn rms_norm(
+        &self,
+        x: &CuBuf,
+        rows: usize,
+        dim: usize,
+        w: Option<&CuBuf>,
+        modulation: Modulation<'_, CuBuf>,
+        eps: f32,
+        out: &CuBuf,
+    ) {
         self.rms_impl(x, None, rows, dim, Gate::None, w, modulation, eps, out);
     }
 
@@ -1846,12 +2507,26 @@ impl Backend for Cuda {
     fn gate_residual(&self, h: &CuBuf, a: &CuBuf, rows: usize, dim: usize, gate: Gate<'_, CuBuf>) {
         let n = rows * dim;
         assert!(n <= h.len && n <= a.len);
-        let mut args = vec![Arg::P(self.ptr(h)), Arg::P(self.ptr(a)), Arg::L(n as i64), Arg::I(dim as i32)];
+        let mut args = vec![
+            Arg::P(self.ptr(h)),
+            Arg::P(self.ptr(a)),
+            Arg::L(n as i64),
+            Arg::I(dim as i32),
+        ];
         args.extend(self.gate_args(&gate));
         self.launch(&self.f.gate_residual, Self::elems(n), (256, 1, 1), &args);
     }
 
-    fn layer_norm(&self, x: &CuBuf, rows: usize, dim: usize, w: Option<&CuBuf>, b: Option<&CuBuf>, eps: f32, out: &CuBuf) {
+    fn layer_norm(
+        &self,
+        x: &CuBuf,
+        rows: usize,
+        dim: usize,
+        w: Option<&CuBuf>,
+        b: Option<&CuBuf>,
+        eps: f32,
+        out: &CuBuf,
+    ) {
         assert!(rows * dim <= x.len && rows * dim <= out.len);
         self.launch(
             &self.f.layer_norm,
@@ -1883,16 +2558,26 @@ impl Backend for Cuda {
         rope: Option<Rope<'_, CuBuf>>,
         out: &CuBuf,
     ) {
-        assert!(heads <= 256, "head_split keeps per-head statistics for up to 256 heads");
+        assert!(
+            heads <= 256,
+            "head_split keeps per-head statistics for up to 256 heads"
+        );
         assert!(heads * rows * hd <= out.len);
         if let Some(r) = &rope {
-            assert!(r.cos.f32 && r.sin.f32, "RoPE tables must come from upload_table");
+            assert!(
+                r.cos.f32 && r.sin.f32,
+                "RoPE tables must come from upload_table"
+            );
             assert!(r.rot.is_multiple_of(2) && r.rot <= hd);
         }
         let w = norm.as_ref().and_then(|n| n.w);
         let warp_kernel = hd.is_multiple_of(32) && hd <= 128;
         self.launch(
-            if warp_kernel { &self.f.head_split_warp } else { &self.f.head_split },
+            if warp_kernel {
+                &self.f.head_split_warp
+            } else {
+                &self.f.head_split
+            },
             (rows as u32, 1, 1),
             (256, 1, 1),
             &[
@@ -1915,9 +2600,26 @@ impl Backend for Cuda {
         );
     }
 
-    fn attention(&self, q: &CuBuf, k: &CuBuf, v: &CuBuf, heads: usize, kv_heads: usize, sq: usize, sk: usize, d: usize, causal: bool, out: &CuBuf) {
+    fn attention(
+        &self,
+        q: &CuBuf,
+        k: &CuBuf,
+        v: &CuBuf,
+        heads: usize,
+        kv_heads: usize,
+        sq: usize,
+        sk: usize,
+        d: usize,
+        causal: bool,
+        out: &CuBuf,
+    ) {
         assert!(d <= 128 && heads.is_multiple_of(kv_heads));
-        assert!(heads * sq * d <= q.len && kv_heads * sk * d <= k.len && kv_heads * sk * d <= v.len && sq * heads * d <= out.len);
+        assert!(
+            heads * sq * d <= q.len
+                && kv_heads * sk * d <= k.len
+                && kv_heads * sk * d <= v.len
+                && sq * heads * d <= out.len
+        );
         let scale = 1.0 / (d as f32).sqrt();
         let mma = match (d, self.attn_v1) {
             (128, true) => Some((&self.f.attention_mma128, 64)),
@@ -1970,13 +2672,41 @@ impl Backend for Cuda {
         head_dim <= 128 && head_dim.is_multiple_of(4)
     }
 
-    fn attention_qk8(&self, q: &CuBuf, k: &CuBuf, v: &CuBuf, heads: usize, kv_heads: usize, sq: usize, sk: usize, d: usize, causal: bool, pv8: bool, out: &CuBuf) {
+    fn attention_qk8(
+        &self,
+        q: &CuBuf,
+        k: &CuBuf,
+        v: &CuBuf,
+        heads: usize,
+        kv_heads: usize,
+        sq: usize,
+        sk: usize,
+        d: usize,
+        causal: bool,
+        pv8: bool,
+        out: &CuBuf,
+    ) {
         assert!(heads.is_multiple_of(kv_heads));
-        assert!(heads * sq * d <= q.len && kv_heads * sk * d <= k.len && kv_heads * sk * d <= v.len && sq * heads * d <= out.len);
+        assert!(
+            heads * sq * d <= q.len
+                && kv_heads * sk * d <= k.len
+                && kv_heads * sk * d <= v.len
+                && sq * heads * d <= out.len
+        );
         if pv8 && !(self.ada && !self.scalar_attn && (d == 64 || d == 128)) {
             // No FP8 tensor cores (or no kernel for this head dim): the oracle on the host.
             let (qh, kh, vh) = (self.download(q), self.download(k), self.download(v));
-            let o = h3_core::vsa::attention_pv8_reference(&qh[..heads * sq * d], &kh[..kv_heads * sk * d], &vh[..kv_heads * sk * d], heads, kv_heads, sq, sk, d, causal);
+            let o = h3_core::vsa::attention_pv8_reference(
+                &qh[..heads * sq * d],
+                &kh[..kv_heads * sk * d],
+                &vh[..kv_heads * sk * d],
+                heads,
+                kv_heads,
+                sq,
+                sk,
+                d,
+                causal,
+            );
             self.write(out, &o);
             return;
         }
@@ -1989,7 +2719,15 @@ impl Backend for Cuda {
                 // No int8 kernel for this shape: round on the device as the
                 // oracle does and run the exact kernel (a conformance path).
                 let (qh, kh) = (self.download(q), self.download(k));
-                let (q8, k8) = h3_core::vsa::attn_qk8_round(&qh[..heads * sq * d], &kh[..kv_heads * sk * d], heads, kv_heads, sq, sk, d);
+                let (q8, k8) = h3_core::vsa::attn_qk8_round(
+                    &qh[..heads * sq * d],
+                    &kh[..kv_heads * sk * d],
+                    heads,
+                    kv_heads,
+                    sq,
+                    sk,
+                    d,
+                );
                 let (qb, kb) = (self.upload(&q8), self.upload(&k8));
                 return self.attention(&qb, &kb, v, heads, kv_heads, sq, sk, d, causal, out);
             }
@@ -2012,19 +2750,57 @@ impl Backend for Cuda {
         }
         let (_, (q8, k8, qsc, ksc, kmean, kpart)) = guard.as_ref().unwrap();
         let nch = KMEAN_CHUNKS as i32;
-        self.launch(&self.f.vsa_kmean, (KMEAN_CHUNKS as u32, kv_heads as u32, 1), (128, 1, 1), &[Arg::P(self.ptr(k)), Arg::P(self.ptr(kpart)), Arg::I(sk as i32), Arg::I(d as i32), Arg::I(nch)]);
-        self.launch(&self.f.vsa_kmean2, (kv_heads as u32, 1, 1), (128, 1, 1), &[Arg::P(self.ptr(kpart)), Arg::P(self.ptr(kmean)), Arg::I(sk as i32), Arg::I(d as i32), Arg::I(nch)]);
+        self.launch(
+            &self.f.vsa_kmean,
+            (KMEAN_CHUNKS as u32, kv_heads as u32, 1),
+            (128, 1, 1),
+            &[
+                Arg::P(self.ptr(k)),
+                Arg::P(self.ptr(kpart)),
+                Arg::I(sk as i32),
+                Arg::I(d as i32),
+                Arg::I(nch),
+            ],
+        );
+        self.launch(
+            &self.f.vsa_kmean2,
+            (kv_heads as u32, 1, 1),
+            (128, 1, 1),
+            &[
+                Arg::P(self.ptr(kpart)),
+                Arg::P(self.ptr(kmean)),
+                Arg::I(sk as i32),
+                Arg::I(d as i32),
+                Arg::I(nch),
+            ],
+        );
         self.launch(
             &self.f.attn_qk8_quant,
             (sq.div_ceil(64) as u32, heads as u32, 1),
             (256, 1, 1),
-            &[Arg::P(self.ptr(q)), Arg::P(self.ptr(kmean)), Arg::P(self.ptr(q8)), Arg::P(self.ptr(qsc)), Arg::I(sq as i32), Arg::I(d as i32), Arg::I(0)],
+            &[
+                Arg::P(self.ptr(q)),
+                Arg::P(self.ptr(kmean)),
+                Arg::P(self.ptr(q8)),
+                Arg::P(self.ptr(qsc)),
+                Arg::I(sq as i32),
+                Arg::I(d as i32),
+                Arg::I(0),
+            ],
         );
         self.launch(
             &self.f.attn_qk8_quant,
             (sk.div_ceil(64) as u32, kv_heads as u32, 1),
             (256, 1, 1),
-            &[Arg::P(self.ptr(k)), Arg::P(self.ptr(kmean)), Arg::P(self.ptr(k8)), Arg::P(self.ptr(ksc)), Arg::I(sk as i32), Arg::I(d as i32), Arg::I(1)],
+            &[
+                Arg::P(self.ptr(k)),
+                Arg::P(self.ptr(kmean)),
+                Arg::P(self.ptr(k8)),
+                Arg::P(self.ptr(ksc)),
+                Arg::I(sk as i32),
+                Arg::I(d as i32),
+                Arg::I(1),
+            ],
         );
         let mut args = vec![
             Arg::P(self.ptr(q)),
@@ -2061,24 +2837,79 @@ impl Backend for Cuda {
                 ));
             }
             let (_, (v8t, vmean, vpart, vsc)) = pv8_guard.as_ref().unwrap();
-            self.launch(&self.f.vsa_kmean, (KMEAN_CHUNKS as u32, kv_heads as u32, 1), (128, 1, 1), &[Arg::P(self.ptr(v)), Arg::P(self.ptr(kpart)), Arg::I(sk as i32), Arg::I(d as i32), Arg::I(nch)]);
-            self.launch(&self.f.vsa_kmean2, (kv_heads as u32, 1, 1), (128, 1, 1), &[Arg::P(self.ptr(kpart)), Arg::P(self.ptr(vmean)), Arg::I(sk as i32), Arg::I(d as i32), Arg::I(nch)]);
-            self.launch(&self.f.attn_v8_max, (nparts as u32, kv_heads as u32, 1), (256, 1, 1), &[Arg::P(self.ptr(v)), Arg::P(self.ptr(vmean)), Arg::P(self.ptr(vpart)), Arg::I(sk as i32), Arg::I(d as i32)]);
+            self.launch(
+                &self.f.vsa_kmean,
+                (KMEAN_CHUNKS as u32, kv_heads as u32, 1),
+                (128, 1, 1),
+                &[
+                    Arg::P(self.ptr(v)),
+                    Arg::P(self.ptr(kpart)),
+                    Arg::I(sk as i32),
+                    Arg::I(d as i32),
+                    Arg::I(nch),
+                ],
+            );
+            self.launch(
+                &self.f.vsa_kmean2,
+                (kv_heads as u32, 1, 1),
+                (128, 1, 1),
+                &[
+                    Arg::P(self.ptr(kpart)),
+                    Arg::P(self.ptr(vmean)),
+                    Arg::I(sk as i32),
+                    Arg::I(d as i32),
+                    Arg::I(nch),
+                ],
+            );
+            self.launch(
+                &self.f.attn_v8_max,
+                (nparts as u32, kv_heads as u32, 1),
+                (256, 1, 1),
+                &[
+                    Arg::P(self.ptr(v)),
+                    Arg::P(self.ptr(vmean)),
+                    Arg::P(self.ptr(vpart)),
+                    Arg::I(sk as i32),
+                    Arg::I(d as i32),
+                ],
+            );
             self.launch(
                 &self.f.attn_v8,
                 ((skp / 32) as u32, kv_heads as u32, 1),
                 (128, 1, 1),
-                &[Arg::P(self.ptr(v)), Arg::P(self.ptr(vmean)), Arg::P(self.ptr(vpart)), Arg::I(nparts as i32), Arg::P(self.ptr(vsc)), Arg::P(self.ptr(v8t)), Arg::I(sk as i32), Arg::I(d as i32), Arg::P(0)],
+                &[
+                    Arg::P(self.ptr(v)),
+                    Arg::P(self.ptr(vmean)),
+                    Arg::P(self.ptr(vpart)),
+                    Arg::I(nparts as i32),
+                    Arg::P(self.ptr(vsc)),
+                    Arg::P(self.ptr(v8t)),
+                    Arg::I(sk as i32),
+                    Arg::I(d as i32),
+                    Arg::P(0),
+                ],
             );
-            args.extend([Arg::P(self.ptr(v8t)), Arg::P(self.ptr(vmean)), Arg::P(self.ptr(vsc))]);
+            args.extend([
+                Arg::P(self.ptr(v8t)),
+                Arg::P(self.ptr(vmean)),
+                Arg::P(self.ptr(vsc)),
+            ]);
         }
-        self.launch(f, (sq.div_ceil(128) as u32, heads as u32, 1), (128, 1, 1), &args);
+        self.launch(
+            f,
+            (sq.div_ceil(128) as u32, heads as u32, 1),
+            (128, 1, 1),
+            &args,
+        );
     }
 
     fn vsa_prepare(&self, spec: &VsaSpec) -> CuVsa {
         let plan = &spec.plan;
         let (nb, h, d) = (plan.num_tiles(), spec.heads, spec.head_dim);
-        assert!(nb <= 4096, "VSA selection holds at most 4096 tiles per block");
+        assert!(
+            nb <= 4096,
+            "VSA selection holds at most 4096 tiles per block"
+        );
         assert!(d <= 128 && d.is_multiple_of(4));
         let mut reg: Vec<u32> = Vec::new();
         let mut maxsel = plan.num_prefix_tiles;
@@ -2108,7 +2939,10 @@ impl Backend for Cuda {
             te: plan.tile_elems,
             heads: h,
             qk8: spec.qk8.then(|| {
-                assert!(plan.tile_elems <= 128 && d <= 128, "fw_vsa_qk8 holds a tile of ≤ 128 rows × ≤ 128 channels in registers");
+                assert!(
+                    plan.tile_elems <= 128 && d <= 128,
+                    "fw_vsa_qk8 holds a tile of ≤ 128 rows × ≤ 128 channels in registers"
+                );
                 let codes = (h * spec.plan.seq * d).div_ceil(2);
                 (
                     self.alloc(codes),
@@ -2127,14 +2961,25 @@ impl Backend for Cuda {
                     Backend::upload_table(self, &vec![0.0; h]),
                 )
             }),
-            host_pv8: (spec.pv8 && self.ada && !(self.vsa_fine3.is_some() && !self.scalar_attn && (d == 64 || d == 128))).then(|| spec.clone()),
+            host_pv8: (spec.pv8
+                && self.ada
+                && !(self.vsa_fine3.is_some() && !self.scalar_attn && (d == 64 || d == 128)))
+                .then(|| spec.clone()),
             d,
             seq: plan.seq,
             scale: spec.scale,
         }
     }
 
-    fn vsa_attention(&self, q: &CuBuf, k: &CuBuf, v: &CuBuf, gate: Option<&CuBuf>, s: &CuVsa, out: &CuBuf) {
+    fn vsa_attention(
+        &self,
+        q: &CuBuf,
+        k: &CuBuf,
+        v: &CuBuf,
+        gate: Option<&CuBuf>,
+        s: &CuVsa,
+        out: &CuBuf,
+    ) {
         let n = s.heads * s.seq * s.d;
         assert!(n <= q.len && n <= k.len && n <= v.len && n <= out.len);
         if let Some(g) = gate {
@@ -2144,14 +2989,25 @@ impl Backend for Cuda {
             let (qh, kh, vh) = (self.download(q), self.download(k), self.download(v));
             let gh = gate.map(|g| self.download(g));
             let mut o = vec![0f32; n];
-            h3_cpu::vsa_reference(&qh[..n], &kh[..n], &vh[..n], gh.as_deref().map(|g| &g[..n]), spec, &mut o);
+            h3_cpu::vsa_reference(
+                &qh[..n],
+                &kh[..n],
+                &vh[..n],
+                gh.as_deref().map(|g| &g[..n]),
+                spec,
+                &mut o,
+            );
             self.write(out, &o);
             return;
         }
         let grid = (s.nb as u32, s.heads as u32, 1);
         let vec_pool = s.d.is_multiple_of(4) && s.d <= 128;
         self.launch(
-            if vec_pool { &self.f.vsa_pool } else { &self.f.vsa_pool_scalar },
+            if vec_pool {
+                &self.f.vsa_pool
+            } else {
+                &self.f.vsa_pool_scalar
+            },
             grid,
             (128, 1, 1),
             &[
@@ -2172,8 +3028,16 @@ impl Backend for Cuda {
         // `H3_CUDA_VSA_COARSE1=1` keeps one per block).
         let coarse4 = s.nb <= 2048 && !self.vsa_coarse1;
         self.launch(
-            if coarse4 { &self.f.vsa_coarse4 } else { &self.f.vsa_coarse },
-            if coarse4 { (s.nb.div_ceil(4) as u32, s.heads as u32, 1) } else { grid },
+            if coarse4 {
+                &self.f.vsa_coarse4
+            } else {
+                &self.f.vsa_coarse
+            },
+            if coarse4 {
+                (s.nb.div_ceil(4) as u32, s.heads as u32, 1)
+            } else {
+                grid
+            },
             (256, 1, 1),
             &[
                 Arg::P(self.ptr(&s.pooled)),
@@ -2196,9 +3060,25 @@ impl Backend for Cuda {
         // INT8 / FP8 recipe when the spec asks) plus the gated pooled branch.
         // The all-tiles fine stage computed the same softmax at ~2× the cost
         // (a 5090: 9.8 s against 5.3 s per V2 step).
-        if s.dense_all && !self.scalar_attn && (s.d == 64 || s.d == 128) && (s.scale - 1.0 / (s.d as f32).sqrt()).abs() <= 1e-6 * s.scale {
+        if s.dense_all
+            && !self.scalar_attn
+            && (s.d == 64 || s.d == 128)
+            && (s.scale - 1.0 / (s.d as f32).sqrt()).abs() <= 1e-6 * s.scale
+        {
             if s.qk8.is_some() || s.pv8.is_some() {
-                self.attention_qk8(q, k, v, s.heads, s.heads, s.seq, s.seq, s.d, false, s.pv8.is_some(), out);
+                self.attention_qk8(
+                    q,
+                    k,
+                    v,
+                    s.heads,
+                    s.heads,
+                    s.seq,
+                    s.seq,
+                    s.d,
+                    false,
+                    s.pv8.is_some(),
+                    out,
+                );
             } else {
                 self.attention(q, k, v, s.heads, s.heads, s.seq, s.seq, s.d, false, out);
             }
@@ -2207,7 +3087,18 @@ impl Backend for Cuda {
                     &self.f.vsa_gate_add,
                     Self::elems(n),
                     (256, 1, 1),
-                    &[Arg::P(self.ptr(out)), Arg::P(self.ptr(&s.pooled_out)), Arg::P(self.ptr(g)), Arg::P(self.ptr(&s.rowslot)), Arg::L(n as i64), Arg::I(s.heads as i32), Arg::I(s.seq as i32), Arg::I(s.d as i32), Arg::I(s.nb as i32), Arg::I(s.te as i32)],
+                    &[
+                        Arg::P(self.ptr(out)),
+                        Arg::P(self.ptr(&s.pooled_out)),
+                        Arg::P(self.ptr(g)),
+                        Arg::P(self.ptr(&s.rowslot)),
+                        Arg::L(n as i64),
+                        Arg::I(s.heads as i32),
+                        Arg::I(s.seq as i32),
+                        Arg::I(s.d as i32),
+                        Arg::I(s.nb as i32),
+                        Arg::I(s.te as i32),
+                    ],
                 );
             }
             return;
@@ -2242,7 +3133,13 @@ impl Backend for Cuda {
             64 => Some(&self.f.vsa_fine_pair_mma64),
             _ => None,
         };
-        if let (Some(f), true, false, true, true) = (pair, self.ampere, self.scalar_attn, self.vsa_pair, s.te == 64) {
+        if let (Some(f), true, false, true, true) = (
+            pair,
+            self.ampere,
+            self.scalar_attn,
+            self.vsa_pair,
+            s.te == 64,
+        ) {
             self.launch(
                 &self.f.vsa_pair,
                 (s.npairs as u32, s.heads as u32, 1),
@@ -2262,11 +3159,22 @@ impl Backend for Cuda {
             );
             args.push(Arg::F(s.scale));
             tail(&mut args);
-            args.extend([Arg::P(self.ptr(&s.usel)), Arg::P(self.ptr(&s.nusel)), Arg::I(s.npairs as i32), Arg::I(s.ustride as i32), Arg::I(self.vsa_dbg)]);
+            args.extend([
+                Arg::P(self.ptr(&s.usel)),
+                Arg::P(self.ptr(&s.nusel)),
+                Arg::I(s.npairs as i32),
+                Arg::I(s.ustride as i32),
+                Arg::I(self.vsa_dbg),
+            ]);
             self.launch(f, (s.npairs as u32, s.heads as u32, 1), (256, 1, 1), &args);
             return;
         }
-        if let (Some(var), true, false, true) = (self.vsa_fine3, self.ampere, self.scalar_attn, s.d == 64 || s.d == 128) {
+        if let (Some(var), true, false, true) = (
+            self.vsa_fine3,
+            self.ampere,
+            self.scalar_attn,
+            s.d == 64 || s.d == 128,
+        ) {
             args.push(Arg::F(s.scale));
             tail(&mut args);
             // INT8 Q·Kᵀ: the per-head K mean, then codes + scales per (head, tile), then the e / f body.
@@ -2279,14 +3187,41 @@ impl Backend for Cuda {
             if s.pv8.is_some() {
                 if self.ada {
                     var = 6;
-                } else if !self.pv8_warned.swap(true, std::sync::atomic::Ordering::Relaxed) {
-                    eprintln!("cuda: no FP8 tensor cores before sm_89; the VSA fine stage runs INT8 Q·Kᵀ with bf16 P·V (pv8 ignored)");
+                } else if !self
+                    .pv8_warned
+                    .swap(true, std::sync::atomic::Ordering::Relaxed)
+                {
+                    eprintln!(
+                        "cuda: no FP8 tensor cores before sm_89; the VSA fine stage runs INT8 Q·Kᵀ with bf16 P·V (pv8 ignored)"
+                    );
                 }
             }
             if let Some((q8, k8, qsc, ksc, kmean, kpart)) = &s.qk8 {
                 let nch = KMEAN_CHUNKS as i32;
-                self.launch(&self.f.vsa_kmean, (KMEAN_CHUNKS as u32, s.heads as u32, 1), (128, 1, 1), &[Arg::P(self.ptr(k)), Arg::P(self.ptr(kpart)), Arg::I(s.seq as i32), Arg::I(s.d as i32), Arg::I(nch)]);
-                self.launch(&self.f.vsa_kmean2, (s.heads as u32, 1, 1), (128, 1, 1), &[Arg::P(self.ptr(kpart)), Arg::P(self.ptr(kmean)), Arg::I(s.seq as i32), Arg::I(s.d as i32), Arg::I(nch)]);
+                self.launch(
+                    &self.f.vsa_kmean,
+                    (KMEAN_CHUNKS as u32, s.heads as u32, 1),
+                    (128, 1, 1),
+                    &[
+                        Arg::P(self.ptr(k)),
+                        Arg::P(self.ptr(kpart)),
+                        Arg::I(s.seq as i32),
+                        Arg::I(s.d as i32),
+                        Arg::I(nch),
+                    ],
+                );
+                self.launch(
+                    &self.f.vsa_kmean2,
+                    (s.heads as u32, 1, 1),
+                    (128, 1, 1),
+                    &[
+                        Arg::P(self.ptr(kpart)),
+                        Arg::P(self.ptr(kmean)),
+                        Arg::I(s.seq as i32),
+                        Arg::I(s.d as i32),
+                        Arg::I(nch),
+                    ],
+                );
                 self.launch(
                     &self.f.vsa_qk8,
                     (s.nb as u32, s.heads as u32, 1),
@@ -2308,25 +3243,82 @@ impl Backend for Cuda {
                         Arg::I(s.te as i32),
                     ],
                 );
-                args.extend([Arg::P(self.ptr(q8)), Arg::P(self.ptr(k8)), Arg::P(self.ptr(qsc)), Arg::P(self.ptr(ksc))]);
+                args.extend([
+                    Arg::P(self.ptr(q8)),
+                    Arg::P(self.ptr(k8)),
+                    Arg::P(self.ptr(qsc)),
+                    Arg::P(self.ptr(ksc)),
+                ]);
                 if let (Some((v8t, vmean, vpart, vsc)), 6) = (&s.pv8, var) {
                     // V: per-head mean (the K-mean kernels on V), chunk maxima,
                     // then the transposed codes in slot order (fw_attn_v8 with slot).
                     let nparts = s.seq.div_ceil(64);
-                    self.launch(&self.f.vsa_kmean, (KMEAN_CHUNKS as u32, s.heads as u32, 1), (128, 1, 1), &[Arg::P(self.ptr(v)), Arg::P(self.ptr(kpart)), Arg::I(s.seq as i32), Arg::I(s.d as i32), Arg::I(nch)]);
-                    self.launch(&self.f.vsa_kmean2, (s.heads as u32, 1, 1), (128, 1, 1), &[Arg::P(self.ptr(kpart)), Arg::P(self.ptr(vmean)), Arg::I(s.seq as i32), Arg::I(s.d as i32), Arg::I(nch)]);
-                    self.launch(&self.f.attn_v8_max, (nparts as u32, s.heads as u32, 1), (256, 1, 1), &[Arg::P(self.ptr(v)), Arg::P(self.ptr(vmean)), Arg::P(self.ptr(vpart)), Arg::I(s.seq as i32), Arg::I(s.d as i32)]);
+                    self.launch(
+                        &self.f.vsa_kmean,
+                        (KMEAN_CHUNKS as u32, s.heads as u32, 1),
+                        (128, 1, 1),
+                        &[
+                            Arg::P(self.ptr(v)),
+                            Arg::P(self.ptr(kpart)),
+                            Arg::I(s.seq as i32),
+                            Arg::I(s.d as i32),
+                            Arg::I(nch),
+                        ],
+                    );
+                    self.launch(
+                        &self.f.vsa_kmean2,
+                        (s.heads as u32, 1, 1),
+                        (128, 1, 1),
+                        &[
+                            Arg::P(self.ptr(kpart)),
+                            Arg::P(self.ptr(vmean)),
+                            Arg::I(s.seq as i32),
+                            Arg::I(s.d as i32),
+                            Arg::I(nch),
+                        ],
+                    );
+                    self.launch(
+                        &self.f.attn_v8_max,
+                        (nparts as u32, s.heads as u32, 1),
+                        (256, 1, 1),
+                        &[
+                            Arg::P(self.ptr(v)),
+                            Arg::P(self.ptr(vmean)),
+                            Arg::P(self.ptr(vpart)),
+                            Arg::I(s.seq as i32),
+                            Arg::I(s.d as i32),
+                        ],
+                    );
                     self.launch(
                         &self.f.attn_v8,
                         ((s.nb * s.te / 32) as u32, s.heads as u32, 1),
                         (128, 1, 1),
-                        &[Arg::P(self.ptr(v)), Arg::P(self.ptr(vmean)), Arg::P(self.ptr(vpart)), Arg::I(nparts as i32), Arg::P(self.ptr(vsc)), Arg::P(self.ptr(v8t)), Arg::I(s.seq as i32), Arg::I(s.d as i32), Arg::P(self.ptr(&s.slot))],
+                        &[
+                            Arg::P(self.ptr(v)),
+                            Arg::P(self.ptr(vmean)),
+                            Arg::P(self.ptr(vpart)),
+                            Arg::I(nparts as i32),
+                            Arg::P(self.ptr(vsc)),
+                            Arg::P(self.ptr(v8t)),
+                            Arg::I(s.seq as i32),
+                            Arg::I(s.d as i32),
+                            Arg::P(self.ptr(&s.slot)),
+                        ],
                     );
-                    args.extend([Arg::P(self.ptr(v8t)), Arg::P(self.ptr(vmean)), Arg::P(self.ptr(vsc))]);
+                    args.extend([
+                        Arg::P(self.ptr(v8t)),
+                        Arg::P(self.ptr(vmean)),
+                        Arg::P(self.ptr(vsc)),
+                    ]);
                 }
             }
             let f = &self.f.vsa_fine3[if s.d == 128 { 1 } else { 0 }][var];
-            self.launch(f, (s.nb as u32 * (s.te / 64) as u32, s.heads as u32, 1), (128, 1, 1), &args);
+            self.launch(
+                f,
+                (s.nb as u32 * (s.te / 64) as u32, s.heads as u32, 1),
+                (128, 1, 1),
+                &args,
+            );
             return;
         }
         // v1: 64 query rows per block (te/64 blocks per tile), 128 threads.
@@ -2347,7 +3339,12 @@ impl Backend for Cuda {
             if !self.vsa_v2 {
                 args.push(Arg::I(self.vsa_dbg));
             }
-            self.launch(f, (s.nb as u32 * sub, s.heads as u32, 1), (threads, 1, 1), &args);
+            self.launch(
+                f,
+                (s.nb as u32 * sub, s.heads as u32, 1),
+                (threads, 1, 1),
+                &args,
+            );
         } else {
             args.push(Arg::I(s.d as i32));
             args.push(Arg::F(s.scale));
@@ -2356,7 +3353,17 @@ impl Backend for Cuda {
         }
     }
 
-    fn patchify(&self, latent: &CuBuf, c: usize, t: usize, h: usize, w: usize, patch: (usize, usize, usize), out: &CuBuf, out_row: usize) {
+    fn patchify(
+        &self,
+        latent: &CuBuf,
+        c: usize,
+        t: usize,
+        h: usize,
+        w: usize,
+        patch: (usize, usize, usize),
+        out: &CuBuf,
+        out_row: usize,
+    ) {
         let n = c * t * h * w;
         let f = c * patch.0 * patch.1 * patch.2;
         assert!(n <= latent.len && (out_row * f + n) <= out.len);
@@ -2383,7 +3390,19 @@ impl Backend for Cuda {
         );
     }
 
-    fn unpatchify(&self, x: &CuBuf, x_row: usize, x_stride: usize, col: usize, c: usize, t: usize, h: usize, w: usize, patch: (usize, usize, usize), out: &CuBuf) {
+    fn unpatchify(
+        &self,
+        x: &CuBuf,
+        x_row: usize,
+        x_stride: usize,
+        col: usize,
+        c: usize,
+        t: usize,
+        h: usize,
+        w: usize,
+        patch: (usize, usize, usize),
+        out: &CuBuf,
+    ) {
         let n = c * t * h * w;
         assert!(n <= out.len);
         self.launch(
@@ -2409,12 +3428,24 @@ impl Backend for Cuda {
         );
     }
 
-    fn flow_step(&self, x: &CuBuf, off: usize, v: &CuBuf, v_off: usize, noise: Option<&CuBuf>, n: usize, step: FlowStep) {
+    fn flow_step(
+        &self,
+        x: &CuBuf,
+        off: usize,
+        v: &CuBuf,
+        v_off: usize,
+        noise: Option<&CuBuf>,
+        n: usize,
+        step: FlowStep,
+    ) {
         assert!(off + n <= x.len && v_off + n <= v.len);
         let (mode, sigma, next) = match step {
             FlowStep::Euler { sigma, next } => (0, sigma, next),
             FlowStep::Renoise { sigma, next } => {
-                assert!(noise.is_some_and(|z| off + n <= z.len), "renoise needs noise");
+                assert!(
+                    noise.is_some_and(|z| off + n <= z.len),
+                    "renoise needs noise"
+                );
                 (1, sigma, next)
             }
             FlowStep::Terminal { sigma } => (2, sigma, 0.0),
@@ -2443,22 +3474,55 @@ impl Backend for Cuda {
             &self.f.axpby,
             Self::elems(n),
             (256, 1, 1),
-            &[Arg::P(self.ptr(y)), Arg::L(off as i64), Arg::F(a), Arg::P(self.ptr(x)), Arg::L(x_off as i64), Arg::F(b), Arg::L(n as i64)],
+            &[
+                Arg::P(self.ptr(y)),
+                Arg::L(off as i64),
+                Arg::F(a),
+                Arg::P(self.ptr(x)),
+                Arg::L(x_off as i64),
+                Arg::F(b),
+                Arg::L(n as i64),
+            ],
         );
     }
 
-    fn channel_affine(&self, x: &CuBuf, c: usize, inner: usize, scale: &CuBuf, shift: Option<&CuBuf>, out: &CuBuf) {
+    fn channel_affine(
+        &self,
+        x: &CuBuf,
+        c: usize,
+        inner: usize,
+        scale: &CuBuf,
+        shift: Option<&CuBuf>,
+        out: &CuBuf,
+    ) {
         let n = c * inner;
         assert!(n <= x.len && n <= out.len && c <= scale.len);
         self.launch(
             &self.f.channel_affine,
             Self::elems(n),
             (256, 1, 1),
-            &[Arg::P(self.ptr(x)), Arg::P(self.ptr(out)), Arg::L(n as i64), Arg::I(inner as i32), Arg::P(self.ptr(scale)), Arg::I(shift.is_some() as i32), Arg::P(self.opt(shift))],
+            &[
+                Arg::P(self.ptr(x)),
+                Arg::P(self.ptr(out)),
+                Arg::L(n as i64),
+                Arg::I(inner as i32),
+                Arg::P(self.ptr(scale)),
+                Arg::I(shift.is_some() as i32),
+                Arg::P(self.opt(shift)),
+            ],
         );
     }
 
-    fn conv2d(&self, a: &CuBuf, b: Option<&CuBuf>, s: &ConvShape, w: &CuWeight, bias: Option<&CuBuf>, ep: ConvEpilogue<'_, CuBuf>, out: &CuBuf) {
+    fn conv2d(
+        &self,
+        a: &CuBuf,
+        b: Option<&CuBuf>,
+        s: &ConvShape,
+        w: &CuWeight,
+        bias: Option<&CuBuf>,
+        ep: ConvEpilogue<'_, CuBuf>,
+        out: &CuBuf,
+    ) {
         assert_eq!((w.rows, w.cols), (s.cout, s.k_len()));
         assert!(w.quant.is_none(), "conv weights are not quantized");
         assert!(s.out_len() <= out.len);
@@ -2469,7 +3533,11 @@ impl Backend for Cuda {
         let mt = (s.frames * oh * ow).div_ceil(tile) as u32;
         let (gy, gz) = Self::split_grid(mt);
         self.launch(
-            if mma { &self.f.conv2d_mma } else { &self.f.conv2d },
+            if mma {
+                &self.f.conv2d_mma
+            } else {
+                &self.f.conv2d
+            },
             (s.cout.div_ceil(64) as u32, gy, gz),
             if mma { (128, 1, 1) } else { (16, 16, 1) },
             &[
@@ -2493,7 +3561,15 @@ impl Backend for Cuda {
         );
     }
 
-    fn conv3d(&self, x: &CuBuf, s: &Conv3dShape, w: &CuWeight, bias: Option<&CuBuf>, ep: ConvEpilogue<'_, CuBuf>, out: &CuBuf) {
+    fn conv3d(
+        &self,
+        x: &CuBuf,
+        s: &Conv3dShape,
+        w: &CuWeight,
+        bias: Option<&CuBuf>,
+        ep: ConvEpilogue<'_, CuBuf>,
+        out: &CuBuf,
+    ) {
         assert_eq!((w.rows, w.cols), (s.cout, s.k_len()), "conv3d weight shape");
         assert!(w.quant.is_none(), "conv weights are not quantized");
         assert!(s.in_len() <= x.len && s.out_len() <= out.len);
@@ -2537,7 +3613,12 @@ impl Backend for Cuda {
                 Arg::I(s.w as i32),
             ];
             common(&mut args);
-            self.launch(&self.f.conv3d_mma, (s.cout.div_ceil(64) as u32, gy, gz), (128, 1, 1), &args);
+            self.launch(
+                &self.f.conv3d_mma,
+                (s.cout.div_ceil(64) as u32, gy, gz),
+                (128, 1, 1),
+                &args,
+            );
         } else {
             let n = s.out_len();
             let mut args = vec![
@@ -2558,7 +3639,15 @@ impl Backend for Cuda {
         }
     }
 
-    fn conv1d(&self, x: &CuBuf, s: &Conv1dShape, w: &CuWeight, bias: Option<&CuBuf>, ep: ConvEpilogue<'_, CuBuf>, out: &CuBuf) {
+    fn conv1d(
+        &self,
+        x: &CuBuf,
+        s: &Conv1dShape,
+        w: &CuWeight,
+        bias: Option<&CuBuf>,
+        ep: ConvEpilogue<'_, CuBuf>,
+        out: &CuBuf,
+    ) {
         assert_eq!((w.rows, w.cols), (s.cout, (s.cin / s.groups) * s.k));
         assert!(w.quant.is_none());
         assert!(s.cin * s.len <= x.len && s.out_len() <= out.len);
@@ -2589,18 +3678,40 @@ impl Backend for Cuda {
         );
     }
 
-    fn replicate_pad1d(&self, x: &CuBuf, c: usize, len: usize, left: usize, right: usize, out: &CuBuf) {
+    fn replicate_pad1d(
+        &self,
+        x: &CuBuf,
+        c: usize,
+        len: usize,
+        left: usize,
+        right: usize,
+        out: &CuBuf,
+    ) {
         let n = c * (len + left + right);
         assert!(c * len <= x.len && n <= out.len && len > 0);
         self.launch(
             &self.f.replicate_pad1d,
             Self::elems(n),
             (256, 1, 1),
-            &[Arg::P(self.ptr(x)), Arg::P(self.ptr(out)), Arg::L(n as i64), Arg::I(len as i32), Arg::I(left as i32), Arg::I(right as i32)],
+            &[
+                Arg::P(self.ptr(x)),
+                Arg::P(self.ptr(out)),
+                Arg::L(n as i64),
+                Arg::I(len as i32),
+                Arg::I(left as i32),
+                Arg::I(right as i32),
+            ],
         );
     }
 
-    fn conv_transpose1d(&self, x: &CuBuf, s: &ConvT1dShape, w: &CuWeight, bias: Option<&CuBuf>, out: &CuBuf) {
+    fn conv_transpose1d(
+        &self,
+        x: &CuBuf,
+        s: &ConvT1dShape,
+        w: &CuWeight,
+        bias: Option<&CuBuf>,
+        out: &CuBuf,
+    ) {
         assert_eq!((w.rows, w.cols), (s.cin, (s.cout / s.groups) * s.k));
         assert!(w.quant.is_none());
         assert!(s.cin * s.len <= x.len && s.out_len() <= out.len);
@@ -2627,7 +3738,20 @@ impl Backend for Cuda {
         );
     }
 
-    fn group_norm(&self, x: &CuBuf, c: usize, t: usize, hw: usize, groups: usize, per_frame: bool, w: &CuBuf, b: &CuBuf, eps: f32, act: Act, out: &CuBuf) {
+    fn group_norm(
+        &self,
+        x: &CuBuf,
+        c: usize,
+        t: usize,
+        hw: usize,
+        groups: usize,
+        per_frame: bool,
+        w: &CuBuf,
+        b: &CuBuf,
+        eps: f32,
+        act: Act,
+        out: &CuBuf,
+    ) {
         let n = c * t * hw;
         assert!(n <= x.len && n <= out.len && c.is_multiple_of(groups));
         let fg = if per_frame { t * groups } else { groups };
@@ -2636,7 +3760,16 @@ impl Backend for Cuda {
             &self.f.gn_stats,
             (fg as u32, 1, 1),
             (256, 1, 1),
-            &[Arg::P(self.ptr(x)), Arg::P(self.ptr(&stats)), Arg::I(c as i32), Arg::I(t as i32), Arg::I(hw as i32), Arg::I(groups as i32), Arg::I(per_frame as i32), Arg::F(eps)],
+            &[
+                Arg::P(self.ptr(x)),
+                Arg::P(self.ptr(&stats)),
+                Arg::I(c as i32),
+                Arg::I(t as i32),
+                Arg::I(hw as i32),
+                Arg::I(groups as i32),
+                Arg::I(per_frame as i32),
+                Arg::F(eps),
+            ],
         );
         let act_code = match act {
             Act::None => 0,
@@ -2672,10 +3805,33 @@ impl Backend for Cuda {
             Snake::Alpha(a) => (self.ptr(a), 0, 0),
             Snake::AlphaBeta { alpha, beta } => (self.ptr(alpha), self.ptr(beta), 1),
         };
-        self.launch(&self.f.snake, Self::elems(n), (256, 1, 1), &[Arg::P(self.ptr(x)), Arg::L(n as i64), Arg::I(len as i32), Arg::P(alpha), Arg::P(beta), Arg::I(kind)]);
+        self.launch(
+            &self.f.snake,
+            Self::elems(n),
+            (256, 1, 1),
+            &[
+                Arg::P(self.ptr(x)),
+                Arg::L(n as i64),
+                Arg::I(len as i32),
+                Arg::P(alpha),
+                Arg::P(beta),
+                Arg::I(kind),
+            ],
+        );
     }
 
-    fn trilinear_resize(&self, x: &CuBuf, c: usize, t: usize, h: usize, w: usize, t2: usize, h2: usize, w2: usize, out: &CuBuf) {
+    fn trilinear_resize(
+        &self,
+        x: &CuBuf,
+        c: usize,
+        t: usize,
+        h: usize,
+        w: usize,
+        t2: usize,
+        h2: usize,
+        w2: usize,
+        out: &CuBuf,
+    ) {
         let n = c * t2 * h2 * w2;
         assert!(c * t * h * w <= x.len && n <= out.len);
         self.launch(
@@ -2697,25 +3853,57 @@ impl Backend for Cuda {
         );
     }
 
-    fn pixel_shuffle(&self, x: &CuBuf, frames: usize, c: usize, h: usize, w: usize, r: usize, out: &CuBuf) {
+    fn pixel_shuffle(
+        &self,
+        x: &CuBuf,
+        frames: usize,
+        c: usize,
+        h: usize,
+        w: usize,
+        r: usize,
+        out: &CuBuf,
+    ) {
         let n = frames * c * h * w * r * r;
         assert!(n <= x.len && n <= out.len);
         self.launch(
             &self.f.pixel_shuffle,
             Self::elems(n),
             (256, 1, 1),
-            &[Arg::P(self.ptr(x)), Arg::P(self.ptr(out)), Arg::L(n as i64), Arg::I(c as i32), Arg::I(h as i32), Arg::I(w as i32), Arg::I(r as i32)],
+            &[
+                Arg::P(self.ptr(x)),
+                Arg::P(self.ptr(out)),
+                Arg::L(n as i64),
+                Arg::I(c as i32),
+                Arg::I(h as i32),
+                Arg::I(w as i32),
+                Arg::I(r as i32),
+            ],
         );
     }
 
     fn tanh_clamp(&self, x: &CuBuf, n: usize, s: f32) {
         assert!(n <= x.len);
-        self.launch(&self.f.tanh_clamp, Self::elems(n), (256, 1, 1), &[Arg::P(self.ptr(x)), Arg::L(n as i64), Arg::F(s)]);
+        self.launch(
+            &self.f.tanh_clamp,
+            Self::elems(n),
+            (256, 1, 1),
+            &[Arg::P(self.ptr(x)), Arg::L(n as i64), Arg::F(s)],
+        );
     }
 
     fn clamp(&self, x: &CuBuf, n: usize, lo: f32, hi: f32) {
         assert!(n <= x.len);
-        self.launch(&self.f.clamp, Self::elems(n), (256, 1, 1), &[Arg::P(self.ptr(x)), Arg::L(n as i64), Arg::F(lo), Arg::F(hi)]);
+        self.launch(
+            &self.f.clamp,
+            Self::elems(n),
+            (256, 1, 1),
+            &[
+                Arg::P(self.ptr(x)),
+                Arg::L(n as i64),
+                Arg::F(lo),
+                Arg::F(hi),
+            ],
+        );
     }
 }
 
@@ -2728,7 +3916,9 @@ mod tests {
     /// PTX for `ptxas -v` (registers, spills, shared memory per kernel).
     #[test]
     fn dump_ptx() {
-        let Ok(path) = std::env::var("H3_PTX_OUT") else { return };
+        let Ok(path) = std::env::var("H3_PTX_OUT") else {
+            return;
+        };
         match std::panic::catch_unwind(|| super::compile_kernels("compute_89")) {
             Ok(Ok(ptx)) => std::fs::write(&path, ptx.to_src()).unwrap(),
             Ok(Err(e)) => panic!("{e}"),

@@ -13,14 +13,22 @@ pub fn read_image(path: &Path) -> Result<Image> {
     if let Some(im) = Image::from_ppm(&bytes) {
         return Ok(im);
     }
-    let im = image::load_from_memory(&bytes).with_context(|| format!("decode {}", path.display()))?.to_rgb8();
-    Ok(Image::new(im.width() as usize, im.height() as usize, im.into_raw()))
+    let im = image::load_from_memory(&bytes)
+        .with_context(|| format!("decode {}", path.display()))?
+        .to_rgb8();
+    Ok(Image::new(
+        im.width() as usize,
+        im.height() as usize,
+        im.into_raw(),
+    ))
 }
 
 #[allow(dead_code)]
 pub fn write_png(path: &Path, im: &Image) -> Result<()> {
-    let buf = image::RgbImage::from_raw(im.width as u32, im.height as u32, im.rgb.clone()).context("png buffer")?;
-    buf.save(path).with_context(|| format!("write {}", path.display()))
+    let buf = image::RgbImage::from_raw(im.width as u32, im.height as u32, im.rgb.clone())
+        .context("png buffer")?;
+    buf.save(path)
+        .with_context(|| format!("write {}", path.display()))
 }
 
 /// Frames of a `.y4m` file or of a directory of images (sorted by name), and
@@ -29,13 +37,19 @@ pub fn read_frames(path: &Path) -> Result<(Vec<Image>, Option<f64>)> {
     if path.is_dir() {
         let mut files: Vec<_> = std::fs::read_dir(path)?
             .filter_map(|e| e.ok().map(|e| e.path()))
-            .filter(|p| p.extension().is_some_and(|e| matches!(e.to_str(), Some("png" | "jpg" | "jpeg" | "ppm"))))
+            .filter(|p| {
+                p.extension()
+                    .is_some_and(|e| matches!(e.to_str(), Some("png" | "jpg" | "jpeg" | "ppm")))
+            })
             .collect();
         files.sort();
         if files.is_empty() {
             bail!("{} holds no png/jpg/ppm frames", path.display());
         }
-        let frames = files.iter().map(|f| read_image(f)).collect::<Result<Vec<_>>>()?;
+        let frames = files
+            .iter()
+            .map(|f| read_image(f))
+            .collect::<Result<Vec<_>>>()?;
         return Ok((frames, None));
     }
     if path.extension().is_some_and(|e| e == "y4m") {
@@ -47,7 +61,10 @@ pub fn read_frames(path: &Path) -> Result<(Vec<Image>, Option<f64>)> {
 
 fn read_y4m(path: &Path) -> Result<(Vec<Image>, Option<f64>)> {
     let data = std::fs::read(path).with_context(|| format!("read {}", path.display()))?;
-    let nl = data.iter().position(|&b| b == b'\n').context("y4m header")?;
+    let nl = data
+        .iter()
+        .position(|&b| b == b'\n')
+        .context("y4m header")?;
     let header = std::str::from_utf8(&data[..nl]).context("y4m header")?;
     if !header.starts_with("YUV4MPEG2") {
         bail!("{} is not a YUV4MPEG2 file", path.display());
@@ -68,13 +85,23 @@ fn read_y4m(path: &Path) -> Result<(Vec<Image>, Option<f64>)> {
     if w == 0 || h == 0 {
         bail!("y4m without W/H");
     }
-    let (cw, ch) = if chroma.starts_with("444") { (w, h) } else if chroma.starts_with("422") { (w.div_ceil(2), h) } else { (w.div_ceil(2), h.div_ceil(2)) };
+    let (cw, ch) = if chroma.starts_with("444") {
+        (w, h)
+    } else if chroma.starts_with("422") {
+        (w.div_ceil(2), h)
+    } else {
+        (w.div_ceil(2), h.div_ceil(2))
+    };
     let full = chroma.contains("XCOLORRANGE=FULL") || header.contains("XCOLORRANGE=FULL");
     let frame_bytes = w * h + 2 * cw * ch;
     let mut pos = nl + 1;
     let mut frames = Vec::new();
     while pos + 6 <= data.len() {
-        let line_end = data[pos..].iter().position(|&b| b == b'\n').context("y4m frame header")? + pos;
+        let line_end = data[pos..]
+            .iter()
+            .position(|&b| b == b'\n')
+            .context("y4m frame header")?
+            + pos;
         if !data[pos..].starts_with(b"FRAME") {
             bail!("y4m: expected FRAME at byte {pos}");
         }
@@ -89,9 +116,21 @@ fn read_y4m(path: &Path) -> Result<(Vec<Image>, Option<f64>)> {
         for yy in 0..h {
             for xx in 0..w {
                 let (cx, cy) = (xx * cw / w, yy * ch / h);
-                let (yv, uv, vv) = (y[yy * w + xx] as f32, u[cy * cw + cx] as f32 - 128.0, v[cy * cw + cx] as f32 - 128.0);
-                let yv = if full { yv } else { (yv - 16.0) * 255.0 / 219.0 };
-                let (uv, vv) = if full { (uv, vv) } else { (uv * 255.0 / 224.0, vv * 255.0 / 224.0) };
+                let (yv, uv, vv) = (
+                    y[yy * w + xx] as f32,
+                    u[cy * cw + cx] as f32 - 128.0,
+                    v[cy * cw + cx] as f32 - 128.0,
+                );
+                let yv = if full {
+                    yv
+                } else {
+                    (yv - 16.0) * 255.0 / 219.0
+                };
+                let (uv, vv) = if full {
+                    (uv, vv)
+                } else {
+                    (uv * 255.0 / 224.0, vv * 255.0 / 224.0)
+                };
                 let r = yv + 1.402 * vv;
                 let g = yv - 0.344_136 * uv - 0.714_136 * vv;
                 let b = yv + 1.772 * uv;
@@ -108,18 +147,34 @@ fn read_y4m(path: &Path) -> Result<(Vec<Image>, Option<f64>)> {
 }
 
 /// YUV4MPEG2, 4:4:4, BT.601 full range (plays in mpv / ffplay).
-pub fn write_y4m(path: &Path, frames: usize, width: usize, height: usize, rgb: &[u8], fps: u32) -> Result<()> {
+pub fn write_y4m(
+    path: &Path,
+    frames: usize,
+    width: usize,
+    height: usize,
+    rgb: &[u8],
+    fps: u32,
+) -> Result<()> {
     let mut f = std::io::BufWriter::new(std::fs::File::create(path)?);
-    writeln!(f, "YUV4MPEG2 W{width} H{height} F{fps}:1 Ip A1:1 C444 XCOLORRANGE=FULL")?;
+    writeln!(
+        f,
+        "YUV4MPEG2 W{width} H{height} F{fps}:1 Ip A1:1 C444 XCOLORRANGE=FULL"
+    )?;
     let px = width * height;
     let mut planes = vec![0u8; 3 * px];
     for fr in 0..frames {
         let p = &rgb[fr * px * 3..(fr + 1) * px * 3];
         for i in 0..px {
             let (r, g, b) = (p[3 * i] as f32, p[3 * i + 1] as f32, p[3 * i + 2] as f32);
-            planes[i] = (0.299 * r + 0.587 * g + 0.114 * b).round().clamp(0.0, 255.0) as u8;
-            planes[px + i] = (128.0 - 0.168_736 * r - 0.331_264 * g + 0.5 * b).round().clamp(0.0, 255.0) as u8;
-            planes[2 * px + i] = (128.0 + 0.5 * r - 0.418_688 * g - 0.081_312 * b).round().clamp(0.0, 255.0) as u8;
+            planes[i] = (0.299 * r + 0.587 * g + 0.114 * b)
+                .round()
+                .clamp(0.0, 255.0) as u8;
+            planes[px + i] = (128.0 - 0.168_736 * r - 0.331_264 * g + 0.5 * b)
+                .round()
+                .clamp(0.0, 255.0) as u8;
+            planes[2 * px + i] = (128.0 + 0.5 * r - 0.418_688 * g - 0.081_312 * b)
+                .round()
+                .clamp(0.0, 255.0) as u8;
         }
         f.write_all(b"FRAME\n")?;
         f.write_all(&planes)?;
@@ -157,7 +212,9 @@ pub fn write_wav(path: &Path, stereo: &[Vec<f32>; 2], rate: u32) -> Result<()> {
 /// stereo at `target_rate` (linear resampling; mono is duplicated).
 pub fn read_wav(path: &Path, target_rate: usize) -> Result<[Vec<f32>; 2]> {
     let mut data = Vec::new();
-    std::fs::File::open(path).with_context(|| format!("open {}", path.display()))?.read_to_end(&mut data)?;
+    std::fs::File::open(path)
+        .with_context(|| format!("open {}", path.display()))?
+        .read_to_end(&mut data)?;
     if data.len() < 12 || &data[..4] != b"RIFF" || &data[8..12] != b"WAVE" {
         bail!("{} is not a WAV file", path.display());
     }
@@ -187,8 +244,12 @@ pub fn read_wav(path: &Path, target_rate: usize) -> Result<[Vec<f32>; 2]> {
             (3, 32) => f32::from_le_bytes(pcm[o..o + 4].try_into().unwrap()),
             (_, 8) => (pcm[o] as f32 - 128.0) / 128.0,
             (_, 16) => i16::from_le_bytes([pcm[o], pcm[o + 1]]) as f32 / 32768.0,
-            (_, 24) => (i32::from_le_bytes([0, pcm[o], pcm[o + 1], pcm[o + 2]]) >> 8) as f32 / 8_388_608.0,
-            (_, 32) => i32::from_le_bytes(pcm[o..o + 4].try_into().unwrap()) as f32 / 2_147_483_648.0,
+            (_, 24) => {
+                (i32::from_le_bytes([0, pcm[o], pcm[o + 1], pcm[o + 2]]) >> 8) as f32 / 8_388_608.0
+            }
+            (_, 32) => {
+                i32::from_le_bytes(pcm[o..o + 4].try_into().unwrap()) as f32 / 2_147_483_648.0
+            }
             _ => 0.0,
         }
     };
@@ -227,7 +288,13 @@ mod tests {
         write_y4m(&p, 3, w, h, &rgb, 24).unwrap();
         let (frames, fps) = read_frames(&p).unwrap();
         assert_eq!((frames.len(), fps), (3, Some(24.0)));
-        let err = frames[1].rgb.iter().zip(&rgb[w * h * 3..2 * w * h * 3]).map(|(a, b)| (*a as i32 - *b as i32).abs()).max().unwrap();
+        let err = frames[1]
+            .rgb
+            .iter()
+            .zip(&rgb[w * h * 3..2 * w * h * 3])
+            .map(|(a, b)| (*a as i32 - *b as i32).abs())
+            .max()
+            .unwrap();
         assert!(err <= 3, "{err}");
         let wav = dir.join("a.wav");
         let s: Vec<f32> = (0..100).map(|i| (i as f32 * 0.1).sin() * 0.5).collect();

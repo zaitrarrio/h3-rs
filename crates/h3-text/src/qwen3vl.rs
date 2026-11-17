@@ -26,33 +26,78 @@ fn nvfp4_of(src: &SafetensorsDir, key: &str, rows: usize, cols: usize) -> Result
     let packed_name = format!("{key}.weight_packed");
     let (_, pshape, packed) = src.raw(&packed_name)?;
     if pshape != [rows, cols / 2] {
-        return Err(Error::Weights(format!("`{packed_name}` is {pshape:?}, expected [{rows}, {}]", cols / 2)));
+        return Err(Error::Weights(format!(
+            "`{packed_name}` is {pshape:?}, expected [{rows}, {}]",
+            cols / 2
+        )));
     }
     let (_, sshape, scales) = src.raw(&format!("{key}.weight_scale"))?;
     if sshape != [rows, cols / 16] {
-        return Err(Error::Weights(format!("`{key}.weight_scale` is {sshape:?}, expected [{rows}, {}]", cols / 16)));
+        return Err(Error::Weights(format!(
+            "`{key}.weight_scale` is {sshape:?}, expected [{rows}, {}]",
+            cols / 16
+        )));
     }
     let global = src.scalar(&format!("{key}.weight_global_scale"))?;
     // compressed-tensors packs the first code of each pair in the low nibble.
-    Ok(Nvfp4 { packed: packed.to_vec(), scales: scales.to_vec(), alpha: 1.0 / global, rows, cols, first_high: false })
+    Ok(Nvfp4 {
+        packed: packed.to_vec(),
+        scales: scales.to_vec(),
+        alpha: 1.0 / global,
+        rows,
+        cols,
+        first_high: false,
+    })
 }
 
 /// A linear from a plain or NVFP4 checkpoint.
-fn linear<B: Backend>(be: &B, src: &SafetensorsDir, key: &str, rows: usize, cols: usize, bias: bool) -> Result<Linear<B>> {
-    let b = if bias { Some(be.upload(&src.get(&format!("{key}.bias"), &[rows])?)) } else { None };
+fn linear<B: Backend>(
+    be: &B,
+    src: &SafetensorsDir,
+    key: &str,
+    rows: usize,
+    cols: usize,
+    bias: bool,
+) -> Result<Linear<B>> {
+    let b = if bias {
+        Some(be.upload(&src.get(&format!("{key}.bias"), &[rows])?))
+    } else {
+        None
+    };
     if src.contains_raw(&format!("{key}.weight")) {
-        return Ok(Linear { w: be.weight(&src.get(&format!("{key}.weight"), &[rows, cols])?, rows, cols), b, rows, cols, lora: None });
+        return Ok(Linear {
+            w: be.weight(
+                &src.get(&format!("{key}.weight"), &[rows, cols])?,
+                rows,
+                cols,
+            ),
+            b,
+            rows,
+            cols,
+            lora: None,
+        });
     }
     if src.contains_raw(&format!("{key}.weight_packed")) {
         let q = nvfp4_of(src, key, rows, cols)?;
         let _ = e4m3_to_f32;
-        return Ok(Linear { w: be.weight_nvfp4(&q), b, rows, cols , lora: None });
+        return Ok(Linear {
+            w: be.weight_nvfp4(&q),
+            b,
+            rows,
+            cols,
+            lora: None,
+        });
     }
     Err(Error::Weights(format!("missing linear `{key}`")))
 }
 
 /// Several linears stacked along the output axis (NVFP4 parts dequantized).
-fn fused<B: Backend>(be: &B, src: &SafetensorsDir, keys: &[(&str, usize)], cols: usize) -> Result<Linear<B>> {
+fn fused<B: Backend>(
+    be: &B,
+    src: &SafetensorsDir,
+    keys: &[(&str, usize)],
+    cols: usize,
+) -> Result<Linear<B>> {
     let rows: usize = keys.iter().map(|k| k.1).sum();
     let mut w = Vec::with_capacity(rows * cols);
     for (k, r) in keys {
@@ -62,7 +107,13 @@ fn fused<B: Backend>(be: &B, src: &SafetensorsDir, keys: &[(&str, usize)], cols:
             w.extend(nvfp4_of(src, k, *r, cols)?.dequantize());
         }
     }
-    Ok(Linear { w: be.weight(&w, rows, cols), b: None, rows, cols , lora: None })
+    Ok(Linear {
+        w: be.weight(&w, rows, cols),
+        b: None,
+        rows,
+        cols,
+        lora: None,
+    })
 }
 
 struct TextLayer<B: Backend> {
@@ -76,7 +127,12 @@ struct TextLayer<B: Backend> {
     down: Linear<B>,
 }
 
-fn load_text_layer<B: Backend>(be: &B, src: &SafetensorsDir, cfg: &Qwen3VlConfig, l: usize) -> Result<TextLayer<B>> {
+fn load_text_layer<B: Backend>(
+    be: &B,
+    src: &SafetensorsDir,
+    cfg: &Qwen3VlConfig,
+    l: usize,
+) -> Result<TextLayer<B>> {
     let p = format!("{LM}.layers.{l}");
     let (h, hd) = (cfg.hidden, cfg.head_dim);
     let v = |k: &str, n: usize| -> Result<B::Buf> { Ok(be.upload(&src.get(k, &[n])?)) };
@@ -92,13 +148,35 @@ fn load_text_layer<B: Backend>(be: &B, src: &SafetensorsDir, cfg: &Qwen3VlConfig
             ],
             h,
         )?,
-        o: linear(be, src, &format!("{p}.self_attn.o_proj"), h, cfg.heads * hd, false)?,
+        o: linear(
+            be,
+            src,
+            &format!("{p}.self_attn.o_proj"),
+            h,
+            cfg.heads * hd,
+            false,
+        )?,
         q_norm: v(&format!("{p}.self_attn.q_norm.weight"), hd)?,
         k_norm: v(&format!("{p}.self_attn.k_norm.weight"), hd)?,
         ln2: v(&format!("{p}.post_attention_layernorm.weight"), h)?,
         // SwiGLU takes `value | gate`: up first, then gate.
-        gate_up: fused(be, src, &[(&format!("{p}.mlp.up_proj"), cfg.intermediate), (&format!("{p}.mlp.gate_proj"), cfg.intermediate)], h)?,
-        down: linear(be, src, &format!("{p}.mlp.down_proj"), h, cfg.intermediate, false)?,
+        gate_up: fused(
+            be,
+            src,
+            &[
+                (&format!("{p}.mlp.up_proj"), cfg.intermediate),
+                (&format!("{p}.mlp.gate_proj"), cfg.intermediate),
+            ],
+            h,
+        )?,
+        down: linear(
+            be,
+            src,
+            &format!("{p}.mlp.down_proj"),
+            h,
+            cfg.intermediate,
+            false,
+        )?,
     })
 }
 
@@ -145,13 +223,33 @@ pub struct Encoded {
 impl<B: Backend> Qwen3Vl<B> {
     /// `resident`: keep all 50 language layers on the device; `vision`: load
     /// the vision tower (FL2VA / Ref2VA).
-    pub fn open(be: &B, cfg: Qwen3VlConfig, src: SafetensorsDir, resident: bool, vision: bool) -> Result<Self> {
+    pub fn open(
+        be: &B,
+        cfg: Qwen3VlConfig,
+        src: SafetensorsDir,
+        resident: bool,
+        vision: bool,
+    ) -> Result<Self> {
         let mut layers = Vec::with_capacity(cfg.output_layer);
         for l in 0..cfg.output_layer {
-            layers.push(if resident { Some(load_text_layer(be, &src, &cfg, l)?) } else { None });
+            layers.push(if resident {
+                Some(load_text_layer(be, &src, &cfg, l)?)
+            } else {
+                None
+            });
         }
-        let vision = if vision { Some(Self::load_vision(be, &src, &cfg)?) } else { None };
-        Ok(Self { cfg, src, layers, resident, vision })
+        let vision = if vision {
+            Some(Self::load_vision(be, &src, &cfg)?)
+        } else {
+            None
+        };
+        Ok(Self {
+            cfg,
+            src,
+            layers,
+            resident,
+            vision,
+        })
     }
 
     fn load_vision(be: &B, src: &SafetensorsDir, cfg: &Qwen3VlConfig) -> Result<VisionTower<B>> {
@@ -159,14 +257,24 @@ impl<B: Backend> Qwen3Vl<B> {
         let vm = vh * cfg.vision_merge * cfg.vision_merge;
         let pf = 3 * cfg.vision_temporal_patch * cfg.vision_patch * cfg.vision_patch;
         let ln = |k: &str, n: usize| -> Result<(B::Buf, B::Buf)> {
-            Ok((be.upload(&src.get(&format!("{k}.weight"), &[n])?), be.upload(&src.get(&format!("{k}.bias"), &[n])?)))
+            Ok((
+                be.upload(&src.get(&format!("{k}.weight"), &[n])?),
+                be.upload(&src.get(&format!("{k}.bias"), &[n])?),
+            ))
         };
         let merger = |p: &str, post: bool| -> Result<Merger<B>> {
             Ok(Merger {
                 norm: ln(&format!("{p}.norm"), if post { vm } else { vh })?,
                 post,
                 fc1: linear(be, src, &format!("{p}.linear_fc1"), vm, vm, true)?,
-                fc2: linear(be, src, &format!("{p}.linear_fc2"), cfg.vision_out_hidden, vm, true)?,
+                fc2: linear(
+                    be,
+                    src,
+                    &format!("{p}.linear_fc2"),
+                    cfg.vision_out_hidden,
+                    vm,
+                    true,
+                )?,
             })
         };
         let mut blocks = Vec::new();
@@ -177,20 +285,54 @@ impl<B: Backend> Qwen3Vl<B> {
                 qkv: linear(be, src, &format!("{p}.attn.qkv"), 3 * vh, vh, true)?,
                 proj: linear(be, src, &format!("{p}.attn.proj"), vh, vh, true)?,
                 norm2: ln(&format!("{p}.norm2"), vh)?,
-                fc1: linear(be, src, &format!("{p}.mlp.linear_fc1"), cfg.vision_intermediate, vh, true)?,
-                fc2: linear(be, src, &format!("{p}.mlp.linear_fc2"), vh, cfg.vision_intermediate, true)?,
+                fc1: linear(
+                    be,
+                    src,
+                    &format!("{p}.mlp.linear_fc1"),
+                    cfg.vision_intermediate,
+                    vh,
+                    true,
+                )?,
+                fc2: linear(
+                    be,
+                    src,
+                    &format!("{p}.mlp.linear_fc2"),
+                    vh,
+                    cfg.vision_intermediate,
+                    true,
+                )?,
             });
         }
         let pe = {
-            let w = src.get(&format!("{VIS}.patch_embed.proj.weight"), &[vh, 3, cfg.vision_temporal_patch, cfg.vision_patch, cfg.vision_patch])?;
-            Linear { w: be.weight(&w, vh, pf), b: Some(be.upload(&src.get(&format!("{VIS}.patch_embed.proj.bias"), &[vh])?)), rows: vh, cols: pf, lora: None }
+            let w = src.get(
+                &format!("{VIS}.patch_embed.proj.weight"),
+                &[
+                    vh,
+                    3,
+                    cfg.vision_temporal_patch,
+                    cfg.vision_patch,
+                    cfg.vision_patch,
+                ],
+            )?;
+            Linear {
+                w: be.weight(&w, vh, pf),
+                b: Some(be.upload(&src.get(&format!("{VIS}.patch_embed.proj.bias"), &[vh])?)),
+                rows: vh,
+                cols: pf,
+                lora: None,
+            }
         };
         Ok(VisionTower {
             patch_embed: pe,
-            pos_embed: src.get(&format!("{VIS}.pos_embed.weight"), &[cfg.vision_num_position_embeddings, vh])?,
+            pos_embed: src.get(
+                &format!("{VIS}.pos_embed.weight"),
+                &[cfg.vision_num_position_embeddings, vh],
+            )?,
             blocks,
             merger: merger(&format!("{VIS}.merger"), false)?,
-            deepstack: (0..cfg.vision_deepstack.len()).map(|i| merger(&format!("{VIS}.deepstack_merger_list.{i}"), true)).collect::<Result<_>>()?,
+            deepstack: (0..cfg.vision_deepstack.len())
+                .map(|i| merger(&format!("{VIS}.deepstack_merger_list.{i}"), true))
+                .collect::<Result<_>>()?,
         })
     }
 
@@ -201,15 +343,25 @@ impl<B: Backend> Qwen3Vl<B> {
         let bytes = match dt {
             safetensors::Dtype::BF16 | safetensors::Dtype::F16 => 2,
             safetensors::Dtype::F32 => 4,
-            other => return Err(Error::Weights(format!("embed_tokens: unsupported dtype {other:?}"))),
+            other => {
+                return Err(Error::Weights(format!(
+                    "embed_tokens: unsupported dtype {other:?}"
+                )));
+            }
         };
         let mut out = Vec::with_capacity(ids.len() * h);
         for &id in ids {
             if id as usize >= shape[0] {
-                return Err(Error::Msg(format!("token id {id} is out of the vocabulary")));
+                return Err(Error::Msg(format!(
+                    "token id {id} is out of the vocabulary"
+                )));
             }
             let off = id as usize * h * bytes;
-            out.extend(bytes_to_f32(dt, &data[off..off + h * bytes], "embed_tokens")?);
+            out.extend(bytes_to_f32(
+                dt,
+                &data[off..off + h * bytes],
+                "embed_tokens",
+            )?);
         }
         Ok(out)
     }
@@ -246,7 +398,8 @@ impl<B: Backend> Qwen3Vl<B> {
                                     if wgt == 0.0 {
                                         continue;
                                     }
-                                    let row = &tower.pos_embed[(ri * side + ci) * vh..(ri * side + ci + 1) * vh];
+                                    let row = &tower.pos_embed
+                                        [(ri * side + ci) * vh..(ri * side + ci + 1) * vh];
                                     for (a, &x) in acc.iter_mut().zip(row) {
                                         *a += wgt * x;
                                     }
@@ -263,8 +416,15 @@ impl<B: Backend> Qwen3Vl<B> {
 
     /// Vision tower over one input: merged features `[tokens/4, out]` and the
     /// DeepStack features (same shape) per deepstack block.
-    pub fn vision_features(&self, be: &B, input: &VisionInput) -> Result<(Vec<f32>, Vec<Vec<f32>>)> {
-        let tower = self.vision.as_ref().ok_or_else(|| Error::Msg("the vision tower is not loaded".into()))?;
+    pub fn vision_features(
+        &self,
+        be: &B,
+        input: &VisionInput,
+    ) -> Result<(Vec<f32>, Vec<Vec<f32>>)> {
+        let tower = self
+            .vision
+            .as_ref()
+            .ok_or_else(|| Error::Msg("the vision tower is not loaded".into()))?;
         let cfg = &self.cfg;
         let (vh, heads) = (cfg.vision_hidden, cfg.vision_heads);
         let hd = cfg.vision_head_dim();
@@ -274,7 +434,16 @@ impl<B: Backend> Qwen3Vl<B> {
         let m = cfg.vision_merge;
         let x = be.upload(&input.patches);
         let h = be.alloc(n * vh);
-        be.linear(&x, 0, n, &tower.patch_embed.w, tower.patch_embed.b.as_ref(), Act::None, &h, 0);
+        be.linear(
+            &x,
+            0,
+            n,
+            &tower.patch_embed.w,
+            tower.patch_embed.b.as_ref(),
+            Act::None,
+            &h,
+            0,
+        );
         let pe = be.upload(&self.pos_embed_for(tower, input.grid));
         be.axpby(&h, 0, 1.0, &pe, 0, 1.0, n * vh);
         // Rotary over (row, col) in block order; every frame has the same
@@ -293,10 +462,18 @@ impl<B: Backend> Qwen3Vl<B> {
         }
         let rope = qwen3_vision_rope(&coords, hd);
         let (fc, fs) = (be.upload_table(&rope.cos), be.upload_table(&rope.sin));
-        let frp = Some(Rope { cos: &fc, sin: &fs, rot: hd });
+        let frp = Some(Rope {
+            cos: &fc,
+            sin: &fs,
+            rot: hd,
+        });
         let normed = be.alloc(n * vh);
         let qkv = be.alloc(n * 3 * vh);
-        let (q, k, v) = (be.alloc(heads * per_frame * hd), be.alloc(heads * per_frame * hd), be.alloc(heads * per_frame * hd));
+        let (q, k, v) = (
+            be.alloc(heads * per_frame * hd),
+            be.alloc(heads * per_frame * hd),
+            be.alloc(heads * per_frame * hd),
+        );
         let attn = be.alloc(n * vh);
         let tmp = be.alloc(n * vh);
         let hid = be.alloc(n * cfg.vision_intermediate);
@@ -306,16 +483,59 @@ impl<B: Backend> Qwen3Vl<B> {
         let run_merger = |mg: &Merger<B>, hin: &B::Buf| -> Vec<f32> {
             let pre = be.alloc(n * vh);
             let (rows, dim) = if mg.post { (merged, vm) } else { (n, vh) };
-            be.layer_norm(hin, rows, dim, Some(&mg.norm.0), Some(&mg.norm.1), 1e-6, &pre);
+            be.layer_norm(
+                hin,
+                rows,
+                dim,
+                Some(&mg.norm.0),
+                Some(&mg.norm.1),
+                1e-6,
+                &pre,
+            );
             let f1 = be.alloc(merged * vm);
-            be.linear(&pre, 0, merged, &mg.fc1.w, mg.fc1.b.as_ref(), Act::GeluErf, &f1, 0);
+            be.linear(
+                &pre,
+                0,
+                merged,
+                &mg.fc1.w,
+                mg.fc1.b.as_ref(),
+                Act::GeluErf,
+                &f1,
+                0,
+            );
             let f2 = be.alloc(merged * cfg.vision_out_hidden);
-            be.linear(&f1, 0, merged, &mg.fc2.w, mg.fc2.b.as_ref(), Act::None, &f2, 0);
+            be.linear(
+                &f1,
+                0,
+                merged,
+                &mg.fc2.w,
+                mg.fc2.b.as_ref(),
+                Act::None,
+                &f2,
+                0,
+            );
             be.download(&f2)
         };
         for (bi, bl) in tower.blocks.iter().enumerate() {
-            be.layer_norm(&h, n, vh, Some(&bl.norm1.0), Some(&bl.norm1.1), 1e-6, &normed);
-            be.linear(&normed, 0, n, &bl.qkv.w, bl.qkv.b.as_ref(), Act::None, &qkv, 0);
+            be.layer_norm(
+                &h,
+                n,
+                vh,
+                Some(&bl.norm1.0),
+                Some(&bl.norm1.1),
+                1e-6,
+                &normed,
+            );
+            be.linear(
+                &normed,
+                0,
+                n,
+                &bl.qkv.w,
+                bl.qkv.b.as_ref(),
+                Act::None,
+                &qkv,
+                0,
+            );
             // Attention within each frame's tokens (rope rows follow the same order).
             for f in 0..t {
                 let r0 = f * per_frame;
@@ -329,10 +549,36 @@ impl<B: Backend> Qwen3Vl<B> {
                 be.attention(&q, &k, &v, heads, heads, rows, rows, hd, false, &fa);
                 be.copy(&fa, 0, &attn, r0 * vh, rows * vh);
             }
-            be.linear(&attn, 0, n, &bl.proj.w, bl.proj.b.as_ref(), Act::None, &tmp, 0);
+            be.linear(
+                &attn,
+                0,
+                n,
+                &bl.proj.w,
+                bl.proj.b.as_ref(),
+                Act::None,
+                &tmp,
+                0,
+            );
             be.gate_residual(&h, &tmp, n, vh, Gate::None);
-            be.layer_norm(&h, n, vh, Some(&bl.norm2.0), Some(&bl.norm2.1), 1e-6, &normed);
-            be.linear(&normed, 0, n, &bl.fc1.w, bl.fc1.b.as_ref(), Act::GeluTanh, &hid, 0);
+            be.layer_norm(
+                &h,
+                n,
+                vh,
+                Some(&bl.norm2.0),
+                Some(&bl.norm2.1),
+                1e-6,
+                &normed,
+            );
+            be.linear(
+                &normed,
+                0,
+                n,
+                &bl.fc1.w,
+                bl.fc1.b.as_ref(),
+                Act::GeluTanh,
+                &hid,
+                0,
+            );
             be.linear(&hid, 0, n, &bl.fc2.w, bl.fc2.b.as_ref(), Act::None, &tmp, 0);
             be.gate_residual(&h, &tmp, n, vh, Gate::None);
             if let Some(di) = cfg.vision_deepstack.iter().position(|&d| d == bi) {
@@ -385,29 +631,42 @@ impl<B: Backend> Qwen3Vl<B> {
         }
         let mut emb = self.embed(&p.ids)?;
         // Vision features into the placeholder rows; DeepStack per visual row.
-        let mut deep_rows: Vec<Vec<(usize, Vec<f32>)>> = vec![Vec::new(); cfg.vision_deepstack.len()];
+        let mut deep_rows: Vec<Vec<(usize, Vec<f32>)>> =
+            vec![Vec::new(); cfg.vision_deepstack.len()];
         let mut blocks_by_input: Vec<Vec<&VisionBlock>> = Vec::new();
         {
             // Image inputs own one block; video inputs own `grid.0` blocks.
             let mut bi = 0;
             for inp in inputs {
-                let count = if p.blocks.get(bi).is_some_and(|b| b.video) { inp.grid.0 } else { 1 };
+                let count = if p.blocks.get(bi).is_some_and(|b| b.video) {
+                    inp.grid.0
+                } else {
+                    1
+                };
                 blocks_by_input.push(p.blocks[bi..bi + count].iter().collect());
                 bi += count;
             }
             if bi != p.blocks.len() {
-                return Err(Error::Geometry(format!("{} vision inputs for {} placeholder blocks", inputs.len(), p.blocks.len())));
+                return Err(Error::Geometry(format!(
+                    "{} vision inputs for {} placeholder blocks",
+                    inputs.len(),
+                    p.blocks.len()
+                )));
             }
         }
         for (inp, blocks) in inputs.iter().zip(&blocks_by_input) {
             let (feat, deep) = self.vision_features(be, inp)?;
             let total: usize = blocks.iter().map(|b| b.tokens).sum();
             if total * h != feat.len() {
-                return Err(Error::Geometry(format!("{} vision features for {total} placeholder tokens", feat.len() / h)));
+                return Err(Error::Geometry(format!(
+                    "{} vision features for {total} placeholder tokens",
+                    feat.len() / h
+                )));
             }
             let mut off = 0;
             for b in blocks {
-                emb[b.start * h..(b.start + b.tokens) * h].copy_from_slice(&feat[off * h..(off + b.tokens) * h]);
+                emb[b.start * h..(b.start + b.tokens) * h]
+                    .copy_from_slice(&feat[off * h..(off + b.tokens) * h]);
                 for (k, d) in deep.iter().enumerate() {
                     deep_rows[k].push((b.start, d[off * h..(off + b.tokens) * h].to_vec()));
                 }
@@ -417,7 +676,11 @@ impl<B: Backend> Qwen3Vl<B> {
         let positions = self.rope_positions(p);
         let rope = qwen3_mrope(&positions, hd, cfg.rope_theta, cfg.mrope_section);
         let (rc, rs) = (be.upload_table(&rope.cos), be.upload_table(&rope.sin));
-        let rp = Some(Rope { cos: &rc, sin: &rs, rot: hd });
+        let rp = Some(Rope {
+            cos: &rc,
+            sin: &rs,
+            rot: hd,
+        });
         let hb = be.upload(&emb);
         let normed = be.alloc(n * h);
         let qkv_w = (cfg.heads + 2 * cfg.kv_heads) * hd;
@@ -438,16 +701,50 @@ impl<B: Backend> Qwen3Vl<B> {
                     &loaded
                 }
             };
-            be.rms_norm(&hb, n, h, Some(&layer.ln1), Modulation::None, cfg.rms_eps, &normed);
+            be.rms_norm(
+                &hb,
+                n,
+                h,
+                Some(&layer.ln1),
+                Modulation::None,
+                cfg.rms_eps,
+                &normed,
+            );
             be.linear(&normed, 0, n, &layer.qkv.w, None, Act::None, &qkv, 0);
-            let qn = Some(HeadNorm { w: Some(&layer.q_norm), eps: cfg.rms_eps });
-            let kn = Some(HeadNorm { w: Some(&layer.k_norm), eps: cfg.rms_eps });
+            let qn = Some(HeadNorm {
+                w: Some(&layer.q_norm),
+                eps: cfg.rms_eps,
+            });
+            let kn = Some(HeadNorm {
+                w: Some(&layer.k_norm),
+                eps: cfg.rms_eps,
+            });
             be.head_split(&qkv, n, qkv_w, 0, cfg.heads, hd, qn, rp, &q);
             be.head_split(&qkv, n, qkv_w, cfg.heads * hd, cfg.kv_heads, hd, kn, rp, &k);
-            be.head_split(&qkv, n, qkv_w, (cfg.heads + cfg.kv_heads) * hd, cfg.kv_heads, hd, None, None, &v);
+            be.head_split(
+                &qkv,
+                n,
+                qkv_w,
+                (cfg.heads + cfg.kv_heads) * hd,
+                cfg.kv_heads,
+                hd,
+                None,
+                None,
+                &v,
+            );
             be.attention(&q, &k, &v, cfg.heads, cfg.kv_heads, n, n, hd, true, &attn);
             be.linear(&attn, 0, n, &layer.o.w, None, Act::None, &tmp, 0);
-            be.residual_rms_norm(&hb, &tmp, n, h, Gate::None, Some(&layer.ln2), Modulation::None, cfg.rms_eps, &normed);
+            be.residual_rms_norm(
+                &hb,
+                &tmp,
+                n,
+                h,
+                Gate::None,
+                Some(&layer.ln2),
+                Modulation::None,
+                cfg.rms_eps,
+                &normed,
+            );
             be.linear(&normed, 0, n, &layer.gate_up.w, None, Act::None, &gu, 0);
             be.swiglu(&gu, n, cfg.intermediate, &act);
             be.linear(&act, 0, n, &layer.down.w, None, Act::None, &tmp, 0);
@@ -460,7 +757,10 @@ impl<B: Backend> Qwen3Vl<B> {
             }
             be.sync();
         }
-        Ok(Encoded { embeds: be.download(&hb), rows: n })
+        Ok(Encoded {
+            embeds: be.download(&hb),
+            rows: n,
+        })
     }
 }
 
@@ -502,7 +802,12 @@ mod tests {
         let p = Presentation {
             ids: vec![5, 6, 1000, 7, 7, 7, 7, 1001, 8, 9, 10],
             tags: vec![1, 1, 0, 0, 0, 0, 0, 0, 1, 1, 1],
-            blocks: vec![VisionBlock { start: 3, tokens: 4, video: false, grid: (1, 4, 4) }],
+            blocks: vec![VisionBlock {
+                start: 3,
+                tokens: 4,
+                video: false,
+                grid: (1, 4, 4),
+            }],
         };
         let pos = m.rope_positions(&p);
         assert_eq!(pos[..3], [[0, 0, 0], [1, 1, 1], [2, 2, 2]]);
@@ -533,8 +838,12 @@ mod tests {
         for id in &mut p.ids {
             *id %= cfg.vocab as u32;
         }
-        let a = streamed.encode(&be, &p, &[&crate::vision::preprocess_image(&im).unwrap()]).unwrap();
-        let b = resident.encode(&be, &p, &[&crate::vision::preprocess_image(&im).unwrap()]).unwrap();
+        let a = streamed
+            .encode(&be, &p, &[&crate::vision::preprocess_image(&im).unwrap()])
+            .unwrap();
+        let b = resident
+            .encode(&be, &p, &[&crate::vision::preprocess_image(&im).unwrap()])
+            .unwrap();
         assert_eq!(a.rows, p.ids.len());
         assert_eq!(a.embeds.len(), p.ids.len() * cfg.hidden);
         assert!(a.embeds.iter().all(|v| v.is_finite()));

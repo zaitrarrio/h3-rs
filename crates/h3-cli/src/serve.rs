@@ -129,12 +129,20 @@ pub struct Shared {
 
 impl Shared {
     fn with<R>(&self, id: u64, f: impl FnOnce(&mut Job) -> R) -> Option<R> {
-        self.jobs.lock().unwrap().iter_mut().find(|j| j.id == id).map(f)
+        self.jobs
+            .lock()
+            .unwrap()
+            .iter_mut()
+            .find(|j| j.id == id)
+            .map(f)
     }
 }
 
 enum Text<B: Backend> {
-    Synthetic { dim: usize, only: Option<crate::gallery::Gallery> },
+    Synthetic {
+        dim: usize,
+        only: Option<crate::gallery::Gallery>,
+    },
     Qwen(Box<h3_text::Conditioner<B>>),
     Gallery(crate::gallery::Gallery, usize),
 }
@@ -145,10 +153,15 @@ impl<B: Backend> Text<B> {
             Text::Synthetic { dim, only } => {
                 if let Some(g) = only {
                     if g.find(prompt).is_none() {
-                        return Err(anyhow!("This engine has no text encoder: pick one of its {} gallery prompts.", g.entries.len()));
+                        return Err(anyhow!(
+                            "This engine has no text encoder: pick one of its {} gallery prompts.",
+                            g.entries.len()
+                        ));
                     }
                 }
-                let seed = prompt.bytes().fold(0xcbf2_9ce4_8422_2325u64, |h, b| (h ^ b as u64).wrapping_mul(0x100_0000_01b3));
+                let seed = prompt.bytes().fold(0xcbf2_9ce4_8422_2325u64, |h, b| {
+                    (h ^ b as u64).wrapping_mul(0x100_0000_01b3)
+                });
                 let n = prompt.split_whitespace().count().max(1);
                 Ok((Prompt::text_only(Rng::new(seed).normal(n * dim), *dim), n))
             }
@@ -158,7 +171,12 @@ impl<B: Backend> Text<B> {
                 Ok((p, n))
             }
             Text::Gallery(g, dim) => {
-                let e = g.find(prompt).ok_or_else(|| anyhow!("This engine has no text encoder: pick one of its {} gallery prompts.", g.entries.len()))?;
+                let e = g.find(prompt).ok_or_else(|| {
+                    anyhow!(
+                        "This engine has no text encoder: pick one of its {} gallery prompts.",
+                        g.entries.len()
+                    )
+                })?;
                 Ok((g.prompt(e, *dim)?, e.tokens))
             }
         }
@@ -166,7 +184,12 @@ impl<B: Backend> Text<B> {
 }
 
 /// Loads everything, then runs jobs forever. Runs on the engine thread.
-pub fn engine<B: Backend>(be: B, s: &Settings, shared: Arc<Shared>, rx: mpsc::Receiver<u64>) -> Result<()> {
+pub fn engine<B: Backend>(
+    be: B,
+    s: &Settings,
+    shared: Arc<Shared>,
+    rx: mpsc::Receiver<u64>,
+) -> Result<()> {
     let t0 = Instant::now();
     let stage = |what: &str| {
         eprintln!("engine: {what} ({:.1}s)", t0.elapsed().as_secs_f64());
@@ -175,8 +198,18 @@ pub fn engine<B: Backend>(be: B, s: &Settings, shared: Arc<Shared>, rx: mpsc::Re
         info["loading_s"] = json!(t0.elapsed().as_secs_f64());
     };
     stage(&format!("starting on {}", be.name()));
-    let gallery_list = |g: &crate::gallery::Gallery| json!(g.entries.iter().map(|e| &e.prompt).collect::<Vec<_>>());
-    let (pipe, text, model, variant, src, adapters, tables): (Pipeline<B>, Text<B>, String, Variant, Box<dyn h3_core::weights::WeightSource>, &[h3_core::lora::Adapter], Option<AdalnTables>) = if s.synthetic {
+    let gallery_list = |g: &crate::gallery::Gallery| {
+        json!(g.entries.iter().map(|e| &e.prompt).collect::<Vec<_>>())
+    };
+    let (pipe, text, model, variant, src, adapters, tables): (
+        Pipeline<B>,
+        Text<B>,
+        String,
+        Variant,
+        Box<dyn h3_core::weights::WeightSource>,
+        &[h3_core::lora::Adapter],
+        Option<AdalnTables>,
+    ) = if s.synthetic {
         let cfg = H3Config::tiny_vsa();
         let src = Synthetic { seed: 1 };
         let only = match &s.gallery {
@@ -187,20 +220,58 @@ pub fn engine<B: Backend>(be: B, s: &Settings, shared: Arc<Shared>, rx: mpsc::Re
             }
             None => None,
         };
-        let text = Text::Synthetic { dim: cfg.text_dim, only };
+        let text = Text::Synthetic {
+            dim: cfg.text_dim,
+            only,
+        };
         let mut variant = Variant::by_name("fasth3-v2")?;
         variant.config = cfg.clone();
         let pipe = Pipeline {
-            dit: H3Dit::load(&be, cfg, &src, &LoadOptions { quant: s.attn.weights, stream_blocks: false }, &[])?,
-            vae: Some(VideoVae::load(&be, VideoVaeConfig::tiny(), &src, false, true)?),
-            audio_vae: Some(AudioVae::load(&be, AudioVaeConfig::tiny(), &src, false, true)?),
+            dit: H3Dit::load(
+                &be,
+                cfg,
+                &src,
+                &LoadOptions {
+                    quant: s.attn.weights,
+                    stream_blocks: false,
+                },
+                &[],
+            )?,
+            vae: Some(VideoVae::load(
+                &be,
+                VideoVaeConfig::tiny(),
+                &src,
+                false,
+                true,
+            )?),
+            audio_vae: Some(AudioVae::load(
+                &be,
+                AudioVaeConfig::tiny(),
+                &src,
+                false,
+                true,
+            )?),
             tae: Some(TaeH3::load(&be, TaeH3Config::tiny(), &src)?),
         };
-        (pipe, text, "synthetic tiny model (random weights: output is noise)".to_string(), variant, Box::new(src), &[][..], None)
+        (
+            pipe,
+            text,
+            "synthetic tiny model (random weights: output is noise)".to_string(),
+            variant,
+            Box::new(src),
+            &[][..],
+            None,
+        )
     } else {
-        let r = s.model.as_ref().expect("a resolved model when not synthetic");
+        let r = s
+            .model
+            .as_ref()
+            .expect("a resolved model when not synthetic");
         let cfg = r.variant.config.clone();
-        let model_dir = r.model_dir.as_ref().ok_or_else(|| anyhow!("--model-dir is needed"))?;
+        let model_dir = r
+            .model_dir
+            .as_ref()
+            .ok_or_else(|| anyhow!("--model-dir is needed"))?;
         stage("checking the checkpoint");
         let (src, _) = open_transformer(r)?;
         let text = match &s.gallery {
@@ -219,27 +290,85 @@ pub fn engine<B: Backend>(be: B, s: &Settings, shared: Arc<Shared>, rx: mpsc::Re
             Some(p) => Some(AdalnTables::load(p, &cfg)?),
             None => None,
         };
-        stage(&format!("loading the transformer onto the device ({} blocks, {})", cfg.layers, s.attn.weights));
-        let dit = H3Dit::load(&be, cfg.clone(), src.as_ref(), &LoadOptions { quant: s.attn.weights, stream_blocks: s.attn.stream_blocks }, &r.adapters)?;
+        stage(&format!(
+            "loading the transformer onto the device ({} blocks, {})",
+            cfg.layers, s.attn.weights
+        ));
+        let dit = H3Dit::load(
+            &be,
+            cfg.clone(),
+            src.as_ref(),
+            &LoadOptions {
+                quant: s.attn.weights,
+                stream_blocks: s.attn.stream_blocks,
+            },
+            &r.adapters,
+        )?;
         stage("loading the decoders");
         let vae_dir = model_dir.join("vae");
-        let vae = VideoVae::load_with(&be, VideoVaeConfig::h3(), &SafetensorsDir::open(&vae_dir)?, false, !s.preview, s.attn.decoder_weights)?;
-        let audio_vae = AudioVae::load(&be, AudioVaeConfig::h3(), &SafetensorsDir::open(&model_dir.join("audio_vae"))?, false, true)?;
+        let vae = VideoVae::load_with(
+            &be,
+            VideoVaeConfig::h3(),
+            &SafetensorsDir::open(&vae_dir)?,
+            false,
+            !s.preview,
+            s.attn.decoder_weights,
+        )?;
+        let audio_vae = AudioVae::load(
+            &be,
+            AudioVaeConfig::h3(),
+            &SafetensorsDir::open(&model_dir.join("audio_vae"))?,
+            false,
+            true,
+        )?;
         let tae = match (&r.tae, s.preview) {
-            (Some(p), true) => Some(TaeH3::load(&be, TaeH3Config::taeh3(), &SafetensorsDir::open(p)?)?),
+            (Some(p), true) => Some(TaeH3::load(
+                &be,
+                TaeH3Config::taeh3(),
+                &SafetensorsDir::open(p)?,
+            )?),
             (None, true) => return Err(anyhow!("--preview needs --tae")),
             _ => None,
         };
-        let pipe = Pipeline { dit, vae: Some(vae), audio_vae: Some(audio_vae), tae };
+        let pipe = Pipeline {
+            dit,
+            vae: Some(vae),
+            audio_vae: Some(audio_vae),
+            tae,
+        };
         let model = format!(
             "{} · {} forwards · {}{}{}",
-            r.variant.summary.split(':').next().unwrap_or(&r.variant.name),
+            r.variant
+                .summary
+                .split(':')
+                .next()
+                .unwrap_or(&r.variant.name),
             r.variant.forwards(),
-            if s.preview { "TAEH3 preview" } else { "VAE decoder" },
-            if matches!(text, Text::Gallery(..)) { " · prompt gallery" } else { "" },
-            if s.attn.weights != h3_core::quant::WeightQuant::Native { format!(" · {}", s.attn.weights) } else { String::new() }
+            if s.preview {
+                "TAEH3 preview"
+            } else {
+                "VAE decoder"
+            },
+            if matches!(text, Text::Gallery(..)) {
+                " · prompt gallery"
+            } else {
+                ""
+            },
+            if s.attn.weights != h3_core::quant::WeightQuant::Native {
+                format!(" · {}", s.attn.weights)
+            } else {
+                String::new()
+            }
         );
-        (pipe, text, model, r.variant.clone(), src, &r.adapters[..], tables)
+        (
+            pipe,
+            text,
+            model,
+            r.variant.clone(),
+            src,
+            &r.adapters[..],
+            tables,
+        )
     };
     stage("waiting for the device");
     be.sync();
@@ -251,7 +380,11 @@ pub fn engine<B: Backend>(be: B, s: &Settings, shared: Arc<Shared>, rx: mpsc::Re
         info["load_s"] = json!(t0.elapsed().as_secs_f64());
         info["steps"] = json!(variant.forwards());
     }
-    eprintln!("engine ready on {} in {:.1}s", be.name(), t0.elapsed().as_secs_f64());
+    eprintln!(
+        "engine ready on {} in {:.1}s",
+        be.name(),
+        t0.elapsed().as_secs_f64()
+    );
     let sampler = match sampler_plan(&variant) {
         Ok(p) => p,
         Err(e) => return Err(anyhow!("{e}")),
@@ -282,7 +415,10 @@ pub fn engine<B: Backend>(be: B, s: &Settings, shared: Arc<Shared>, rx: mpsc::Re
                 references: vec![],
                 continuation: None,
                 sampler: match &sampler {
-                    SamplerPlan::Schedules { video, audio } => SamplerPlan::Schedules { video: video.clone(), audio: audio.clone() },
+                    SamplerPlan::Schedules { video, audio } => SamplerPlan::Schedules {
+                        video: video.clone(),
+                        audio: audio.clone(),
+                    },
                     SamplerPlan::Pdd(p) => SamplerPlan::Pdd(p.clone()),
                 },
                 attention: s.attn.attention(&variant),
@@ -291,41 +427,61 @@ pub fn engine<B: Backend>(be: B, s: &Settings, shared: Arc<Shared>, rx: mpsc::Re
                 tiling: s.tiling,
                 preview: s.synthetic || s.preview,
             };
-            let generation = pipe.generate(&be, src.as_ref(), adapters, tables.as_ref(), &req, &mut |ev| match ev {
-                Event::Prepared { secs, .. } => {
-                    shared.with(id, |j| {
-                        j.prepare_s = secs;
-                        j.total_steps = variant.forwards();
-                        j.stage = Stage::Denoising;
-                    });
-                }
-                Event::Step { index, total, secs } => {
-                    shared.with(id, |j| {
-                        j.steps.push(secs);
-                        if index + 1 == total {
-                            j.stage = Stage::Decoding;
-                        }
-                    });
-                }
-                Event::Frames { count, width, height, rgb, .. } => {
-                    shared.with(id, |j| {
-                        j.width = width;
-                        j.height = height;
-                        j.rgb.extend_from_slice(rgb);
-                        j.frames += count;
-                        j.decode_s = j.started.unwrap().elapsed().as_secs_f64() - j.encode_s - j.prepare_s - j.steps.iter().sum::<f64>();
-                    });
-                }
-                Event::Audio { sample_rate, stereo } => {
-                    let mut buf = Vec::new();
-                    let tmp = std::env::temp_dir().join(format!("h3-serve-{}-{id}.wav", std::process::id()));
-                    if media::write_wav(&tmp, stereo, sample_rate as u32).is_ok() {
-                        buf = std::fs::read(&tmp).unwrap_or_default();
-                        let _ = std::fs::remove_file(&tmp);
+            let generation = pipe.generate(
+                &be,
+                src.as_ref(),
+                adapters,
+                tables.as_ref(),
+                &req,
+                &mut |ev| match ev {
+                    Event::Prepared { secs, .. } => {
+                        shared.with(id, |j| {
+                            j.prepare_s = secs;
+                            j.total_steps = variant.forwards();
+                            j.stage = Stage::Denoising;
+                        });
                     }
-                    shared.with(id, |j| j.audio = Some(buf));
-                }
-            })?;
+                    Event::Step { index, total, secs } => {
+                        shared.with(id, |j| {
+                            j.steps.push(secs);
+                            if index + 1 == total {
+                                j.stage = Stage::Decoding;
+                            }
+                        });
+                    }
+                    Event::Frames {
+                        count,
+                        width,
+                        height,
+                        rgb,
+                        ..
+                    } => {
+                        shared.with(id, |j| {
+                            j.width = width;
+                            j.height = height;
+                            j.rgb.extend_from_slice(rgb);
+                            j.frames += count;
+                            j.decode_s = j.started.unwrap().elapsed().as_secs_f64()
+                                - j.encode_s
+                                - j.prepare_s
+                                - j.steps.iter().sum::<f64>();
+                        });
+                    }
+                    Event::Audio {
+                        sample_rate,
+                        stereo,
+                    } => {
+                        let mut buf = Vec::new();
+                        let tmp = std::env::temp_dir()
+                            .join(format!("h3-serve-{}-{id}.wav", std::process::id()));
+                        if media::write_wav(&tmp, stereo, sample_rate as u32).is_ok() {
+                            buf = std::fs::read(&tmp).unwrap_or_default();
+                            let _ = std::fs::remove_file(&tmp);
+                        }
+                        shared.with(id, |j| j.audio = Some(buf));
+                    }
+                },
+            )?;
             let _ = generation;
             Ok(())
         };
@@ -348,7 +504,11 @@ fn hdr(k: &str, v: &str) -> tiny_http::Header {
     tiny_http::Header::from_bytes(k, v).expect("valid header")
 }
 
-fn send<R: std::io::Read>(req: tiny_http::Request, resp: tiny_http::Response<R>, cors: &[tiny_http::Header]) {
+fn send<R: std::io::Read>(
+    req: tiny_http::Request,
+    resp: tiny_http::Response<R>,
+    cors: &[tiny_http::Header],
+) {
     let mut resp = resp;
     for h in cors {
         resp = resp.with_header(h.clone());
@@ -357,13 +517,19 @@ fn send<R: std::io::Read>(req: tiny_http::Request, resp: tiny_http::Response<R>,
 }
 
 fn respond_json(req: tiny_http::Request, code: u16, v: &Value, cors: &[tiny_http::Header]) {
-    let r = tiny_http::Response::from_string(v.to_string()).with_status_code(code).with_header(hdr("Content-Type", "application/json"));
+    let r = tiny_http::Response::from_string(v.to_string())
+        .with_status_code(code)
+        .with_header(hdr("Content-Type", "application/json"));
     send(req, r, cors);
 }
 
 /// CORS headers when the request's `Origin` is the one allowed origin.
 fn cors_for(req: &tiny_http::Request, allow: Option<&str>) -> Vec<tiny_http::Header> {
-    let origin = req.headers().iter().find(|h| h.field.equiv("Origin")).map(|h| h.value.as_str().to_string());
+    let origin = req
+        .headers()
+        .iter()
+        .find(|h| h.field.equiv("Origin"))
+        .map(|h| h.value.as_str().to_string());
     match (origin, allow) {
         (Some(o), Some(a)) if o.trim_end_matches('/') == a.trim_end_matches('/') => vec![
             hdr("Access-Control-Allow-Origin", &o),
@@ -387,23 +553,46 @@ fn parse_request(body: &str, s: &Settings, pika: bool) -> Result<(String, Geomet
         return Err("Prompts are limited to 2000 characters.".into());
     }
     let num = |k: &str, d: u64| v[k].as_u64().unwrap_or(d) as usize;
-    let frames = if pika { packing::pika::resolve_frames(num("frames", 124)) } else { packing::resolve_num_frames(num("frames", 124)) }.map_err(|e| e.to_string())?;
-    let g = Geometry { width: num("width", 1344), height: num("height", 768), frames };
+    let frames = if pika {
+        packing::pika::resolve_frames(num("frames", 124))
+    } else {
+        packing::resolve_num_frames(num("frames", 124))
+    }
+    .map_err(|e| e.to_string())?;
+    let g = Geometry {
+        width: num("width", 1344),
+        height: num("height", 768),
+        frames,
+    };
     g.validate(16).map_err(|e| e.to_string())?;
     if g.width * g.height > s.max_pixels {
-        return Err(format!("{}×{} is above this engine's limit of {} pixels per frame.", g.width, g.height, s.max_pixels));
+        return Err(format!(
+            "{}×{} is above this engine's limit of {} pixels per frame.",
+            g.width, g.height, s.max_pixels
+        ));
     }
     if g.frames > s.max_frames {
-        return Err(format!("{} frames is above this engine's limit of {}.", g.frames, s.max_frames));
+        return Err(format!(
+            "{} frames is above this engine's limit of {}.",
+            g.frames, s.max_frames
+        ));
     }
     let seed = v["seed"].as_u64().unwrap_or_else(|| {
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos() as u64 % 1_000_000_000).unwrap_or(7)
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64 % 1_000_000_000)
+            .unwrap_or(7)
     });
     Ok((prompt, g, seed))
 }
 
 /// Serve until killed. `start_engine` builds the backend on the engine thread.
-pub fn serve(s: Settings, start_engine: impl FnOnce(&Settings, Arc<Shared>, mpsc::Receiver<u64>) -> Result<()> + Send + 'static) -> Result<()> {
+pub fn serve(
+    s: Settings,
+    start_engine: impl FnOnce(&Settings, Arc<Shared>, mpsc::Receiver<u64>) -> Result<()>
+    + Send
+    + 'static,
+) -> Result<()> {
     let pika = s.model.as_ref().is_some_and(|m| m.variant.pika_buckets);
     let shared = Arc::new(Shared {
         jobs: Mutex::new(Vec::new()),
@@ -424,13 +613,18 @@ pub fn serve(s: Settings, start_engine: impl FnOnce(&Settings, Arc<Shared>, mpsc
         std::thread::Builder::new()
             .name("engine".into())
             .spawn(move || {
-                let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| start_engine(&s, shared.clone(), rx)));
+                let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    start_engine(&s, shared.clone(), rx)
+                }));
                 let msg = match run {
                     Ok(Ok(())) => return,
                     Ok(Err(e)) => format!("{e:#}"),
                     Err(p) => format!(
                         "engine crashed: {}",
-                        p.downcast_ref::<String>().map(String::as_str).or_else(|| p.downcast_ref::<&str>().copied()).unwrap_or("panic")
+                        p.downcast_ref::<String>()
+                            .map(String::as_str)
+                            .or_else(|| p.downcast_ref::<&str>().copied())
+                            .unwrap_or("panic")
                     ),
                 };
                 eprintln!("engine failed: {msg}");
@@ -461,7 +655,11 @@ pub fn serve(s: Settings, start_engine: impl FnOnce(&Settings, Arc<Shared>, mpsc
             }
             (tiny_http::Method::Get, "/") | (tiny_http::Method::Get, "/index.html") => {
                 let h = hdr("Content-Type", "text/html; charset=utf-8");
-                send(req, tiny_http::Response::from_string(PAGE).with_header(h), &cors);
+                send(
+                    req,
+                    tiny_http::Response::from_string(PAGE).with_header(h),
+                    &cors,
+                );
             }
             (tiny_http::Method::Get, "/api/info") => {
                 let mut info = shared.info.lock().unwrap().clone();
@@ -471,24 +669,50 @@ pub fn serve(s: Settings, start_engine: impl FnOnce(&Settings, Arc<Shared>, mpsc
                 respond_json(req, 200, &info, &cors);
             }
             (tiny_http::Method::Post, "/api/generate") => {
-                let header = |k: &str| req.headers().iter().find(|h| h.field.as_str().as_str().eq_ignore_ascii_case(k)).map(|h| h.value.as_str().to_string());
-                let json_body = header("Content-Type").is_some_and(|c| c.starts_with("application/json"));
+                let header = |k: &str| {
+                    req.headers()
+                        .iter()
+                        .find(|h| h.field.as_str().as_str().eq_ignore_ascii_case(k))
+                        .map(|h| h.value.as_str().to_string())
+                };
+                let json_body =
+                    header("Content-Type").is_some_and(|c| c.starts_with("application/json"));
                 let origin_ok = match header("Origin") {
                     None => true,
-                    Some(o) => !cors.is_empty() || header("Host").is_some_and(|h| o == format!("http://{h}") || o == format!("https://{h}")),
+                    Some(o) => {
+                        !cors.is_empty()
+                            || header("Host").is_some_and(|h| {
+                                o == format!("http://{h}") || o == format!("https://{h}")
+                            })
+                    }
                 };
                 if !json_body || !origin_ok {
-                    respond_json(req, 403, &json!({"error": "Requests must be JSON and come from this engine's page or its --allow-origin site."}), &cors);
+                    respond_json(
+                        req,
+                        403,
+                        &json!({"error": "Requests must be JSON and come from this engine's page or its --allow-origin site."}),
+                        &cors,
+                    );
                     continue;
                 }
                 let mut body = String::new();
-                if req.as_reader().take(64 * 1024).read_to_string(&mut body).is_err() {
+                if req
+                    .as_reader()
+                    .take(64 * 1024)
+                    .read_to_string(&mut body)
+                    .is_err()
+                {
                     respond_json(req, 400, &json!({"error": "unreadable body"}), &cors);
                     continue;
                 }
                 let info = shared.info.lock().unwrap().clone();
                 if !info["ready"].as_bool().unwrap_or(false) {
-                    let msg = info["error"].as_str().map(|e| format!("The engine failed to start: {e}")).unwrap_or_else(|| "The engine is still loading the model. Try again in a moment.".into());
+                    let msg = info["error"]
+                        .as_str()
+                        .map(|e| format!("The engine failed to start: {e}"))
+                        .unwrap_or_else(|| {
+                            "The engine is still loading the model. Try again in a moment.".into()
+                        });
                     respond_json(req, 503, &json!({"error": msg}), &cors);
                     continue;
                 }
@@ -505,9 +729,19 @@ pub fn serve(s: Settings, start_engine: impl FnOnce(&Settings, Arc<Shared>, mpsc
                     Err(e) => respond_json(req, 400, &json!({"error": e}), &cors),
                     Ok((prompt, geometry, seed)) => {
                         let mut jobs = shared.jobs.lock().unwrap();
-                        if jobs.iter().filter(|j| matches!(j.stage, Stage::Queued)).count() >= MAX_QUEUE {
+                        if jobs
+                            .iter()
+                            .filter(|j| matches!(j.stage, Stage::Queued))
+                            .count()
+                            >= MAX_QUEUE
+                        {
                             drop(jobs);
-                            respond_json(req, 429, &json!({"error": "Three clips are already waiting. Try again when one finishes."}), &cors);
+                            respond_json(
+                                req,
+                                429,
+                                &json!({"error": "Three clips are already waiting. Try again when one finishes."}),
+                                &cors,
+                            );
                             continue;
                         }
                         let id = {
@@ -538,7 +772,10 @@ pub fn serve(s: Settings, start_engine: impl FnOnce(&Settings, Arc<Shared>, mpsc
                             error: None,
                         });
                         while jobs.len() > KEEP_JOBS {
-                            match jobs.iter().position(|j| matches!(j.stage, Stage::Done | Stage::Failed)) {
+                            match jobs
+                                .iter()
+                                .position(|j| matches!(j.stage, Stage::Done | Stage::Failed))
+                            {
                                 Some(i) => {
                                     jobs.remove(i);
                                 }
@@ -563,7 +800,11 @@ pub fn serve(s: Settings, start_engine: impl FnOnce(&Settings, Arc<Shared>, mpsc
                 };
                 match what {
                     "frames" => {
-                        let from = query.split('&').find_map(|kv| kv.strip_prefix("from=")).and_then(|v| v.parse::<usize>().ok()).unwrap_or(0);
+                        let from = query
+                            .split('&')
+                            .find_map(|kv| kv.strip_prefix("from="))
+                            .and_then(|v| v.parse::<usize>().ok())
+                            .unwrap_or(0);
                         let body = shared.with(id, |j| {
                             let px = j.width * j.height * 3;
                             let first = from.min(j.frames);
@@ -576,13 +817,25 @@ pub fn serve(s: Settings, start_engine: impl FnOnce(&Settings, Arc<Shared>, mpsc
                             out
                         });
                         match body {
-                            Some(b) => send(req, tiny_http::Response::from_data(b).with_header(hdr("Content-Type", "application/octet-stream")), &cors),
+                            Some(b) => send(
+                                req,
+                                tiny_http::Response::from_data(b)
+                                    .with_header(hdr("Content-Type", "application/octet-stream")),
+                                &cors,
+                            ),
                             None => respond_json(req, 404, &json!({"error": "no such job"}), &cors),
                         }
                     }
                     "audio" => match shared.with(id, |j| j.audio.clone()) {
-                        Some(Some(b)) => send(req, tiny_http::Response::from_data(b).with_header(hdr("Content-Type", "audio/wav")), &cors),
-                        Some(None) => respond_json(req, 404, &json!({"error": "no audio yet"}), &cors),
+                        Some(Some(b)) => send(
+                            req,
+                            tiny_http::Response::from_data(b)
+                                .with_header(hdr("Content-Type", "audio/wav")),
+                            &cors,
+                        ),
+                        Some(None) => {
+                            respond_json(req, 404, &json!({"error": "no audio yet"}), &cors)
+                        }
                         None => respond_json(req, 404, &json!({"error": "no such job"}), &cors),
                     },
                     "" => match shared.with(id, |j| j.status()) {

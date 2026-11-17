@@ -31,7 +31,12 @@ fn wgpu_matches_cpu_reference() {
     let results = h3_model::check::run_all(&be, 2e-3);
     let mut bad = Vec::new();
     for r in &results {
-        eprintln!("{:<56} rel {:.2e} {}", r.name, r.rel_err, if r.ok { "ok" } else { "FAIL" });
+        eprintln!(
+            "{:<56} rel {:.2e} {}",
+            r.name,
+            r.rel_err,
+            if r.ok { "ok" } else { "FAIL" }
+        );
         if !r.ok {
             bad.push(r.name.clone());
         }
@@ -56,7 +61,11 @@ fn wgpu_f16_matches_cpu_reference() {
         }
     };
     let results = h3_model::check::run_ops(&be, 1e-2);
-    let bad: Vec<_> = results.iter().filter(|r| !r.ok).map(|r| format!("{} {:.2e}", r.name, r.rel_err)).collect();
+    let bad: Vec<_> = results
+        .iter()
+        .filter(|r| !r.ok)
+        .map(|r| format!("{} {:.2e}", r.name, r.rel_err))
+        .collect();
     assert!(bad.is_empty(), "failed: {bad:?}");
 }
 
@@ -77,6 +86,10 @@ fn wgpu_chunked_bindings_match_cpu_reference() {
         }
     };
     let results = h3_model::check::run_all(&be, 2e-3);
-    let bad: Vec<_> = results.iter().filter(|r| !r.ok).map(|r| r.name.clone()).collect();
+    let bad: Vec<_> = results
+        .iter()
+        .filter(|r| !r.ok)
+        .map(|r| r.name.clone())
+        .collect();
     assert!(bad.is_empty(), "failed: {bad:?}");
 }

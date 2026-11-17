@@ -8,7 +8,6 @@
 //! 16-pixel grid). The released pipeline writes a silent video: the audio
 //! stream (encoded silence) only conditions the DiT.
 
-use rayon::prelude::*;
 use crate::{
     audio_vae::AudioVae,
     dit::{Attention, H3Dit, StepMods, Workspace},
@@ -26,6 +25,7 @@ use h3_core::{
     schedule::regen_sigmas,
     weights::{SafetensorsDir, WeightSource},
 };
+use rayon::prelude::*;
 use std::path::Path;
 use std::time::Instant;
 
@@ -53,9 +53,15 @@ impl SharpCurve {
         let src = SafetensorsDir::open(branches)?;
         let bytes = std::fs::read(table)?;
         if bytes.len() != CURVE_TABLE_ROWS * CURVE_DIM * 4 {
-            return Err(Error::Weights(format!("{} must hold a {CURVE_TABLE_ROWS}×{CURVE_DIM} f32 table", table.display())));
+            return Err(Error::Weights(format!(
+                "{} must hold a {CURVE_TABLE_ROWS}×{CURVE_DIM} f32 table",
+                table.display()
+            )));
         }
-        let table: Vec<f32> = bytes.chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect();
+        let table: Vec<f32> = bytes
+            .chunks_exact(4)
+            .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+            .collect();
         let mods = H3Config::MOD_SLOTS * H3Config::MODALITIES * cfg.hidden;
         let mut factors = Vec::with_capacity(cfg.layers);
         let mut rank = 0;
@@ -67,7 +73,11 @@ impl SharpCurve {
             let b = src.get(&format!("{p}.curve_B.weight"), &[mods, rank])?;
             factors.push((a, b));
         }
-        Ok(Self { table, factors, rank })
+        Ok(Self {
+            table,
+            factors,
+            rank,
+        })
     }
 
     /// Linear interpolation of the table at model time `t ∈ [0, 1]`.
@@ -75,7 +85,12 @@ impl SharpCurve {
         let pos = t.clamp(0.0, 1.0) * (CURVE_TABLE_ROWS - 1) as f32;
         let lo = (pos.floor() as usize).min(CURVE_TABLE_ROWS - 2);
         let f = pos - lo as f32;
-        (0..CURVE_DIM).map(|i| self.table[lo * CURVE_DIM + i] * (1.0 - f) + self.table[(lo + 1) * CURVE_DIM + i] * f).collect()
+        (0..CURVE_DIM)
+            .map(|i| {
+                self.table[lo * CURVE_DIM + i] * (1.0 - f)
+                    + self.table[(lo + 1) * CURVE_DIM + i] * f
+            })
+            .collect()
     }
 
     /// `[U, 18·d]` delta of block `l` at `timesteps`.
@@ -118,7 +133,8 @@ pub struct RegenRequest {
 impl<B: Backend> Regen<B> {
     /// Encoded silence for `frames` at 24 fps, as normalised channel-major rows.
     pub fn silent_audio_rows(&self, be: &B, frames: usize) -> Result<Vec<f32>> {
-        let samples = ((frames as f64 / FPS as f64) * self.audio_vae.cfg.sample_rate as f64).round() as usize;
+        let samples =
+            ((frames as f64 / FPS as f64) * self.audio_vae.cfg.sample_rate as f64).round() as usize;
         let silence = vec![0.0f32; samples];
         let mut z = self.audio_vae.encode(be, &silence)?.mode();
         self.audio_vae.normalize_latents(&mut z);
@@ -126,12 +142,22 @@ impl<B: Backend> Regen<B> {
         Ok([rows.clone(), rows].concat())
     }
 
-    pub fn run(&self, be: &B, src: &dyn WeightSource, adapters: &[Adapter], req: &RegenRequest, on: &mut dyn FnMut(Event<'_>)) -> Result<(usize, usize, usize, Vec<u8>, Timings)> {
+    pub fn run(
+        &self,
+        be: &B,
+        src: &dyn WeightSource,
+        adapters: &[Adapter],
+        req: &RegenRequest,
+        on: &mut dyn FnMut(Event<'_>),
+    ) -> Result<(usize, usize, usize, Vec<u8>, Timings)> {
         let cfg = &self.dit.cfg;
         let mut t = Timings::default();
         let t0 = Instant::now();
         if req.draft.t != DRAFT_PADDED_FRAMES {
-            return Err(Error::Geometry(format!("the draft must hold {DRAFT_PADDED_FRAMES} frames, got {}", req.draft.t)));
+            return Err(Error::Geometry(format!(
+                "the draft must hold {DRAFT_PADDED_FRAMES} frames, got {}",
+                req.draft.t
+            )));
         }
         let sigmas = regen_sigmas(req.steps, req.start_sigma)?;
         // Draft latent: posterior sampled with the fixed seed, normalised.
@@ -147,15 +173,26 @@ impl<B: Backend> Regen<B> {
         let mut rng = Rng::new(req.seed);
         let noise = rng.normal(up_rows.len());
         let s0 = sigmas[0] as f32;
-        let x_rows: Vec<f32> = up_rows.iter().zip(&noise).map(|(u, n)| (1.0 - s0) * u + s0 * n).collect();
+        let x_rows: Vec<f32> = up_rows
+            .iter()
+            .zip(&noise)
+            .map(|(u, n)| (1.0 - s0) * u + s0 * n)
+            .collect();
         let audio_rows = self.silent_audio_rows(be, DRAFT_PADDED_FRAMES)?;
         if audio_rows.len() != layout.audio_indices.len() * cfg.audio_in_channels {
-            return Err(Error::Geometry("silent audio rows do not match the layout".into()));
+            return Err(Error::Geometry(
+                "silent audio rows do not match the layout".into(),
+            ));
         }
         let text = self.dit.refine_text(be, &req.prompt.embeds);
-        let ws: Workspace<B> = self.dit.workspace(be, &layout, req.ffn_chunk, req.attention)?;
+        let ws: Workspace<B> = self
+            .dit
+            .workspace(be, &layout, req.ffn_chunk, req.attention)?;
         let all_ts: Vec<f32> = {
-            let mut v: Vec<f32> = sigmas[..sigmas.len() - 1].iter().map(|&s| 1.0 - s as f32).collect();
+            let mut v: Vec<f32> = sigmas[..sigmas.len() - 1]
+                .iter()
+                .map(|&s| 1.0 - s as f32)
+                .collect();
             v.push(1.0);
             v.sort_by(|a, b| a.total_cmp(b));
             v.dedup();
@@ -163,10 +200,15 @@ impl<B: Backend> Regen<B> {
         };
         let curve = &self.curve;
         let extra = |l: usize, ts: &[f32]| curve.delta(l, ts);
-        let tables = self.dit.adaln_tables(be, src, adapters, &all_ts, Some(&extra))?;
+        let tables = self
+            .dit
+            .adaln_tables(be, src, adapters, &all_ts, Some(&extra))?;
         be.sync();
         t.prepare_s = t0.elapsed().as_secs_f64();
-        on(Event::Prepared { secs: t.prepare_s, tokens: layout.sequence_length });
+        on(Event::Prepared {
+            secs: t.prepare_s,
+            tokens: layout.sequence_length,
+        });
         let x_v = be.upload(&x_rows);
         let x_a = be.upload(&audio_rows);
         let v_out = be.alloc(x_rows.len());
@@ -175,12 +217,27 @@ impl<B: Backend> Regen<B> {
             let ts = Instant::now();
             let (sigma, next) = (sigmas[i] as f32, sigmas[i + 1] as f32);
             let (unique, inverse) = row_timesteps(&layout, 1.0 - sigma, 1.0, 1.0, 1.0);
-            let mods: StepMods<B> = self.dit.step_mods(be, &tables, &unique, &inverse, &layout.token_tags, false)?;
-            self.dit.forward(be, &ws, &x_v, &x_a, &text, &mods, None, &v_out, &a_out);
-            be.flow_step(&x_v, 0, &v_out, 0, None, x_rows.len(), FlowStep::Euler { sigma, next });
+            let mods: StepMods<B> =
+                self.dit
+                    .step_mods(be, &tables, &unique, &inverse, &layout.token_tags, false)?;
+            self.dit
+                .forward(be, &ws, &x_v, &x_a, &text, &mods, None, &v_out, &a_out);
+            be.flow_step(
+                &x_v,
+                0,
+                &v_out,
+                0,
+                None,
+                x_rows.len(),
+                FlowStep::Euler { sigma, next },
+            );
             be.sync();
             t.steps_s.push(ts.elapsed().as_secs_f64());
-            on(Event::Step { index: i, total: sigmas.len() - 1, secs: ts.elapsed().as_secs_f64() });
+            on(Event::Step {
+                index: i,
+                total: sigmas.len() - 1,
+                secs: ts.elapsed().as_secs_f64(),
+            });
         }
         let rows = be.download(&x_v);
         let mut latent = unpatch_rows(&rows, cfg.in_channels, lt, lh, lw, cfg.patch);
@@ -188,26 +245,37 @@ impl<B: Backend> Regen<B> {
         let td = Instant::now();
         let mut rgb = Vec::new();
         let (mut frames, mut width, mut height) = (0usize, 0usize, 0usize);
-        self.vae.decode(be, &latent, req.tiling, &mut |chunk: &Volume| {
-            if frames >= DRAFT_FRAMES {
-                return;
-            }
-            let keep = chunk.t.min(DRAFT_FRAMES - frames);
-            (width, height) = (chunk.w, chunk.h);
-            let start = rgb.len();
-            let px = chunk.h * chunk.w;
-            rgb.resize(start + keep * px * 3, 0);
-            rgb[start..].par_chunks_mut(px * 3).enumerate().for_each(|(f, out)| {
-                let planes: [&[f32]; 3] = std::array::from_fn(|ch| &chunk.data[(ch * chunk.t + f) * px..][..px]);
-                for (i, o) in out.chunks_exact_mut(3).enumerate() {
-                    for ch in 0..3 {
-                        o[ch] = (planes[ch][i] * 255.0).clamp(0.0, 255.0) as u8;
-                    }
+        self.vae
+            .decode(be, &latent, req.tiling, &mut |chunk: &Volume| {
+                if frames >= DRAFT_FRAMES {
+                    return;
                 }
-            });
-            on(Event::Frames { first: frames, count: keep, width, height, rgb: &rgb[start..] });
-            frames += keep;
-        })?;
+                let keep = chunk.t.min(DRAFT_FRAMES - frames);
+                (width, height) = (chunk.w, chunk.h);
+                let start = rgb.len();
+                let px = chunk.h * chunk.w;
+                rgb.resize(start + keep * px * 3, 0);
+                rgb[start..]
+                    .par_chunks_mut(px * 3)
+                    .enumerate()
+                    .for_each(|(f, out)| {
+                        let planes: [&[f32]; 3] =
+                            std::array::from_fn(|ch| &chunk.data[(ch * chunk.t + f) * px..][..px]);
+                        for (i, o) in out.chunks_exact_mut(3).enumerate() {
+                            for ch in 0..3 {
+                                o[ch] = (planes[ch][i] * 255.0).clamp(0.0, 255.0) as u8;
+                            }
+                        }
+                    });
+                on(Event::Frames {
+                    first: frames,
+                    count: keep,
+                    width,
+                    height,
+                    rgb: &rgb[start..],
+                });
+                frames += keep;
+            })?;
         t.decode_s = td.elapsed().as_secs_f64();
         let _ = AUDIO_CHANNELS;
         Ok((frames, width, height, rgb, t))

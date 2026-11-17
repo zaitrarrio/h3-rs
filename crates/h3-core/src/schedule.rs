@@ -37,9 +37,15 @@ pub struct Shifts {
 
 impl Shifts {
     /// MiniMax-H3, FastH3 V1, FastH3 Omni, Pika H3 Flex.
-    pub const H3: Shifts = Shifts { video: 12.0, audio: 3.0 };
+    pub const H3: Shifts = Shifts {
+        video: 12.0,
+        audio: 3.0,
+    };
     /// FastH3 V2 and Trim (`vshift10`).
-    pub const FASTH3_V2: Shifts = Shifts { video: 10.0, audio: 3.0 };
+    pub const FASTH3_V2: Shifts = Shifts {
+        video: 10.0,
+        audio: 3.0,
+    };
 }
 
 /// One modality's sigma grid: `steps + 1` strictly decreasing values ending at 0.
@@ -61,7 +67,10 @@ pub struct StepCoeffs {
 impl Schedule {
     /// Explicit sigmas (already shifted), validated.
     pub fn from_sigmas(sigmas: Vec<f32>, rule: StepRule) -> Result<Self> {
-        if sigmas.len() < 2 || sigmas.windows(2).any(|w| w[1] >= w[0]) || *sigmas.last().unwrap() != 0.0 {
+        if sigmas.len() < 2
+            || sigmas.windows(2).any(|w| w[1] >= w[0])
+            || *sigmas.last().unwrap() != 0.0
+        {
             return Err(Error::Config(format!(
                 "sigmas must hold ≥ 2 strictly decreasing values ending at 0, got {sigmas:?}"
             )));
@@ -72,10 +81,18 @@ impl Schedule {
     /// A distilled ladder: integer rungs on the 1000-step clock, strictly
     /// decreasing in `(0, 1000]`, shifted once by `shift`, then 0.
     pub fn from_rungs(rungs: &[u32], shift: f32, rule: StepRule) -> Result<Self> {
-        if rungs.is_empty() || rungs.iter().any(|&r| r == 0 || r > 1000) || rungs.windows(2).any(|w| w[1] >= w[0]) {
-            return Err(Error::Config(format!("rungs must be strictly decreasing in (0, 1000], got {rungs:?}")));
+        if rungs.is_empty()
+            || rungs.iter().any(|&r| r == 0 || r > 1000)
+            || rungs.windows(2).any(|w| w[1] >= w[0])
+        {
+            return Err(Error::Config(format!(
+                "rungs must be strictly decreasing in (0, 1000], got {rungs:?}"
+            )));
         }
-        let mut sigmas: Vec<f32> = rungs.iter().map(|&r| shift_sigma(r as f32 / 1000.0, shift)).collect();
+        let mut sigmas: Vec<f32> = rungs
+            .iter()
+            .map(|&r| shift_sigma(r as f32 / 1000.0, shift))
+            .collect();
         sigmas.push(0.0);
         Self::from_sigmas(sigmas, rule)
     }
@@ -84,9 +101,14 @@ impl Schedule {
     /// (`points − 1` forwards; the release runs 50 points).
     pub fn uniform(points: usize, shift: f32) -> Result<Self> {
         if points < 2 {
-            return Err(Error::Config("a uniform schedule needs ≥ 2 grid points".into()));
+            return Err(Error::Config(
+                "a uniform schedule needs ≥ 2 grid points".into(),
+            ));
         }
-        let mut sigmas: Vec<f32> = linspace_f32(1.0, 0.0, points).into_iter().map(|b| shift_sigma(b, shift)).collect();
+        let mut sigmas: Vec<f32> = linspace_f32(1.0, 0.0, points)
+            .into_iter()
+            .map(|b| shift_sigma(b, shift))
+            .collect();
         sigmas.dedup();
         Self::from_sigmas(sigmas, StepRule::Euler)
     }
@@ -225,7 +247,9 @@ impl PddPlan {
         };
         let (vw, aw) = (weights(shifts.video as f64), weights(shifts.audio as f64));
         if vw.iter().chain(&aw).any(|w| !w.is_finite() || *w == 0.0) {
-            return Err(Error::Config("PDD integration weights must be finite and non-zero".into()));
+            return Err(Error::Config(
+                "PDD integration weights must be finite and non-zero".into(),
+            ));
         }
         Ok(Self {
             video_sigmas: nodes(shifts.video as f64),
@@ -252,13 +276,22 @@ impl PddPlan {
     /// node sigmas applies the block's total increment.
     pub fn fused_weights(weights: &[f64], start: usize, end: usize) -> Vec<f32> {
         let total: f64 = weights[start..end].iter().sum();
-        weights[start..end].iter().map(|w| (w / total) as f32).collect()
+        weights[start..end]
+            .iter()
+            .map(|w| (w / total) as f32)
+            .collect()
     }
     /// The per-modality Euler schedules over the node sigmas.
     pub fn schedules(&self) -> (Schedule, Schedule) {
         (
-            Schedule { sigmas: self.video_sigmas.clone(), rule: StepRule::Euler },
-            Schedule { sigmas: self.audio_sigmas.clone(), rule: StepRule::Euler },
+            Schedule {
+                sigmas: self.video_sigmas.clone(),
+                rule: StepRule::Euler,
+            },
+            Schedule {
+                sigmas: self.audio_sigmas.clone(),
+                rule: StepRule::Euler,
+            },
         )
     }
 }
@@ -274,7 +307,9 @@ pub const REGEN_TWO_STEP_START: f64 = 0.7;
 /// shift `s·x / (1 + (s − 1)·x)`.
 pub fn regen_shifted_grid(start: f64, steps: usize, shift: f64) -> Result<Vec<f64>> {
     if !(0.0 < start && start < 1.0) || steps < 1 {
-        return Err(Error::Config(format!("refine start {start} must be in (0, 1) with steps ≥ 1")));
+        return Err(Error::Config(format!(
+            "refine start {start} must be in (0, 1) with steps ≥ 1"
+        )));
     }
     let raw = start / (shift - (shift - 1.0) * start);
     let mut g = vec![start];
@@ -293,7 +328,9 @@ pub fn regen_sigmas(steps: usize, start: Option<f64>) -> Result<Vec<f64>> {
         (_, Some(s)) => regen_shifted_grid(s, steps, REGEN_REFINE_SHIFT),
         (3, None) => Ok(REGEN_SIGMAS_3.to_vec()),
         (2, None) => regen_shifted_grid(REGEN_TWO_STEP_START, 2, REGEN_REFINE_SHIFT),
-        _ => Err(Error::Config(format!("Open-H3-Regenerate-2K supports 2 or 3 refine steps, got {steps}"))),
+        _ => Err(Error::Config(format!(
+            "Open-H3-Regenerate-2K supports 2 or 3 refine steps, got {steps}"
+        ))),
     }
 }
 

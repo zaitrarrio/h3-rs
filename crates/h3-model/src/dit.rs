@@ -66,24 +66,45 @@ pub struct HostAttnFf {
 impl<B: Backend> AttnFf<B> {
     /// The widest LoRA branch of the unit's linears (0 without adapters).
     pub fn rank(&self) -> usize {
-        [&self.qkv, &self.out, &self.ff_in, &self.ff_out].into_iter().chain(self.gate.as_ref()).map(Linear::rank).max().unwrap_or(0)
+        [&self.qkv, &self.out, &self.ff_in, &self.ff_out]
+            .into_iter()
+            .chain(self.gate.as_ref())
+            .map(Linear::rank)
+            .max()
+            .unwrap_or(0)
     }
 }
 
 impl HostAttnFf {
     fn rank(&self) -> usize {
-        [&self.qkv, &self.out, &self.ff_in, &self.ff_out].into_iter().chain(self.gate.as_ref()).map(|l| l.lora.as_ref().map_or(0, |x| x.rank)).max().unwrap_or(0)
+        [&self.qkv, &self.out, &self.ff_in, &self.ff_out]
+            .into_iter()
+            .chain(self.gate.as_ref())
+            .map(|l| l.lora.as_ref().map_or(0, |x| x.rank))
+            .max()
+            .unwrap_or(0)
     }
 
     /// Native-precision linears to bf16 bits (see `HostWeight::to_bf16`).
     fn to_bf16(&mut self) {
-        for l in [&mut self.qkv, &mut self.out, &mut self.ff_in, &mut self.ff_out].into_iter().chain(self.gate.as_mut()) {
+        for l in [
+            &mut self.qkv,
+            &mut self.out,
+            &mut self.ff_in,
+            &mut self.ff_out,
+        ]
+        .into_iter()
+        .chain(self.gate.as_mut())
+        {
             l.to_bf16();
         }
     }
 
     fn pin<B: Backend>(&self, be: &B, out: &mut Vec<crate::linear::PinGuard>) {
-        for l in [&self.qkv, &self.out, &self.ff_in, &self.ff_out].into_iter().chain(self.gate.as_ref()) {
+        for l in [&self.qkv, &self.out, &self.ff_in, &self.ff_out]
+            .into_iter()
+            .chain(self.gate.as_ref())
+        {
             l.pin(be, out);
         }
     }
@@ -102,7 +123,11 @@ impl HostAttnFf {
         }
     }
     pub fn bytes(&self) -> usize {
-        self.qkv.bytes() + self.out.bytes() + self.ff_in.bytes() + self.ff_out.bytes() + self.gate.as_ref().map_or(0, |g| g.bytes())
+        self.qkv.bytes()
+            + self.out.bytes()
+            + self.ff_in.bytes()
+            + self.ff_out.bytes()
+            + self.gate.as_ref().map_or(0, |g| g.bytes())
     }
 }
 
@@ -134,7 +159,13 @@ pub enum Attention {
     Dense { qk8: bool, pv8: bool },
     /// Video sparse attention: target-region sparsity, tile size (64 / 128 /
     /// 256 tokens) and reference-region sparsity.
-    Vsa { sparsity: f64, tile: usize, ref_sparsity: f64, qk8: bool, pv8: bool },
+    Vsa {
+        sparsity: f64,
+        tile: usize,
+        ref_sparsity: f64,
+        qk8: bool,
+        pv8: bool,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -147,7 +178,10 @@ pub struct LoadOptions {
 
 impl Default for LoadOptions {
     fn default() -> Self {
-        Self { quant: WeightQuant::Native, stream_blocks: false }
+        Self {
+            quant: WeightQuant::Native,
+            stream_blocks: false,
+        }
     }
 }
 
@@ -205,7 +239,12 @@ impl AdalnTables {
         use h3_core::export::{Tensor, f16_bytes, f32_bytes};
         use safetensors::Dtype;
         let u = self.timesteps.len();
-        let mut t: Vec<Tensor> = vec![("timesteps".into(), Dtype::F32, vec![u], f32_bytes(&self.timesteps))];
+        let mut t: Vec<Tensor> = vec![(
+            "timesteps".into(),
+            Dtype::F32,
+            vec![u],
+            f32_bytes(&self.timesteps),
+        )];
         let put = |name: String, v: &[f32], cols: usize| -> Tensor {
             if v.iter().all(|x| x.is_finite() && x.abs() <= 65504.0) {
                 (name, Dtype::F16, vec![u, cols], f16_bytes(v))
@@ -225,6 +264,11 @@ impl AdalnTables {
         h3_core::export::write(path, &t, meta)
     }
 
+    /// The variant a tables file was computed for (`h3.variant`).
+    pub fn variant_of(path: &std::path::Path) -> Result<Option<String>> {
+        Ok(h3_core::weights::SafetensorsDir::open(path)?.metadata("h3.variant"))
+    }
+
     pub fn load(path: &std::path::Path, cfg: &H3Config) -> Result<Self> {
         let src = h3_core::weights::SafetensorsDir::open(path)?;
         let (_, ts_shape, _) = src.raw("timesteps")?;
@@ -237,7 +281,12 @@ impl AdalnTables {
             blocks.push(src.get(&format!("block.{i}"), &[u, mods])?);
         }
         let head = src.get("head", &[u, 2 * d])?;
-        Ok(Self { timesteps, blocks, head, d })
+        Ok(Self {
+            timesteps,
+            blocks,
+            head,
+            d,
+        })
     }
 }
 
@@ -271,7 +320,11 @@ pub fn runs(indices: &[u32]) -> Vec<Run> {
     for &i in indices {
         match v.last_mut() {
             Some(r) if r.start + r.rows == i as usize => r.rows += 1,
-            _ => v.push(Run { start: i as usize, rows: 1, offset: off }),
+            _ => v.push(Run {
+                start: i as usize,
+                rows: 1,
+                offset: off,
+            }),
         }
         off += 1;
     }
@@ -306,18 +359,34 @@ pub struct Workspace<B: Backend> {
 }
 
 impl<B: Backend> H3Dit<B> {
-    pub fn load(be: &B, cfg: H3Config, src: &dyn WeightSource, opts: &LoadOptions, adapters: &[Adapter]) -> Result<Self> {
+    pub fn load(
+        be: &B,
+        cfg: H3Config,
+        src: &dyn WeightSource,
+        opts: &LoadOptions,
+        adapters: &[Adapter],
+    ) -> Result<Self> {
         Self::load_with(be, cfg, src, opts, adapters, false)
     }
 
     /// [`H3Dit::load`]; `merge_lora` merges the blocks' LoRA pairs into their
     /// weights instead of keeping them as branches (exact only on an f32
     /// backend: the checker's branch-equals-merge case).
-    pub fn load_with(be: &B, cfg: H3Config, src: &dyn WeightSource, opts: &LoadOptions, adapters: &[Adapter], merge_lora: bool) -> Result<Self> {
+    pub fn load_with(
+        be: &B,
+        cfg: H3Config,
+        src: &dyn WeightSource,
+        opts: &LoadOptions,
+        adapters: &[Adapter],
+        merge_lora: bool,
+    ) -> Result<Self> {
         let d = cfg.hidden;
         let qkv = cfg.dim();
-        let has_gate = (0..cfg.layers).all(|l| src.has_linear(&format!("transformer_blocks.{l}.attn.to_gate_compress")))
-            || adapters.iter().any(|a| a.touches("transformer_blocks.0.attn.to_gate_compress"));
+        let has_gate = (0..cfg.layers)
+            .all(|l| src.has_linear(&format!("transformer_blocks.{l}.attn.to_gate_compress")))
+            || adapters
+                .iter()
+                .any(|a| a.touches("transformer_blocks.0.attn.to_gate_compress"));
         let shapes: Shapes = h3_manifest(&cfg, true).into_iter().collect();
         let vec = |k: &str, n: usize| -> Result<Vec<f32>> {
             let mut v = src.get(k, &[n])?;
@@ -327,11 +396,24 @@ impl<B: Backend> H3Dit<B> {
             Ok(v)
         };
         let unit_host = |p: &str, gate: bool, quant: WeightQuant| -> Result<HostAttnFf> {
-            let lin = |keys: &[&str], bias: bool| linear::load_host(src, &shapes, keys, bias, quant, adapters, !merge_lora);
+            let lin = |keys: &[&str], bias: bool| {
+                linear::load_host(src, &shapes, keys, bias, quant, adapters, !merge_lora)
+            };
             Ok(HostAttnFf {
-                qkv: lin(&[&format!("{p}.attn.to_q"), &format!("{p}.attn.to_k"), &format!("{p}.attn.to_v")], false)?,
+                qkv: lin(
+                    &[
+                        &format!("{p}.attn.to_q"),
+                        &format!("{p}.attn.to_k"),
+                        &format!("{p}.attn.to_v"),
+                    ],
+                    false,
+                )?,
                 out: lin(&[&format!("{p}.attn.to_out.0")], false)?,
-                gate: if gate { Some(lin(&[&format!("{p}.attn.to_gate_compress")], false)?) } else { None },
+                gate: if gate {
+                    Some(lin(&[&format!("{p}.attn.to_gate_compress")], false)?)
+                } else {
+                    None
+                },
                 norm_q: vec(&format!("{p}.attn.norm_q.weight"), cfg.head_dim)?,
                 norm_k: vec(&format!("{p}.attn.norm_k.weight"), cfg.head_dim)?,
                 norm1: vec(&format!("{p}.norm1.weight"), d)?,
@@ -342,7 +424,14 @@ impl<B: Backend> H3Dit<B> {
         };
         let mut refiner = Vec::with_capacity(cfg.refiner_layers);
         for l in 0..cfg.refiner_layers {
-            refiner.push(unit_host(&format!("token_refiner.refiner_blocks.{l}"), false, WeightQuant::Native)?.upload(be));
+            refiner.push(
+                unit_host(
+                    &format!("token_refiner.refiner_blocks.{l}"),
+                    false,
+                    WeightQuant::Native,
+                )?
+                .upload(be),
+            );
         }
         let mut blocks = Vec::with_capacity(cfg.layers);
         let mut pins = Vec::new();
@@ -350,7 +439,11 @@ impl<B: Backend> H3Dit<B> {
         // `H3_MXFP8_ALL_BLOCKS=1` quantizes them too (a speed / quality experiment).
         let all_blocks = std::env::var("H3_MXFP8_ALL_BLOCKS").is_ok_and(|v| v == "1");
         for l in 0..cfg.layers {
-            let q = if all_blocks { opts.quant } else { opts.quant.for_block(l, cfg.layers) };
+            let q = if all_blocks {
+                opts.quant
+            } else {
+                opts.quant.for_block(l, cfg.layers)
+            };
             let mut h = unit_host(&format!("transformer_blocks.{l}"), has_gate, q)?;
             blocks.push(if opts.stream_blocks {
                 // A streamed bf16 block used to be kept as f32 and converted on
@@ -374,54 +467,77 @@ impl<B: Backend> H3Dit<B> {
             .max()
             .unwrap_or(0);
         let plain = |k: &str| -> Result<Linear<B>> {
-            Ok(linear::load_host(src, &shapes, &[k], true, WeightQuant::Native, adapters, false)?.upload(be))
+            Ok(linear::load_host(
+                src,
+                &shapes,
+                &[k],
+                true,
+                WeightQuant::Native,
+                adapters,
+                false,
+            )?
+            .upload(be))
         };
         let te_in = cfg.time_embed_hidden;
         let adaln_in = cfg.adaln_rank.unwrap_or(cfg.time_embed_dim);
         let time = if src.contains(ADALN_TABLE_KEY) {
             let shape = src.shape(ADALN_TABLE_KEY)?;
             if shape.len() != 2 || shape[1] != adaln_in || shape[0] < 2 {
-                return Err(Error::Weights(format!("`{ADALN_TABLE_KEY}` is {shape:?}, expected [grid, {adaln_in}]")));
+                return Err(Error::Weights(format!(
+                    "`{ADALN_TABLE_KEY}` is {shape:?}, expected [grid, {adaln_in}]"
+                )));
             }
             let data = src.get(ADALN_TABLE_KEY, &shape)?;
-            TimeEmbedder::from_table(h3_core::timestep::AdalnTable { grid: shape[0], width: shape[1], data })
+            TimeEmbedder::from_table(h3_core::timestep::AdalnTable {
+                grid: shape[0],
+                width: shape[1],
+                data,
+            })
         } else {
-        TimeEmbedder {
-            table: None,
-            freq_dim: cfg.freq_dim,
-            l1w: {
-                let mut w = src.get("time_embedder.linear_1.weight", &[te_in, cfg.freq_dim])?;
-                for a in adapters {
-                    a.apply_weight("time_embedder.linear_1", &mut w, te_in, cfg.freq_dim)?;
-                }
-                w
-            },
-            l1b: {
-                let mut b = src.get("time_embedder.linear_1.bias", &[te_in])?;
-                for a in adapters {
-                    a.apply_bias("time_embedder.linear_1", &mut b)?;
-                }
-                b
-            },
-            l2w: {
-                let mut w = src.get("time_embedder.linear_2.weight", &[cfg.time_embed_dim, te_in])?;
-                for a in adapters {
-                    a.apply_weight("time_embedder.linear_2", &mut w, cfg.time_embed_dim, te_in)?;
-                }
-                w
-            },
-            l2b: {
-                let mut b = src.get("time_embedder.linear_2.bias", &[cfg.time_embed_dim])?;
-                for a in adapters {
-                    a.apply_bias("time_embedder.linear_2", &mut b)?;
-                }
-                b
-            },
-            basis: match cfg.adaln_rank {
-                Some(r) => Some(src.get("adaln_basis.weight", &[r, cfg.time_embed_dim])?),
-                None => None,
-            },
-        }
+            TimeEmbedder {
+                table: None,
+                freq_dim: cfg.freq_dim,
+                l1w: {
+                    let mut w = src.get("time_embedder.linear_1.weight", &[te_in, cfg.freq_dim])?;
+                    for a in adapters {
+                        a.apply_weight("time_embedder.linear_1", &mut w, te_in, cfg.freq_dim)?;
+                    }
+                    w
+                },
+                l1b: {
+                    let mut b = src.get("time_embedder.linear_1.bias", &[te_in])?;
+                    for a in adapters {
+                        a.apply_bias("time_embedder.linear_1", &mut b)?;
+                    }
+                    b
+                },
+                l2w: {
+                    let mut w = src.get(
+                        "time_embedder.linear_2.weight",
+                        &[cfg.time_embed_dim, te_in],
+                    )?;
+                    for a in adapters {
+                        a.apply_weight(
+                            "time_embedder.linear_2",
+                            &mut w,
+                            cfg.time_embed_dim,
+                            te_in,
+                        )?;
+                    }
+                    w
+                },
+                l2b: {
+                    let mut b = src.get("time_embedder.linear_2.bias", &[cfg.time_embed_dim])?;
+                    for a in adapters {
+                        a.apply_bias("time_embedder.linear_2", &mut b)?;
+                    }
+                    b
+                },
+                basis: match cfg.adaln_rank {
+                    Some(r) => Some(src.get("adaln_basis.weight", &[r, cfg.time_embed_dim])?),
+                    None => None,
+                },
+            }
         };
         let norm_out_lin = {
             let mut w = src.get("norm_out.linear.weight", &[2 * d, adaln_in])?;
@@ -440,13 +556,25 @@ impl<B: Backend> H3Dit<B> {
             let video_b = src.get("proj_out.bias", &[heads_n * vp])?;
             let audio_w = src.get("audio_proj_out.weight", &[heads_n * ap, d])?;
             let audio_b = src.get("audio_proj_out.bias", &[heads_n * ap])?;
-            let pdd = PddHeads { steps: heads_n, video_w, video_b, audio_w, audio_b };
+            let pdd = PddHeads {
+                steps: heads_n,
+                video_w,
+                video_b,
+                audio_w,
+                audio_b,
+            };
             // Default heads: the first fine-grid interval.
             let w = vec![1.0f64 / heads_n as f64; heads_n];
             let heads = fused_heads(be, &pdd, &w, &w, 0, heads_n, d);
             (heads, Some(pdd))
         } else {
-            (OutputHeads { video: plain("proj_out")?, audio: plain("audio_proj_out")? }, None)
+            (
+                OutputHeads {
+                    video: plain("proj_out")?,
+                    audio: plain("audio_proj_out")?,
+                },
+                None,
+            )
         };
         let _ = qkv;
         Ok(Self {
@@ -472,9 +600,27 @@ impl<B: Backend> H3Dit<B> {
     /// Fuse the PDD heads of fine-grid block `[start, end)` with each
     /// modality's integration weights over the whole grid (normalised within
     /// the block).
-    pub fn fused_heads(&self, be: &B, video_weights: &[f64], audio_weights: &[f64], start: usize, end: usize) -> OutputHeads<B> {
-        let pdd = self.pdd.as_ref().expect("fused_heads needs a PDD checkpoint");
-        fused_heads(be, pdd, video_weights, audio_weights, start, end, self.cfg.hidden)
+    pub fn fused_heads(
+        &self,
+        be: &B,
+        video_weights: &[f64],
+        audio_weights: &[f64],
+        start: usize,
+        end: usize,
+    ) -> OutputHeads<B> {
+        let pdd = self
+            .pdd
+            .as_ref()
+            .expect("fused_heads needs a PDD checkpoint");
+        fused_heads(
+            be,
+            pdd,
+            video_weights,
+            audio_weights,
+            start,
+            end,
+            self.cfg.hidden,
+        )
     }
 
     /// The modulation tables for `timesteps` (clean times in `[0, 1]`),
@@ -504,14 +650,31 @@ impl<B: Backend> H3Dit<B> {
         let mut blocks = Vec::with_capacity(cfg.layers);
         for l in 0..cfg.layers {
             let key = format!("transformer_blocks.{l}.adaln_proj.linear");
-            let lin = linear::load_host(src, &shapes, &[&key], true, WeightQuant::Native, adapters, false)?.upload(be);
-            be.linear(&gx, 0, u, &lin.w, lin.b.as_ref(), Act::None, &gy, 0);
+            // LoRA pairs on the modulation (LightX2V's H3 Turbo 8-step: rank 16)
+            // run as a branch like the block linears' (a merge into the device
+            // weight would round most of the delta away).
+            let lin = linear::load_host(
+                src,
+                &shapes,
+                &[&key],
+                true,
+                WeightQuant::Native,
+                adapters,
+                true,
+            )?
+            .upload(be);
+            let t = (lin.rank() > 0).then(|| be.alloc(u * lin.rank()));
+            lin.apply(be, &gx, 0, u, &gy, 0, t.as_ref());
             let mut t = be.download(&gy);
             t.truncate(u * mods);
             if let Some(f) = extra {
                 let delta = f(l, timesteps);
                 if delta.len() != t.len() {
-                    return Err(Error::Msg(format!("AdaLN delta for block {l} has {} values, expected {}", delta.len(), t.len())));
+                    return Err(Error::Msg(format!(
+                        "AdaLN delta for block {l} has {} values, expected {}",
+                        delta.len(),
+                        t.len()
+                    )));
                 }
                 t.iter_mut().zip(delta).for_each(|(a, b)| *a += b);
             }
@@ -520,20 +683,41 @@ impl<B: Backend> H3Dit<B> {
         let (hw, hb) = &self.norm_out_lin;
         let mut head = Vec::with_capacity(u * 2 * d);
         for i in 0..u {
-            head.extend(h3_core::timestep::matvec(hw, Some(hb), &x[i * adaln_in..(i + 1) * adaln_in]));
+            head.extend(h3_core::timestep::matvec(
+                hw,
+                Some(hb),
+                &x[i * adaln_in..(i + 1) * adaln_in],
+            ));
         }
-        Ok(AdalnTables { timesteps: timesteps.to_vec(), blocks, head, d })
+        Ok(AdalnTables {
+            timesteps: timesteps.to_vec(),
+            blocks,
+            head,
+            d,
+        })
     }
 
     /// Device tables for one step: `unique` are the step's distinct timesteps
     /// (sorted, from [`h3_core::packing::row_timesteps`]), `t_idx[row]` the
     /// row's index into them, `tags[row]` its modality.
-    pub fn step_mods(&self, be: &B, tables: &AdalnTables, unique: &[f32], t_idx: &[u32], tags: &[u8], dense: bool) -> Result<StepMods<B>> {
+    pub fn step_mods(
+        &self,
+        be: &B,
+        tables: &AdalnTables,
+        unique: &[f32],
+        t_idx: &[u32],
+        tags: &[u8],
+        dense: bool,
+    ) -> Result<StepMods<B>> {
         let d = self.cfg.hidden;
         let slots = H3Config::MOD_SLOTS;
         let mut us = Vec::with_capacity(unique.len());
         for &t in unique {
-            us.push(tables.index_of(t).ok_or_else(|| Error::Msg(format!("no AdaLN table for timestep {t}")))?);
+            us.push(
+                tables
+                    .index_of(t)
+                    .ok_or_else(|| Error::Msg(format!("no AdaLN table for timestep {t}")))?,
+            );
         }
         let blocks = tables
             .blocks
@@ -551,7 +735,11 @@ impl<B: Backend> H3Dit<B> {
         for &u in &us {
             head.extend_from_slice(&tables.head[u * 2 * d..(u + 1) * 2 * d]);
         }
-        let idx: Vec<u32> = t_idx.iter().zip(tags).map(|(&t, &g)| t * 3 + g as u32).collect();
+        let idx: Vec<u32> = t_idx
+            .iter()
+            .zip(tags)
+            .map(|(&t, &g)| t * 3 + g as u32)
+            .collect();
         Ok(StepMods {
             adaln_idx: be.upload_u32(&idx),
             t_idx: be.upload_u32(t_idx),
@@ -567,11 +755,24 @@ impl<B: Backend> H3Dit<B> {
     pub fn refine_text(&self, be: &B, embeds: &[f32]) -> B::Buf {
         let c = &self.cfg;
         let (d, text_dim) = (c.hidden, c.text_dim);
-        assert_eq!(embeds.len() % text_dim, 0, "prompt embeds must be [rows, text_dim]");
+        assert_eq!(
+            embeds.len() % text_dim,
+            0,
+            "prompt embeds must be [rows, text_dim]"
+        );
         let rows = embeds.len() / text_dim;
         let x = be.upload(embeds);
         let h = be.alloc(rows * d);
-        be.linear(&x, 0, rows, &self.context_embedder.w, self.context_embedder.b.as_ref(), Act::None, &h, 0);
+        be.linear(
+            &x,
+            0,
+            rows,
+            &self.context_embedder.w,
+            self.context_embedder.b.as_ref(),
+            Act::None,
+            &h,
+            0,
+        );
         let qkv = c.dim();
         let bufs = (
             be.alloc(rows * d),
@@ -584,39 +785,91 @@ impl<B: Backend> H3Dit<B> {
             be.alloc(rows * 2 * c.ffn_dim),
             be.alloc(rows * c.ffn_dim),
         );
-        let (normed, qkvb, q, k, v, attn, tmp, hid, hid2) = (&bufs.0, &bufs.1, &bufs.2, &bufs.3, &bufs.4, &bufs.5, &bufs.6, &bufs.7, &bufs.8);
+        let (normed, qkvb, q, k, v, attn, tmp, hid, hid2) = (
+            &bufs.0, &bufs.1, &bufs.2, &bufs.3, &bufs.4, &bufs.5, &bufs.6, &bufs.7, &bufs.8,
+        );
         let rank = self.refiner.iter().map(AttnFf::rank).max().unwrap_or(0);
         let lt = (rank > 0).then(|| be.alloc(rows * rank));
         let t = lt.as_ref();
         for bl in &self.refiner {
-            be.rms_norm(&h, rows, d, Some(&bl.norm1), Modulation::None, c.norm_eps, normed);
+            be.rms_norm(
+                &h,
+                rows,
+                d,
+                Some(&bl.norm1),
+                Modulation::None,
+                c.norm_eps,
+                normed,
+            );
             bl.qkv.apply(be, normed, 0, rows, qkvb, 0, t);
             self.split_qkv(be, bl, qkvb, rows, None, q, k, v);
-            be.attention(q, k, v, c.heads, c.heads, rows, rows, c.head_dim, false, attn);
+            be.attention(
+                q, k, v, c.heads, c.heads, rows, rows, c.head_dim, false, attn,
+            );
             bl.out.apply(be, attn, 0, rows, tmp, 0, t);
-            be.residual_rms_norm(&h, tmp, rows, d, Gate::None, Some(&bl.norm2), Modulation::None, c.norm_eps, normed);
+            be.residual_rms_norm(
+                &h,
+                tmp,
+                rows,
+                d,
+                Gate::None,
+                Some(&bl.norm2),
+                Modulation::None,
+                c.norm_eps,
+                normed,
+            );
             bl.ff_in.apply(be, normed, 0, rows, hid, 0, t);
             be.swiglu(hid, rows, c.ffn_dim, hid2);
             bl.ff_out.apply(be, hid2, 0, rows, tmp, 0, t);
             be.gate_residual(&h, tmp, rows, d, Gate::None);
         }
         let out = be.alloc(rows * d);
-        be.rms_norm(&h, rows, d, Some(&self.final_norm), Modulation::None, c.final_norm_eps, &out);
+        be.rms_norm(
+            &h,
+            rows,
+            d,
+            Some(&self.final_norm),
+            Modulation::None,
+            c.final_norm_eps,
+            &out,
+        );
         out
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn split_qkv(&self, be: &B, bl: &AttnFf<B>, qkv: &B::Buf, rows: usize, rope: Option<Rope<'_, B::Buf>>, q: &B::Buf, k: &B::Buf, v: &B::Buf) {
+    fn split_qkv(
+        &self,
+        be: &B,
+        bl: &AttnFf<B>,
+        qkv: &B::Buf,
+        rows: usize,
+        rope: Option<Rope<'_, B::Buf>>,
+        q: &B::Buf,
+        k: &B::Buf,
+        v: &B::Buf,
+    ) {
         let c = &self.cfg;
         let w = c.dim();
-        let nq = HeadNorm { w: Some(&bl.norm_q), eps: c.qk_norm_eps };
-        let nk = HeadNorm { w: Some(&bl.norm_k), eps: c.qk_norm_eps };
+        let nq = HeadNorm {
+            w: Some(&bl.norm_q),
+            eps: c.qk_norm_eps,
+        };
+        let nk = HeadNorm {
+            w: Some(&bl.norm_k),
+            eps: c.qk_norm_eps,
+        };
         be.head_split(qkv, rows, 3 * w, 0, c.heads, c.head_dim, Some(nq), rope, q);
         be.head_split(qkv, rows, 3 * w, w, c.heads, c.head_dim, Some(nk), rope, k);
         be.head_split(qkv, rows, 3 * w, 2 * w, c.heads, c.head_dim, None, None, v);
     }
 
-    pub fn workspace(&self, be: &B, layout: &Layout, ffn_chunk: usize, attention: Attention) -> Result<Workspace<B>> {
+    pub fn workspace(
+        &self,
+        be: &B,
+        layout: &Layout,
+        ffn_chunk: usize,
+        attention: Attention,
+    ) -> Result<Workspace<B>> {
         let c = &self.cfg;
         let s = layout.sequence_length;
         let (d, qkv) = (c.hidden, c.dim());
@@ -627,13 +880,28 @@ impl<B: Backend> H3Dit<B> {
         let rope = h3_rope(&layout.position_ids, c.rope_freq_dim, c.rope_theta);
         let (vsa, vsa_dense) = match attention {
             Attention::Dense { .. } => (None, None),
-            Attention::Vsa { sparsity, tile, ref_sparsity, qk8, pv8 } => {
+            Attention::Vsa {
+                sparsity,
+                tile,
+                ref_sparsity,
+                qk8,
+                pv8,
+            } => {
                 if !be.vsa_supported(c.head_dim) {
-                    return Err(Error::Msg(format!("backend {} cannot run VSA at head_dim {}", be.name(), c.head_dim)));
+                    return Err(Error::Msg(format!(
+                        "backend {} cannot run VSA at head_dim {}",
+                        be.name(),
+                        c.head_dim
+                    )));
                 }
                 let segs = segments_for_layout(layout, c.patch, sparsity, ref_sparsity);
-                let spec = VsaSpec::new(&segs, tile, c.heads, c.head_dim).with_qk8(qk8).with_pv8(pv8);
-                (Some(be.vsa_prepare(&spec)), Some(be.vsa_prepare(&spec.dense())))
+                let spec = VsaSpec::new(&segs, tile, c.heads, c.head_dim)
+                    .with_qk8(qk8)
+                    .with_pv8(pv8);
+                (
+                    Some(be.vsa_prepare(&spec)),
+                    Some(be.vsa_prepare(&spec.dense())),
+                )
             }
         };
         Ok(Workspace {
@@ -649,7 +917,11 @@ impl<B: Backend> H3Dit<B> {
             h: be.alloc(s * d),
             normed: be.alloc(s * d),
             qkv: be.alloc(s * 3 * qkv),
-            g: if self.has_gate && matches!(attention, Attention::Vsa { .. }) { be.alloc(s * qkv) } else { be.alloc(1) },
+            g: if self.has_gate && matches!(attention, Attention::Vsa { .. }) {
+                be.alloc(s * qkv)
+            } else {
+                be.alloc(1)
+            },
             q: be.alloc(s * qkv),
             k: be.alloc(s * qkv),
             v: be.alloc(s * qkv),
@@ -685,19 +957,45 @@ impl<B: Backend> H3Dit<B> {
         // Assemble the packed sequence.
         be.copy(text, 0, &ws.h, 0, ws.text_rows * d);
         for r in &ws.video_runs {
-            be.linear(video_rows, r.offset, r.rows, &self.proj_in.w, self.proj_in.b.as_ref(), Act::None, &ws.h, r.start);
+            be.linear(
+                video_rows,
+                r.offset,
+                r.rows,
+                &self.proj_in.w,
+                self.proj_in.b.as_ref(),
+                Act::None,
+                &ws.h,
+                r.start,
+            );
         }
         for r in &ws.audio_runs {
-            be.linear(audio_rows, r.offset, r.rows, &self.audio_proj_in.w, self.audio_proj_in.b.as_ref(), Act::None, &ws.h, r.start);
+            be.linear(
+                audio_rows,
+                r.offset,
+                r.rows,
+                &self.audio_proj_in.w,
+                self.audio_proj_in.b.as_ref(),
+                Act::None,
+                &ws.h,
+                r.start,
+            );
         }
-        let rope = Some(Rope { cos: &ws.rope_cos, sin: &ws.rope_sin, rot: c.rotary_dim() });
+        let rope = Some(Rope {
+            cos: &ws.rope_cos,
+            sin: &ws.rope_sin,
+            rot: c.rotary_dim(),
+        });
         // Streamed blocks: block l + 1's weights are uploaded on the backend's
         // side queue while block l computes (`prefetch_*`); at most two blocks
         // are resident, and a block is freed only after the compute queue has
         // passed it (`prefetch_release`). `H3_PREFETCH_DEPTH=2` keeps two
         // blocks in flight (three resident), for links where one block's
         // upload does not fit inside one block's compute.
-        let depth: usize = std::env::var("H3_PREFETCH_DEPTH").ok().and_then(|v| v.parse().ok()).unwrap_or(1).clamp(1, 2);
+        let depth: usize = std::env::var("H3_PREFETCH_DEPTH")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(1)
+            .clamp(1, 2);
         let prefetch = |l: usize| -> Option<AttnFf<B>> {
             match self.blocks.get(l) {
                 Some(Residency::Host(h)) => {
@@ -712,7 +1010,10 @@ impl<B: Backend> H3Dit<B> {
         // H3_TRACE=N: magnitude and non-finite count of the hidden state after
         // every block of the first N forwards (then only the output), to localize
         // a blow-up on a backend without a host oracle at this size.
-        let trace_n: usize = std::env::var("H3_TRACE").ok().and_then(|v| v.parse().ok()).unwrap_or(0);
+        let trace_n: usize = std::env::var("H3_TRACE")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0);
         let trace = trace_n > 0;
         static FORWARDS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let first = FORWARDS.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < trace_n;
@@ -720,14 +1021,21 @@ impl<B: Backend> H3Dit<B> {
             if trace {
                 be.sync();
                 let v = be.download(buf);
-                let (mx, nf) = v.iter().fold((0f32, 0usize), |(m, n), &x| if x.is_finite() { (m.max(x.abs()), n) } else { (m, n + 1) });
+                let (mx, nf) = v.iter().fold((0f32, 0usize), |(m, n), &x| {
+                    if x.is_finite() {
+                        (m.max(x.abs()), n)
+                    } else {
+                        (m, n + 1)
+                    }
+                });
                 eprintln!("trace {tag}: max {mx:.4e}, non-finite {nf} of {}", v.len());
             }
         };
         if first {
             stat("input h", &ws.h);
         }
-        let mut staged: std::collections::VecDeque<AttnFf<B>> = (0..depth).filter_map(prefetch).collect();
+        let mut staged: std::collections::VecDeque<AttnFf<B>> =
+            (0..depth).filter_map(prefetch).collect();
         for (l, (bl, m)) in self.blocks.iter().zip(&mods.blocks).enumerate() {
             let streamed;
             let w = match bl {
@@ -738,8 +1046,24 @@ impl<B: Backend> H3Dit<B> {
                     &streamed
                 }
             };
-            let t = ModTable { table: m, idx: &mods.adaln_idx, slots: H3Config::MOD_SLOTS };
-            be.rms_norm(&ws.h, s, d, Some(&w.norm1), Modulation::Table { m: t, scale: SCALE_MSA, shift: SHIFT_MSA }, c.norm_eps, &ws.normed);
+            let t = ModTable {
+                table: m,
+                idx: &mods.adaln_idx,
+                slots: H3Config::MOD_SLOTS,
+            };
+            be.rms_norm(
+                &ws.h,
+                s,
+                d,
+                Some(&w.norm1),
+                Modulation::Table {
+                    m: t,
+                    scale: SCALE_MSA,
+                    shift: SHIFT_MSA,
+                },
+                c.norm_eps,
+                &ws.normed,
+            );
             let lt = ws.lora_t.as_ref();
             w.qkv.apply(be, &ws.normed, 0, s, &ws.qkv, 0, lt);
             self.split_qkv(be, w, &ws.qkv, s, rope, &ws.q, &ws.k, &ws.v);
@@ -747,17 +1071,36 @@ impl<B: Backend> H3Dit<B> {
                 (Some(vsa), gate) => {
                     let g = gate.as_ref().map(|gl| {
                         gl.apply(be, &ws.normed, 0, s, &ws.attn, 0, lt);
-                        be.head_split(&ws.attn, s, c.dim(), 0, c.heads, c.head_dim, None, None, &ws.g);
+                        be.head_split(
+                            &ws.attn,
+                            s,
+                            c.dim(),
+                            0,
+                            c.heads,
+                            c.head_dim,
+                            None,
+                            None,
+                            &ws.g,
+                        );
                         &ws.g
                     });
-                    let st = if mods.dense { ws.vsa_dense.as_ref().unwrap() } else { vsa };
+                    let st = if mods.dense {
+                        ws.vsa_dense.as_ref().unwrap()
+                    } else {
+                        vsa
+                    };
                     be.vsa_attention(&ws.q, &ws.k, &ws.v, g, st, &ws.attn);
                 }
                 (None, _) if matches!(ws.attention, Attention::Dense { qk8: true, .. }) => {
                     let pv8 = matches!(ws.attention, Attention::Dense { pv8: true, .. });
-                    be.attention_qk8(&ws.q, &ws.k, &ws.v, c.heads, c.heads, s, s, c.head_dim, false, pv8, &ws.attn)
+                    be.attention_qk8(
+                        &ws.q, &ws.k, &ws.v, c.heads, c.heads, s, s, c.head_dim, false, pv8,
+                        &ws.attn,
+                    )
                 }
-                (None, _) => be.attention(&ws.q, &ws.k, &ws.v, c.heads, c.heads, s, s, c.head_dim, false, &ws.attn),
+                (None, _) => be.attention(
+                    &ws.q, &ws.k, &ws.v, c.heads, c.heads, s, s, c.head_dim, false, &ws.attn,
+                ),
             }
             if first {
                 stat(&format!("block {l} attn"), &ws.attn);
@@ -768,9 +1111,16 @@ impl<B: Backend> H3Dit<B> {
                 &ws.tmp,
                 s,
                 d,
-                Gate::Table(ModRef { table: t, slot: GATE_MSA }),
+                Gate::Table(ModRef {
+                    table: t,
+                    slot: GATE_MSA,
+                }),
                 Some(&w.norm2),
-                Modulation::Table { m: t, scale: SCALE_MLP, shift: SHIFT_MLP },
+                Modulation::Table {
+                    m: t,
+                    scale: SCALE_MLP,
+                    shift: SHIFT_MLP,
+                },
                 c.norm_eps,
                 &ws.normed,
             );
@@ -782,7 +1132,16 @@ impl<B: Backend> H3Dit<B> {
                 w.ff_out.apply(be, &ws.hid2, 0, n, &ws.tmp, r0, lt);
                 r0 += n;
             }
-            be.gate_residual(&ws.h, &ws.tmp, s, d, Gate::Table(ModRef { table: t, slot: GATE_MLP }));
+            be.gate_residual(
+                &ws.h,
+                &ws.tmp,
+                s,
+                d,
+                Gate::Table(ModRef {
+                    table: t,
+                    slot: GATE_MLP,
+                }),
+            );
             if first {
                 stat(&format!("block {l} h"), &ws.h);
             }
@@ -793,14 +1152,48 @@ impl<B: Backend> H3Dit<B> {
                 be.prefetch_release();
             }
         }
-        let ht = ModTable { table: &mods.head, idx: &mods.t_idx, slots: 2 };
-        be.rms_norm(&ws.h, s, d, Some(&self.norm_out_w), Modulation::Table { m: ht, scale: 1, shift: 0 }, c.final_norm_eps, &ws.normed);
+        let ht = ModTable {
+            table: &mods.head,
+            idx: &mods.t_idx,
+            slots: 2,
+        };
+        be.rms_norm(
+            &ws.h,
+            s,
+            d,
+            Some(&self.norm_out_w),
+            Modulation::Table {
+                m: ht,
+                scale: 1,
+                shift: 0,
+            },
+            c.final_norm_eps,
+            &ws.normed,
+        );
         let heads = heads.unwrap_or(&self.heads);
         for r in &ws.video_runs {
-            be.linear(&ws.normed, r.start, r.rows, &heads.video.w, heads.video.b.as_ref(), Act::None, video_out, r.offset);
+            be.linear(
+                &ws.normed,
+                r.start,
+                r.rows,
+                &heads.video.w,
+                heads.video.b.as_ref(),
+                Act::None,
+                video_out,
+                r.offset,
+            );
         }
         for r in &ws.audio_runs {
-            be.linear(&ws.normed, r.start, r.rows, &heads.audio.w, heads.audio.b.as_ref(), Act::None, audio_out, r.offset);
+            be.linear(
+                &ws.normed,
+                r.start,
+                r.rows,
+                &heads.audio.w,
+                heads.audio.b.as_ref(),
+                Act::None,
+                audio_out,
+                r.offset,
+            );
         }
     }
 
@@ -822,11 +1215,22 @@ impl<B: Backend> H3Dit<B> {
     }
 }
 
-fn fused_heads<B: Backend>(be: &B, pdd: &PddHeads, vw: &[f64], aw: &[f64], start: usize, end: usize, d: usize) -> OutputHeads<B> {
+fn fused_heads<B: Backend>(
+    be: &B,
+    pdd: &PddHeads,
+    vw: &[f64],
+    aw: &[f64],
+    start: usize,
+    end: usize,
+    d: usize,
+) -> OutputHeads<B> {
     assert!(start < end && end <= pdd.steps && vw.len() == pdd.steps && aw.len() == pdd.steps);
     let fuse = |w: &[f32], b: &[f32], weights: &[f64]| -> (Vec<f32>, Vec<f32>) {
         let total: f64 = weights[start..end].iter().sum();
-        assert!(total != 0.0 && total.is_finite(), "PDD block weight must be finite and non-zero");
+        assert!(
+            total != 0.0 && total.is_finite(),
+            "PDD block weight must be finite and non-zero"
+        );
         let out = w.len() / (pdd.steps * d);
         let mut fw = vec![0.0f64; out * d];
         let mut fb = vec![0.0f64; out];
@@ -839,14 +1243,29 @@ fn fused_heads<B: Backend>(be: &B, pdd: &PddHeads, vw: &[f64], aw: &[f64], start
                 *a += n * x as f64;
             }
         }
-        (fw.into_iter().map(|v| v as f32).collect(), fb.into_iter().map(|v| v as f32).collect())
+        (
+            fw.into_iter().map(|v| v as f32).collect(),
+            fb.into_iter().map(|v| v as f32).collect(),
+        )
     };
     let (vw, vb) = fuse(&pdd.video_w, &pdd.video_b, vw);
     let (aw, ab) = fuse(&pdd.audio_w, &pdd.audio_b, aw);
     let (vo, ao) = (vb.len(), ab.len());
     OutputHeads {
-        video: Linear { w: be.weight(&vw, vo, d), b: Some(be.upload(&vb)), rows: vo, cols: d , lora: None },
-        audio: Linear { w: be.weight(&aw, ao, d), b: Some(be.upload(&ab)), rows: ao, cols: d , lora: None },
+        video: Linear {
+            w: be.weight(&vw, vo, d),
+            b: Some(be.upload(&vb)),
+            rows: vo,
+            cols: d,
+            lora: None,
+        },
+        audio: Linear {
+            w: be.weight(&aw, ao, d),
+            b: Some(be.upload(&ab)),
+            rows: ao,
+            cols: d,
+            lora: None,
+        },
     }
 }
 
@@ -859,7 +1278,23 @@ mod tests {
         let r = runs(&[3, 4, 5, 9, 10, 20]);
         assert_eq!(
             r,
-            vec![Run { start: 3, rows: 3, offset: 0 }, Run { start: 9, rows: 2, offset: 3 }, Run { start: 20, rows: 1, offset: 5 }]
+            vec![
+                Run {
+                    start: 3,
+                    rows: 3,
+                    offset: 0
+                },
+                Run {
+                    start: 9,
+                    rows: 2,
+                    offset: 3
+                },
+                Run {
+                    start: 20,
+                    rows: 1,
+                    offset: 5
+                }
+            ]
         );
     }
 }

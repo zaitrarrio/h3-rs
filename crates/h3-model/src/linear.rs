@@ -37,11 +37,38 @@ impl<B: Backend> Linear<B> {
     /// activation (the branch must land before one). `t` holds `rows × rank`
     /// when the linear has a branch ([`Linear::rank`]).
     #[allow(clippy::too_many_arguments)]
-    pub fn apply(&self, be: &B, x: &B::Buf, x_row: usize, rows: usize, y: &B::Buf, y_row: usize, t: Option<&B::Buf>) {
-        be.linear(x, x_row, rows, &self.w, self.b.as_ref(), h3_core::backend::Act::None, y, y_row);
+    pub fn apply(
+        &self,
+        be: &B,
+        x: &B::Buf,
+        x_row: usize,
+        rows: usize,
+        y: &B::Buf,
+        y_row: usize,
+        t: Option<&B::Buf>,
+    ) {
+        be.linear(
+            x,
+            x_row,
+            rows,
+            &self.w,
+            self.b.as_ref(),
+            h3_core::backend::Act::None,
+            y,
+            y_row,
+        );
         if let Some(l) = &self.lora {
             let t = t.expect("a linear with a LoRA branch needs its rank scratch");
-            be.linear(x, x_row, rows, &l.a, None, h3_core::backend::Act::None, t, 0);
+            be.linear(
+                x,
+                x_row,
+                rows,
+                &l.a,
+                None,
+                h3_core::backend::Act::None,
+                t,
+                0,
+            );
             be.linear_add(t, 0, rows, &l.b, self.rows, y, y_row);
         }
     }
@@ -107,9 +134,15 @@ impl HostWeight {
     pub fn pin<B: Backend>(&self, be: &B, out: &mut Vec<PinGuard>) {
         let bufs: Vec<&[u8]> = match self {
             // SAFETY (both casts): `f32` / `i8` reinterpreted as the bytes of the same allocation.
-            HostWeight::F32(v) => vec![unsafe { std::slice::from_raw_parts(v.as_ptr() as *const u8, v.len() * 4) }],
-            HostWeight::Bf16(v) => vec![unsafe { std::slice::from_raw_parts(v.as_ptr() as *const u8, v.len() * 2) }],
-            HostWeight::Q8(q) => vec![unsafe { std::slice::from_raw_parts(q.q.as_ptr() as *const u8, q.q.len()) }],
+            HostWeight::F32(v) => {
+                vec![unsafe { std::slice::from_raw_parts(v.as_ptr() as *const u8, v.len() * 4) }]
+            }
+            HostWeight::Bf16(v) => {
+                vec![unsafe { std::slice::from_raw_parts(v.as_ptr() as *const u8, v.len() * 2) }]
+            }
+            HostWeight::Q8(q) => {
+                vec![unsafe { std::slice::from_raw_parts(q.q.as_ptr() as *const u8, q.q.len()) }]
+            }
             HostWeight::Q4(_) => vec![],
             HostWeight::Nvfp4(q) => vec![&q.packed, &q.scales],
             HostWeight::Mxfp8(q) => vec![&q.codes, &q.scales],
@@ -124,7 +157,10 @@ impl HostWeight {
     /// stream every step: half the host memory, and the upload is a plain copy.
     pub fn to_bf16(&mut self) {
         if let HostWeight::F32(v) = self {
-            let h: Vec<u16> = v.iter().map(|&x| half::bf16::from_f32(x).to_bits()).collect();
+            let h: Vec<u16> = v
+                .iter()
+                .map(|&x| half::bf16::from_f32(x).to_bits())
+                .collect();
             *self = HostWeight::Bf16(h);
         }
     }
@@ -170,7 +206,11 @@ impl HostLinear {
             b: self.b.as_ref().map(|b| be.upload(b)),
             rows: self.rows,
             cols: self.cols,
-            lora: self.lora.as_ref().map(|l| LowRank { a: l.a.upload(be, l.rank, self.cols), b: l.b.upload(be, self.rows, l.rank), rank: l.rank }),
+            lora: self.lora.as_ref().map(|l| LowRank {
+                a: l.a.upload(be, l.rank, self.cols),
+                b: l.b.upload(be, self.rows, l.rank),
+                rank: l.rank,
+            }),
         }
     }
 }
@@ -194,17 +234,31 @@ pub fn load_host(
     // deltas (set_weight / diff) force the f32 rebuild, so a stored quantized
     // file keeps its codes under a LoRA.
     let branch = branch && lora_branches();
-    let touched = adapters.iter().any(|a| keys.iter().any(|k| if branch { a.touches_dense(k) } else { a.touches(k) }));
+    let touched = adapters.iter().any(|a| {
+        keys.iter().any(|k| {
+            if branch {
+                a.touches_dense(k)
+            } else {
+                a.touches(k)
+            }
+        })
+    });
     // (row offset, rows, A [r, cols], scale·B [rows, r], r) per key and adapter.
     let mut pairs: Vec<(usize, usize, Vec<f32>, Vec<f32>, usize)> = Vec::new();
-    let (mut w, mut b, mut stored, mut rows, mut cols) = (Vec::new(), Vec::new(), Vec::<Stored>::new(), 0usize, 0usize);
+    let (mut w, mut b, mut stored, mut rows, mut cols) =
+        (Vec::new(), Vec::new(), Vec::<Stored>::new(), 0usize, 0usize);
     for k in keys {
-        let shape = shapes.get(&format!("{k}.weight")).ok_or_else(|| err(format!("`{k}` is not in the manifest")))?;
+        let shape = shapes
+            .get(&format!("{k}.weight"))
+            .ok_or_else(|| err(format!("`{k}` is not in the manifest")))?;
         let (o, i) = (shape[0], shape[1..].iter().product::<usize>());
         match src.stored(k)? {
             Some(s) if !touched => {
                 if s.shape() != (o, i) {
-                    return Err(err(format!("`{k}` is stored {:?}, expected {o}x{i}", s.shape())));
+                    return Err(err(format!(
+                        "`{k}` is stored {:?}, expected {o}x{i}",
+                        s.shape()
+                    )));
                 }
                 stored.push(s);
             }
@@ -212,7 +266,9 @@ pub fn load_host(
             // A linear the base lacks but an adapter sets outright (the V1
             // LoRA's `to_gate_compress.set_weight` over MiniMax-H3) starts
             // from zeros.
-            None if touched && !src.contains(&format!("{k}.weight")) => w.resize(w.len() + o * i, 0.0),
+            None if touched && !src.contains(&format!("{k}.weight")) => {
+                w.resize(w.len() + o * i, 0.0)
+            }
             None => w.extend(src.get(&format!("{k}.weight"), shape)?),
         }
         if touched {
@@ -246,23 +302,69 @@ pub fn load_host(
         match quant.for_key(keys[0]) {
             WeightQuant::Native => HostWeight::F32(w),
             WeightQuant::Int8 => HostWeight::Q8(Q8::quantize(&w, rows, cols)),
-            WeightQuant::Int4 { group, hqq, .. } => HostWeight::Q4(Q4::quantize(&w, rows, cols, group, hqq)),
+            WeightQuant::Int4 { group, hqq, .. } => {
+                HostWeight::Q4(Q4::quantize(&w, rows, cols, group, hqq))
+            }
             // NVFP4 is only ever read from a checkpoint; a dequantized merge is
             // re-quantized to int8 so the device cost stays small.
             WeightQuant::Nvfp4 => HostWeight::Q8(Q8::quantize(&w, rows, cols)),
-            WeightQuant::Mxfp8 if cols.is_multiple_of(32) => HostWeight::Mxfp8(Mxfp8::quantize(&w, rows, cols)),
+            WeightQuant::Mxfp8 if cols.is_multiple_of(32) => {
+                HostWeight::Mxfp8(Mxfp8::quantize(&w, rows, cols))
+            }
             WeightQuant::Mxfp8 => HostWeight::F32(w),
         }
     } else if stored.len() != keys.len() {
         return Err(err(format!("{keys:?}: only some are stored quantized")));
     } else if stored.iter().all(|s| matches!(s, Stored::Q8(_))) {
-        HostWeight::Q8(Q8::concat(stored.into_iter().map(|s| if let Stored::Q8(q) = s { q } else { unreachable!() }).collect()))
+        HostWeight::Q8(Q8::concat(
+            stored
+                .into_iter()
+                .map(|s| {
+                    if let Stored::Q8(q) = s {
+                        q
+                    } else {
+                        unreachable!()
+                    }
+                })
+                .collect(),
+        ))
     } else if stored.iter().all(|s| matches!(s, Stored::Mxfp8(_))) {
-        HostWeight::Mxfp8(Mxfp8::concat(stored.into_iter().map(|s| if let Stored::Mxfp8(q) = s { q } else { unreachable!() }).collect()))
+        HostWeight::Mxfp8(Mxfp8::concat(
+            stored
+                .into_iter()
+                .map(|s| {
+                    if let Stored::Mxfp8(q) = s {
+                        q
+                    } else {
+                        unreachable!()
+                    }
+                })
+                .collect(),
+        ))
     } else if stored.iter().all(|s| matches!(s, Stored::Q4(_))) {
-        HostWeight::Q4(Q4::concat(stored.into_iter().map(|s| if let Stored::Q4(q) = s { q } else { unreachable!() }).collect()))
+        HostWeight::Q4(Q4::concat(
+            stored
+                .into_iter()
+                .map(|s| {
+                    if let Stored::Q4(q) = s {
+                        q
+                    } else {
+                        unreachable!()
+                    }
+                })
+                .collect(),
+        ))
     } else if stored.iter().all(|s| matches!(s, Stored::Nvfp4(_))) {
-        let parts: Vec<Nvfp4> = stored.into_iter().map(|s| if let Stored::Nvfp4(q) = s { q } else { unreachable!() }).collect();
+        let parts: Vec<Nvfp4> = stored
+            .into_iter()
+            .map(|s| {
+                if let Stored::Nvfp4(q) = s {
+                    q
+                } else {
+                    unreachable!()
+                }
+            })
+            .collect();
         match Nvfp4::concat(parts.clone()) {
             Some(q) => HostWeight::Nvfp4(q),
             None => {
@@ -284,13 +386,24 @@ pub fn load_host(
         for (r0, o, fa, fb, r) in &pairs {
             a.extend_from_slice(fa);
             for i in 0..*o {
-                b[(r0 + i) * rank + c..(r0 + i) * rank + c + r].copy_from_slice(&fb[i * r..(i + 1) * r]);
+                b[(r0 + i) * rank + c..(r0 + i) * rank + c + r]
+                    .copy_from_slice(&fb[i * r..(i + 1) * r]);
             }
             c += r;
         }
-        HostLowRank { a: HostWeight::F32(a), b: HostWeight::F32(b), rank }
+        HostLowRank {
+            a: HostWeight::F32(a),
+            b: HostWeight::F32(b),
+            rank,
+        }
     });
-    Ok(HostLinear { w, b: bias.then_some(b), rows, cols, lora })
+    Ok(HostLinear {
+        w,
+        b: bias.then_some(b),
+        rows,
+        cols,
+        lora,
+    })
 }
 
 pub fn load<B: Backend>(
@@ -306,10 +419,27 @@ pub fn load<B: Backend>(
 }
 
 /// A plain f32 `[rows, cols]` matrix (+ bias) from the source, as a device linear.
-pub fn load_plain<B: Backend>(be: &B, src: &dyn WeightSource, key: &str, rows: usize, cols: usize, bias: bool) -> Result<Linear<B>> {
+pub fn load_plain<B: Backend>(
+    be: &B,
+    src: &dyn WeightSource,
+    key: &str,
+    rows: usize,
+    cols: usize,
+    bias: bool,
+) -> Result<Linear<B>> {
     let w = src.get(&format!("{key}.weight"), &[rows, cols])?;
-    let b = if bias { Some(be.upload(&src.get(&format!("{key}.bias"), &[rows])?)) } else { None };
-    Ok(Linear { w: be.weight(&w, rows, cols), b, rows, cols, lora: None })
+    let b = if bias {
+        Some(be.upload(&src.get(&format!("{key}.bias"), &[rows])?))
+    } else {
+        None
+    };
+    Ok(Linear {
+        w: be.weight(&w, rows, cols),
+        b,
+        rows,
+        cols,
+        lora: None,
+    })
 }
 
 /// A 1-D vector from the source.

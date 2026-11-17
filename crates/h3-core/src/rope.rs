@@ -40,11 +40,22 @@ pub fn h3_rope(positions: &[[f64; 3]], rope_freq_dim: usize, theta: f64) -> Rope
 
 /// ViT decoder table: `rot` rotated channels (48), three axes, `(t, h, w)`
 /// token order, then `suffix` rows (register + cls tokens) at position 0.
-pub fn vae_decoder_rope(grid: (usize, usize, usize), rot: usize, theta: f64, suffix: usize) -> RopeTable {
+pub fn vae_decoder_rope(
+    grid: (usize, usize, usize),
+    rot: usize,
+    theta: f64,
+    suffix: usize,
+) -> RopeTable {
     let per_axis = rot / 6;
-    let inv: Vec<f64> = (0..per_axis).map(|k| 1.0 / theta.powf(k as f64 * 6.0 / rot as f64)).collect();
+    let inv: Vec<f64> = (0..per_axis)
+        .map(|k| 1.0 / theta.powf(k as f64 * 6.0 / rot as f64))
+        .collect();
     let half = rot / 2;
-    let coords = |n: usize| -> Vec<f64> { (0..n).map(|i| 2.0 * ((i as f64 + 0.5) / n as f64) - 1.0).collect() };
+    let coords = |n: usize| -> Vec<f64> {
+        (0..n)
+            .map(|i| 2.0 * ((i as f64 + 0.5) / n as f64) - 1.0)
+            .collect()
+    };
     let (ct, ch, cw) = (coords(grid.0), coords(grid.1), coords(grid.2));
     let n = grid.0 * grid.1 * grid.2 + suffix;
     let mut cos = Vec::with_capacity(n * half);
@@ -74,9 +85,16 @@ pub fn vae_decoder_rope(grid: (usize, usize, usize), rot: usize, theta: f64, suf
 /// Qwen3-VL text table. `positions[i] = [t, h, w]` (all equal for text
 /// tokens). Frequency `j < 64`: for `j < 3·section[1]`, axis `j % 3`
 /// (0 = t, 1 = h, 2 = w); otherwise t.
-pub fn qwen3_mrope(positions: &[[u32; 3]], head_dim: usize, theta: f64, section: [usize; 3]) -> RopeTable {
+pub fn qwen3_mrope(
+    positions: &[[u32; 3]],
+    head_dim: usize,
+    theta: f64,
+    section: [usize; 3],
+) -> RopeTable {
     let half = head_dim / 2;
-    let inv: Vec<f32> = (0..half).map(|i| (1.0 / theta.powf(2.0 * i as f64 / head_dim as f64)) as f32).collect();
+    let inv: Vec<f32> = (0..half)
+        .map(|i| (1.0 / theta.powf(2.0 * i as f64 / head_dim as f64)) as f32)
+        .collect();
     let stop_h = section[1] * 3;
     let stop_w = section[2] * 3;
     let mut cos = Vec::with_capacity(positions.len() * half);

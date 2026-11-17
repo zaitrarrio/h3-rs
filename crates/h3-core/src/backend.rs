@@ -61,7 +61,11 @@ pub enum Gate<'a, T> {
 pub enum Modulation<'a, T> {
     None,
     /// `y · (1 + table[idx][scale]) + table[idx][shift]`.
-    Table { m: ModTable<'a, T>, scale: usize, shift: usize },
+    Table {
+        m: ModTable<'a, T>,
+        scale: usize,
+        shift: usize,
+    },
 }
 
 /// Per-head normalisation inside [`Backend::head_split`]: RMSNorm over the
@@ -374,7 +378,10 @@ pub trait Backend {
     /// page-locked DMA on CUDA) instead of an f32 → bf16 pass plus a
     /// synchronous pageable copy. The default converts and calls `weight`.
     fn weight_bf16(&self, data: &[u16], rows: usize, cols: usize) -> Self::Weight {
-        let f: Vec<f32> = data.iter().map(|&b| f32::from_bits((b as u32) << 16)).collect();
+        let f: Vec<f32> = data
+            .iter()
+            .map(|&b| f32::from_bits((b as u32) << 16))
+            .collect();
         self.weight(&f, rows, cols)
     }
     /// Whether [`Backend::weight`] stores bf16 anyway, so a streamed block
@@ -451,7 +458,16 @@ pub trait Backend {
     /// a time, and adds it with [`Backend::axpby`]; CUDA accumulates in the
     /// GEMM (`beta = 1`).
     #[allow(clippy::too_many_arguments)]
-    fn linear_add(&self, x: &Self::Buf, x_row: usize, rows: usize, w: &Self::Weight, out: usize, y: &Self::Buf, y_row: usize) {
+    fn linear_add(
+        &self,
+        x: &Self::Buf,
+        x_row: usize,
+        rows: usize,
+        w: &Self::Weight,
+        out: usize,
+        y: &Self::Buf,
+        y_row: usize,
+    ) {
         if rows == 0 {
             return;
         }
@@ -501,7 +517,14 @@ pub trait Backend {
     );
 
     /// In place on `h`: `h += gate(a)`.
-    fn gate_residual(&self, h: &Self::Buf, a: &Self::Buf, rows: usize, dim: usize, gate: Gate<'_, Self::Buf>);
+    fn gate_residual(
+        &self,
+        h: &Self::Buf,
+        a: &Self::Buf,
+        rows: usize,
+        dim: usize,
+        gate: Gate<'_, Self::Buf>,
+    );
 
     /// `out = LN(x) · w + b` over rows of width `dim`.
     #[allow(clippy::too_many_arguments)]
@@ -641,7 +664,16 @@ pub trait Backend {
 
     /// In place: `y[off + i] = a·y[off + i] + b·x[x_off + i]` for `i < n`.
     #[allow(clippy::too_many_arguments)]
-    fn axpby(&self, y: &Self::Buf, off: usize, a: f32, x: &Self::Buf, x_off: usize, b: f32, n: usize);
+    fn axpby(
+        &self,
+        y: &Self::Buf,
+        off: usize,
+        a: f32,
+        x: &Self::Buf,
+        x_off: usize,
+        b: f32,
+        n: usize,
+    );
 
     /// `out[c, i] = x[c, i] · scale[c] + shift[c]` over `[c, inner]`.
     #[allow(clippy::too_many_arguments)]
@@ -693,7 +725,15 @@ pub trait Backend {
 
     /// `out[c, i] = x[c, clamp(i − left, 0, len − 1)]` over `[c, len + left + right]`
     /// (PyTorch `replicate` padding; the audio VAE's anti-aliasing filters).
-    fn replicate_pad1d(&self, x: &Self::Buf, c: usize, len: usize, left: usize, right: usize, out: &Self::Buf);
+    fn replicate_pad1d(
+        &self,
+        x: &Self::Buf,
+        c: usize,
+        len: usize,
+        left: usize,
+        right: usize,
+        out: &Self::Buf,
+    );
 
     /// `out = conv_transpose1d(x, W) + bias`; `W` is `[cin, (cout/groups)·k]`
     /// (PyTorch layout, rows = input channels).
@@ -746,7 +786,16 @@ pub trait Backend {
 
     /// `[frames, c·r², h, w]` → `[frames, c, h·r, w·r]` (PyTorch `pixel_shuffle`).
     #[allow(clippy::too_many_arguments)]
-    fn pixel_shuffle(&self, x: &Self::Buf, frames: usize, c: usize, h: usize, w: usize, r: usize, out: &Self::Buf);
+    fn pixel_shuffle(
+        &self,
+        x: &Self::Buf,
+        frames: usize,
+        c: usize,
+        h: usize,
+        w: usize,
+        r: usize,
+        out: &Self::Buf,
+    );
 
     /// In place: `x = tanh(x / s) · s` over `n` elements.
     fn tanh_clamp(&self, x: &Self::Buf, n: usize, s: f32);

@@ -4,8 +4,8 @@
 //! unit tests and a short low-resolution clip end to end.
 
 use h3_core::backend::{
-    Act, Backend, Conv1dShape, Conv3dShape, ConvEpilogue, ConvShape, ConvT1dShape, FlowStep, Gate, HeadNorm, Modulation,
-    Pad, Rope, Snake,
+    Act, Backend, Conv1dShape, Conv3dShape, ConvEpilogue, ConvShape, ConvT1dShape, FlowStep, Gate,
+    HeadNorm, Modulation, Pad, Rope, Snake,
 };
 use h3_core::quant::{Mxfp8, Nvfp4, Q4, Q8};
 use h3_core::vsa::{VsaSpec, select};
@@ -17,7 +17,9 @@ pub struct CpuBuf(Arc<RwLock<Vec<f32>>>);
 
 impl CpuBuf {
     fn r(&self) -> RwLockReadGuard<'_, Vec<f32>> {
-        self.0.try_read().expect("buffer aliased with a written output")
+        self.0
+            .try_read()
+            .expect("buffer aliased with a written output")
     }
     fn w(&self) -> RwLockWriteGuard<'_, Vec<f32>> {
         self.0.try_write().expect("output buffer aliases an input")
@@ -106,7 +108,13 @@ pub fn act(a: Act, x: f32) -> f32 {
     }
 }
 
-fn rms_row(src: &[f32], dst: &mut [f32], w: Option<&[f32]>, m: Option<(&[f32], usize, usize, usize)>, eps: f32) {
+fn rms_row(
+    src: &[f32],
+    dst: &mut [f32],
+    w: Option<&[f32]>,
+    m: Option<(&[f32], usize, usize, usize)>,
+    eps: f32,
+) {
     let dim = src.len();
     let ms = src.iter().map(|&v| v as f64 * v as f64).sum::<f64>() / dim as f64;
     let inv = (1.0 / (ms + eps as f64).sqrt()) as f32;
@@ -139,9 +147,13 @@ impl ModView<'_> {
     fn of<'a>(m: &Modulation<'a, CpuBuf>) -> Option<ModView<'a>> {
         match m {
             Modulation::None => None,
-            Modulation::Table { m, scale, shift } => {
-                Some(ModView { table: m.table.r(), idx: m.idx.r(), slots: m.slots, scale: *scale, shift: *shift })
-            }
+            Modulation::Table { m, scale, shift } => Some(ModView {
+                table: m.table.r(),
+                idx: m.idx.r(),
+                slots: m.slots,
+                scale: *scale,
+                shift: *shift,
+            }),
         }
     }
     fn row(&self, r: usize, dim: usize) -> (&[f32], usize, usize, usize) {
@@ -161,7 +173,12 @@ struct GateView<'a> {
 enum GateKind<'a> {
     None,
     Vector(RwLockReadGuard<'a, Vec<f32>>),
-    Table { table: RwLockReadGuard<'a, Vec<f32>>, idx: RwLockReadGuard<'a, Vec<f32>>, slots: usize, slot: usize },
+    Table {
+        table: RwLockReadGuard<'a, Vec<f32>>,
+        idx: RwLockReadGuard<'a, Vec<f32>>,
+        slots: usize,
+        slot: usize,
+    },
 }
 
 impl GateView<'_> {
@@ -170,20 +187,35 @@ impl GateView<'_> {
             kind: match g {
                 Gate::None => GateKind::None,
                 Gate::Vector(v) => GateKind::Vector(v.r()),
-                Gate::Table(m) => {
-                    GateKind::Table { table: m.table.table.r(), idx: m.table.idx.r(), slots: m.table.slots, slot: m.slot }
-                }
+                Gate::Table(m) => GateKind::Table {
+                    table: m.table.table.r(),
+                    idx: m.table.idx.r(),
+                    slots: m.table.slots,
+                    slot: m.slot,
+                },
             },
         }
     }
     fn apply(&self, r: usize, dim: usize, h: &mut [f32], a: &[f32]) {
         match &self.kind {
             GateKind::None => h.iter_mut().zip(a).for_each(|(x, y)| *x += y),
-            GateKind::Vector(g) => h.iter_mut().zip(a).zip(g.iter()).for_each(|((x, y), g)| *x += y * g),
-            GateKind::Table { table, idx, slots, slot } => {
+            GateKind::Vector(g) => h
+                .iter_mut()
+                .zip(a)
+                .zip(g.iter())
+                .for_each(|((x, y), g)| *x += y * g),
+            GateKind::Table {
+                table,
+                idx,
+                slots,
+                slot,
+            } => {
                 let e = idx[r].to_bits() as usize;
                 let g = &table[(e * slots + slot) * dim..][..dim];
-                h.iter_mut().zip(a).zip(g).for_each(|((x, y), g)| *x += y * g);
+                h.iter_mut()
+                    .zip(a)
+                    .zip(g)
+                    .for_each(|((x, y), g)| *x += y * g);
             }
         }
     }
@@ -195,54 +227,95 @@ impl GateView<'_> {
 /// The dense attention reference: softmax(q·kᵀ/√d)·v per head over `[heads][sq][d]`
 /// / `[kv_heads][sk][d]` inputs, output `[sq][heads][d]`; GQA by `heads / kv_heads`.
 #[allow(clippy::too_many_arguments)]
-pub fn attention_reference_into(q: &[f32], k: &[f32], v: &[f32], heads: usize, kv_heads: usize, sq: usize, sk: usize, d: usize, causal: bool, out: &mut [f32]) {
+pub fn attention_reference_into(
+    q: &[f32],
+    k: &[f32],
+    v: &[f32],
+    heads: usize,
+    kv_heads: usize,
+    sq: usize,
+    sk: usize,
+    d: usize,
+    causal: bool,
+    out: &mut [f32],
+) {
     let scale = 1.0 / (d as f32).sqrt();
     let group = heads / kv_heads;
-    out[..sq * heads * d].par_chunks_mut(heads * d).enumerate().for_each(|(i, orow)| {
-        let mut p = vec![0.0f32; sk];
-        let limit = if causal { (i + 1 + sk - sq).min(sk) } else { sk };
-        for h in 0..heads {
-            let kh = h / group;
-            let qi = &q[(h * sq + i) * d..][..d];
-            let mut mx = f32::NEG_INFINITY;
-            for j in 0..limit {
-                let kj = &k[(kh * sk + j) * d..][..d];
-                let s = qi.iter().zip(kj).map(|(a, b)| a * b).sum::<f32>() * scale;
-                p[j] = s;
-                mx = mx.max(s);
-            }
-            let mut den = 0.0f64;
-            for pj in p[..limit].iter_mut() {
-                *pj = (*pj - mx).exp();
-                den += *pj as f64;
-            }
-            let o = &mut orow[h * d..][..d];
-            let mut acc = vec![0.0f64; d];
-            for (j, &pj) in p[..limit].iter().enumerate() {
-                let vj = &v[(kh * sk + j) * d..][..d];
+    out[..sq * heads * d]
+        .par_chunks_mut(heads * d)
+        .enumerate()
+        .for_each(|(i, orow)| {
+            let mut p = vec![0.0f32; sk];
+            let limit = if causal {
+                (i + 1 + sk - sq).min(sk)
+            } else {
+                sk
+            };
+            for h in 0..heads {
+                let kh = h / group;
+                let qi = &q[(h * sq + i) * d..][..d];
+                let mut mx = f32::NEG_INFINITY;
+                for j in 0..limit {
+                    let kj = &k[(kh * sk + j) * d..][..d];
+                    let s = qi.iter().zip(kj).map(|(a, b)| a * b).sum::<f32>() * scale;
+                    p[j] = s;
+                    mx = mx.max(s);
+                }
+                let mut den = 0.0f64;
+                for pj in p[..limit].iter_mut() {
+                    *pj = (*pj - mx).exp();
+                    den += *pj as f64;
+                }
+                let o = &mut orow[h * d..][..d];
+                let mut acc = vec![0.0f64; d];
+                for (j, &pj) in p[..limit].iter().enumerate() {
+                    let vj = &v[(kh * sk + j) * d..][..d];
+                    for c in 0..d {
+                        acc[c] += pj as f64 * vj[c] as f64;
+                    }
+                }
                 for c in 0..d {
-                    acc[c] += pj as f64 * vj[c] as f64;
+                    o[c] = (acc[c] / den) as f32;
                 }
             }
-            for c in 0..d {
-                o[c] = (acc[c] / den) as f32;
-            }
-        }
-    });
+        });
 }
 
-pub fn vsa_reference(q: &[f32], k: &[f32], v: &[f32], gate: Option<&[f32]>, spec: &VsaSpec, out: &mut [f32]) {
+pub fn vsa_reference(
+    q: &[f32],
+    k: &[f32],
+    v: &[f32],
+    gate: Option<&[f32]>,
+    spec: &VsaSpec,
+    out: &mut [f32],
+) {
     vsa_reference_impl(q, k, v, gate, spec, out, None);
 }
 
 /// [`vsa_reference`] that also fills `slack` (same shape as `out`) with the
 /// FP8 P·V rounding slack of `h3_core::vsa::attention_pv8_reference_slack`
 /// over the selected keys; zero without `spec.pv8`.
-pub fn vsa_reference_slack(q: &[f32], k: &[f32], v: &[f32], gate: Option<&[f32]>, spec: &VsaSpec, out: &mut [f32], slack: &mut [f32]) {
+pub fn vsa_reference_slack(
+    q: &[f32],
+    k: &[f32],
+    v: &[f32],
+    gate: Option<&[f32]>,
+    spec: &VsaSpec,
+    out: &mut [f32],
+    slack: &mut [f32],
+) {
     vsa_reference_impl(q, k, v, gate, spec, out, Some(slack));
 }
 
-fn vsa_reference_impl(q: &[f32], k: &[f32], v: &[f32], gate: Option<&[f32]>, spec: &VsaSpec, out: &mut [f32], mut slack: Option<&mut [f32]>) {
+fn vsa_reference_impl(
+    q: &[f32],
+    k: &[f32],
+    v: &[f32],
+    gate: Option<&[f32]>,
+    spec: &VsaSpec,
+    out: &mut [f32],
+    mut slack: Option<&mut [f32]>,
+) {
     let (plan, heads, d) = (&spec.plan, spec.heads, spec.head_dim);
     let want_slack = slack.is_some();
     let (seq, nb, te) = (plan.seq, plan.num_tiles(), plan.tile_elems);
@@ -258,7 +331,9 @@ fn vsa_reference_impl(q: &[f32], k: &[f32], v: &[f32], gate: Option<&[f32]>, spe
     // stage rounds P to E4M3 at 64× with the row maximum rounded up to an
     // integer (h3_core::vsa::attention_pv8_reference's recipe, over the
     // selected tiles).
-    let v8 = spec.pv8.then(|| h3_core::vsa::attn_v8_round(v, heads, seq, d));
+    let v8 = spec
+        .pv8
+        .then(|| h3_core::vsa::attn_v8_round(v, heads, seq, d));
     // A dense plan (every tile kept: dense layers, the dense first steps of a
     // run) is dense attention over the sequence in its natural order plus the
     // gated pooled branch; the 8-bit recipes are the dense ones
@@ -267,10 +342,17 @@ fn vsa_reference_impl(q: &[f32], k: &[f32], v: &[f32], gate: Option<&[f32]>, spe
     let dense_out: Option<(Vec<f32>, Option<Vec<f32>>)> = plan.is_dense().then(|| {
         if spec.pv8 {
             if want_slack {
-                let (o, sl) = h3_core::vsa::attention_pv8_reference_slack(q, k, v, heads, heads, seq, seq, d, false);
+                let (o, sl) = h3_core::vsa::attention_pv8_reference_slack(
+                    q, k, v, heads, heads, seq, seq, d, false,
+                );
                 (o, Some(sl))
             } else {
-                (h3_core::vsa::attention_pv8_reference(q, k, v, heads, heads, seq, seq, d, false), None)
+                (
+                    h3_core::vsa::attention_pv8_reference(
+                        q, k, v, heads, heads, seq, seq, d, false,
+                    ),
+                    None,
+                )
             }
         } else {
             let mut o = vec![0f32; seq * heads * d];
@@ -289,7 +371,8 @@ fn vsa_reference_impl(q: &[f32], k: &[f32], v: &[f32], gate: Option<&[f32]>, spe
             fn slice<'b>(b: &'b [f32], off: usize, d: usize) -> &'b [f32] {
                 &b[off..off + d]
             }
-            let row = |b: &[f32], tok: usize| -> Vec<f32> { slice(b, (h * seq + tok) * d, d).to_vec() };
+            let row =
+                |b: &[f32], tok: usize| -> Vec<f32> { slice(b, (h * seq + tok) * d, d).to_vec() };
             // 1. Tile means over real tokens.
             let mut mean = vec![vec![0f64; nb * d]; 3];
             for t in 0..nb {
@@ -314,7 +397,10 @@ fn vsa_reference_impl(q: &[f32], k: &[f32], v: &[f32], gate: Option<&[f32]>, spe
             let mut keep = vec![Vec::new(); nb];
             for qt in 0..nb {
                 let s: Vec<f32> = (0..nb)
-                    .map(|kt| ((0..d).map(|c| qc[qt * d + c] * kc[kt * d + c]).sum::<f64>() * scale) as f32)
+                    .map(|kt| {
+                        ((0..d).map(|c| qc[qt * d + c] * kc[kt * d + c]).sum::<f64>() * scale)
+                            as f32
+                    })
                     .collect();
                 if gate.is_some() {
                     let m = s.iter().copied().fold(f32::NEG_INFINITY, f32::max);
@@ -327,7 +413,12 @@ fn vsa_reference_impl(q: &[f32], k: &[f32], v: &[f32], gate: Option<&[f32]>, spe
                     }
                 }
                 let sel = select(plan, qt, &s);
-                keep[qt] = sel.iter().enumerate().filter(|&(_, &k)| k).map(|(i, _)| i).collect();
+                keep[qt] = sel
+                    .iter()
+                    .enumerate()
+                    .filter(|&(_, &k)| k)
+                    .map(|(i, _)| i)
+                    .collect();
             }
             // 4. Fine attention, 5. combine.
             let mut rows: Vec<(usize, Vec<f32>, Option<Vec<f32>>)> = Vec::with_capacity(seq);
@@ -343,7 +434,11 @@ fn vsa_reference_impl(q: &[f32], k: &[f32], v: &[f32], gate: Option<&[f32]>, spe
                                 o[c] += pooled[qt * d + c] * gr[c];
                             }
                         }
-                        rows.push((qtok, o, dslack.as_ref().map(|sl| sl[base..base + d].to_vec())));
+                        rows.push((
+                            qtok,
+                            o,
+                            dslack.as_ref().map(|sl| sl[base..base + d].to_vec()),
+                        ));
                     }
                 }
                 return rows;
@@ -374,13 +469,15 @@ fn vsa_reference_impl(q: &[f32], k: &[f32], v: &[f32], gate: Option<&[f32]>, spe
                         for &(ktok, s) in &s2 {
                             let pr = (s - mi + h3_core::vsa::PV8_SHIFT).exp2();
                             l += pr;
-                            let p8 = h3_core::quant::e4m3_decode(h3_core::quant::e4m3_satfinite(pr));
+                            let p8 =
+                                h3_core::quant::e4m3_decode(h3_core::quant::e4m3_satfinite(pr));
                             let vr = &codes[(h * seq + ktok) * d..][..d];
                             for c in 0..d {
                                 a[c] += p8 * vr[c];
                             }
                             if let Some(sl) = sl.as_mut() {
-                                let w = h3_core::vsa::e4m3_flip_slack(pr, h3_core::vsa::PV8_FLIP_EPS);
+                                let w =
+                                    h3_core::vsa::e4m3_flip_slack(pr, h3_core::vsa::PV8_FLIP_EPS);
                                 if w > 0.0 {
                                     for c in 0..d {
                                         sl[c] += w * vr[c].abs();
@@ -389,7 +486,8 @@ fn vsa_reference_impl(q: &[f32], k: &[f32], v: &[f32], gate: Option<&[f32]>, spe
                             }
                         }
                         let inv = if l > 0.0 { vs[h] / l } else { 0.0 };
-                        let mut o: Vec<f32> = (0..d).map(|c| a[c] * inv + vmean[h * d + c]).collect();
+                        let mut o: Vec<f32> =
+                            (0..d).map(|c| a[c] * inv + vmean[h * d + c]).collect();
                         if let Some(g) = gate {
                             let gr = row(g, qtok);
                             for c in 0..d {
@@ -406,9 +504,14 @@ fn vsa_reference_impl(q: &[f32], k: &[f32], v: &[f32], gate: Option<&[f32]>, spe
                         for ks in 0..plan.block_sizes[kt] as usize {
                             let ktok = plan.slot_src[kt * te + ks] as usize;
                             let kr = row(kf, ktok);
-                            let s = ((0..d).map(|c| qr[c] as f64 * kr[c] as f64).sum::<f64>() * scale) as f32;
+                            let s = ((0..d).map(|c| qr[c] as f64 * kr[c] as f64).sum::<f64>()
+                                * scale) as f32;
                             if s > m {
-                                let shrink = if m.is_finite() { ((m - s) as f64).exp() } else { 0.0 };
+                                let shrink = if m.is_finite() {
+                                    ((m - s) as f64).exp()
+                                } else {
+                                    0.0
+                                };
                                 z *= shrink;
                                 acc.iter_mut().for_each(|a| *a *= shrink);
                                 m = s;
@@ -469,7 +572,12 @@ fn pad_index(p: isize, n: usize, mode: Pad) -> Option<usize> {
     }
 }
 
-fn epilogue(ep: &ConvEpilogue<'_, CpuBuf>, res: Option<&RwLockReadGuard<'_, Vec<f32>>>, i: usize, acc: f32) -> f32 {
+fn epilogue(
+    ep: &ConvEpilogue<'_, CpuBuf>,
+    res: Option<&RwLockReadGuard<'_, Vec<f32>>>,
+    i: usize,
+    acc: f32,
+) -> f32 {
     match ep {
         ConvEpilogue::None => acc,
         ConvEpilogue::Relu => acc.max(0.0),
@@ -527,7 +635,12 @@ impl Backend for Cpu {
     }
     fn weight(&self, data: &[f32], rows: usize, cols: usize) -> CpuWeight {
         assert_eq!(data.len(), rows * cols);
-        CpuWeight { data: data.to_vec(), rows, cols, mx: false }
+        CpuWeight {
+            data: data.to_vec(),
+            rows,
+            cols,
+            mx: false,
+        }
     }
     fn weight_q8(&self, q: &Q8) -> CpuWeight {
         self.weight(&q.dequantize(), q.rows, q.cols)
@@ -539,7 +652,12 @@ impl Backend for Cpu {
         self.weight(&q.dequantize(), q.rows, q.cols)
     }
     fn weight_mxfp8(&self, q: &Mxfp8) -> CpuWeight {
-        CpuWeight { data: q.dequantize(), rows: q.rows, cols: q.cols, mx: true }
+        CpuWeight {
+            data: q.dequantize(),
+            rows: q.rows,
+            cols: q.cols,
+            mx: true,
+        }
     }
     fn weight_bytes(&self, w: &CpuWeight) -> usize {
         w.data.len() * 4
@@ -570,38 +688,44 @@ impl Backend for Cpu {
             x
         };
         // Rows × 4 output columns per task keeps the weight row in cache.
-        y[y_row * n..(y_row + rows) * n].par_chunks_mut(n).zip(x.par_chunks(k)).for_each(|(yr, xr)| {
-            for (o, out) in yr.iter_mut().enumerate() {
-                let wr = &w.data[o * k..(o + 1) * k];
-                let mut acc = [0.0f32; 8];
-                let mut i = 0;
-                while i + 8 <= k {
-                    for j in 0..8 {
-                        acc[j] += xr[i + j] * wr[i + j];
+        y[y_row * n..(y_row + rows) * n]
+            .par_chunks_mut(n)
+            .zip(x.par_chunks(k))
+            .for_each(|(yr, xr)| {
+                for (o, out) in yr.iter_mut().enumerate() {
+                    let wr = &w.data[o * k..(o + 1) * k];
+                    let mut acc = [0.0f32; 8];
+                    let mut i = 0;
+                    while i + 8 <= k {
+                        for j in 0..8 {
+                            acc[j] += xr[i + j] * wr[i + j];
+                        }
+                        i += 8;
                     }
-                    i += 8;
+                    let mut s: f32 = acc.iter().sum();
+                    while i < k {
+                        s += xr[i] * wr[i];
+                        i += 1;
+                    }
+                    if let Some(b) = &b {
+                        s += b[o];
+                    }
+                    *out = act(a, s);
                 }
-                let mut s: f32 = acc.iter().sum();
-                while i < k {
-                    s += xr[i] * wr[i];
-                    i += 1;
-                }
-                if let Some(b) = &b {
-                    s += b[o];
-                }
-                *out = act(a, s);
-            }
-        });
+            });
     }
 
     fn swiglu(&self, x: &CpuBuf, rows: usize, dim: usize, out: &CpuBuf) {
         let x = x.r();
         let mut o = out.w();
-        o[..rows * dim].par_chunks_mut(dim).zip(x[..rows * 2 * dim].par_chunks(2 * dim)).for_each(|(o, xr)| {
-            for j in 0..dim {
-                o[j] = xr[j] * silu(xr[dim + j]);
-            }
-        });
+        o[..rows * dim]
+            .par_chunks_mut(dim)
+            .zip(x[..rows * 2 * dim].par_chunks(2 * dim))
+            .for_each(|(o, xr)| {
+                for j in 0..dim {
+                    o[j] = xr[j] * silu(xr[dim + j]);
+                }
+            });
     }
 
     fn rms_norm(
@@ -618,9 +742,19 @@ impl Backend for Cpu {
         let w = w.map(|w| w.r());
         let m = ModView::of(&modulation);
         let mut o = out.w();
-        o[..rows * dim].par_chunks_mut(dim).zip(x[..rows * dim].par_chunks(dim)).enumerate().for_each(|(r, (o, xr))| {
-            rms_row(xr, o, w.as_deref().map(|v| &v[..]), m.as_ref().map(|m| m.row(r, dim)), eps);
-        });
+        o[..rows * dim]
+            .par_chunks_mut(dim)
+            .zip(x[..rows * dim].par_chunks(dim))
+            .enumerate()
+            .for_each(|(r, (o, xr))| {
+                rms_row(
+                    xr,
+                    o,
+                    w.as_deref().map(|v| &v[..]),
+                    m.as_ref().map(|m| m.row(r, dim)),
+                    eps,
+                );
+            });
     }
 
     fn residual_rms_norm(
@@ -648,17 +782,34 @@ impl Backend for Cpu {
             .enumerate()
             .for_each(|(r, ((hr, ar), or))| {
                 g.apply(r, dim, hr, ar);
-                rms_row(hr, or, w.as_deref().map(|v| &v[..]), m.as_ref().map(|m| m.row(r, dim)), eps);
+                rms_row(
+                    hr,
+                    or,
+                    w.as_deref().map(|v| &v[..]),
+                    m.as_ref().map(|m| m.row(r, dim)),
+                    eps,
+                );
             });
     }
 
-    fn gate_residual(&self, h: &CpuBuf, a: &CpuBuf, rows: usize, dim: usize, gate: Gate<'_, CpuBuf>) {
+    fn gate_residual(
+        &self,
+        h: &CpuBuf,
+        a: &CpuBuf,
+        rows: usize,
+        dim: usize,
+        gate: Gate<'_, CpuBuf>,
+    ) {
         let a = a.r();
         let g = GateView::of(&gate);
         let mut hh = h.w();
-        hh[..rows * dim].par_chunks_mut(dim).zip(a[..rows * dim].par_chunks(dim)).enumerate().for_each(|(r, (hr, ar))| {
-            g.apply(r, dim, hr, ar);
-        });
+        hh[..rows * dim]
+            .par_chunks_mut(dim)
+            .zip(a[..rows * dim].par_chunks(dim))
+            .enumerate()
+            .for_each(|(r, (hr, ar))| {
+                g.apply(r, dim, hr, ar);
+            });
     }
 
     fn layer_norm(
@@ -675,22 +826,29 @@ impl Backend for Cpu {
         let w = w.map(|w| w.r());
         let b = b.map(|b| b.r());
         let mut o = out.w();
-        o[..rows * dim].par_chunks_mut(dim).zip(x[..rows * dim].par_chunks(dim)).for_each(|(o, xr)| {
-            let n = dim as f64;
-            let mean = xr.iter().map(|&v| v as f64).sum::<f64>() / n;
-            let var = xr.iter().map(|&v| (v as f64 - mean) * (v as f64 - mean)).sum::<f64>() / n;
-            let inv = 1.0 / (var + eps as f64).sqrt();
-            for j in 0..dim {
-                let mut y = ((xr[j] as f64 - mean) * inv) as f32;
-                if let Some(w) = &w {
-                    y *= w[j];
+        o[..rows * dim]
+            .par_chunks_mut(dim)
+            .zip(x[..rows * dim].par_chunks(dim))
+            .for_each(|(o, xr)| {
+                let n = dim as f64;
+                let mean = xr.iter().map(|&v| v as f64).sum::<f64>() / n;
+                let var = xr
+                    .iter()
+                    .map(|&v| (v as f64 - mean) * (v as f64 - mean))
+                    .sum::<f64>()
+                    / n;
+                let inv = 1.0 / (var + eps as f64).sqrt();
+                for j in 0..dim {
+                    let mut y = ((xr[j] as f64 - mean) * inv) as f32;
+                    if let Some(w) = &w {
+                        y *= w[j];
+                    }
+                    if let Some(b) = &b {
+                        y += b[j];
+                    }
+                    o[j] = y;
                 }
-                if let Some(b) = &b {
-                    y += b[j];
-                }
-                o[j] = y;
-            }
-        });
+            });
     }
 
     fn head_split(
@@ -762,30 +920,91 @@ impl Backend for Cpu {
     ) {
         let (q, k, v) = (q.r(), k.r(), v.r());
         let mut out = out.w();
-        attention_reference_into(&q, &k, &v, heads, kv_heads, sq, sk, d, causal, &mut out[..sq * heads * d]);
+        attention_reference_into(
+            &q,
+            &k,
+            &v,
+            heads,
+            kv_heads,
+            sq,
+            sk,
+            d,
+            causal,
+            &mut out[..sq * heads * d],
+        );
     }
 
-    fn attention_qk8(&self, q: &CpuBuf, k: &CpuBuf, v: &CpuBuf, heads: usize, kv_heads: usize, sq: usize, sk: usize, d: usize, causal: bool, pv8: bool, out: &CpuBuf) {
+    fn attention_qk8(
+        &self,
+        q: &CpuBuf,
+        k: &CpuBuf,
+        v: &CpuBuf,
+        heads: usize,
+        kv_heads: usize,
+        sq: usize,
+        sk: usize,
+        d: usize,
+        causal: bool,
+        pv8: bool,
+        out: &CpuBuf,
+    ) {
         if pv8 {
             let o = {
                 let (q, k, v) = (q.r(), k.r(), v.r());
-                h3_core::vsa::attention_pv8_reference(&q[..heads * sq * d], &k[..kv_heads * sk * d], &v[..kv_heads * sk * d], heads, kv_heads, sq, sk, d, causal)
+                h3_core::vsa::attention_pv8_reference(
+                    &q[..heads * sq * d],
+                    &k[..kv_heads * sk * d],
+                    &v[..kv_heads * sk * d],
+                    heads,
+                    kv_heads,
+                    sq,
+                    sk,
+                    d,
+                    causal,
+                )
             };
             out.w()[..sq * heads * d].copy_from_slice(&o);
             return;
         }
         let (q8, k8) = {
             let (q, k) = (q.r(), k.r());
-            h3_core::vsa::attn_qk8_round(&q[..heads * sq * d], &k[..kv_heads * sk * d], heads, kv_heads, sq, sk, d)
+            h3_core::vsa::attn_qk8_round(
+                &q[..heads * sq * d],
+                &k[..kv_heads * sk * d],
+                heads,
+                kv_heads,
+                sq,
+                sk,
+                d,
+            )
         };
-        self.attention(&self.upload(&q8), &self.upload(&k8), v, heads, kv_heads, sq, sk, d, causal, out);
+        self.attention(
+            &self.upload(&q8),
+            &self.upload(&k8),
+            v,
+            heads,
+            kv_heads,
+            sq,
+            sk,
+            d,
+            causal,
+            out,
+        );
     }
 
     fn vsa_prepare(&self, spec: &VsaSpec) -> VsaSpec {
         spec.clone()
     }
 
-    fn vsa_attention(&self, q: &CpuBuf, k: &CpuBuf, v: &CpuBuf, gate: Option<&CpuBuf>, spec: &VsaSpec, out: &CpuBuf) {
+    fn vsa_attention(
+        &self,
+        q: &CpuBuf,
+        k: &CpuBuf,
+        v: &CpuBuf,
+        gate: Option<&CpuBuf>,
+        spec: &VsaSpec,
+        out: &CpuBuf,
+    ) {
         let (q, k, v) = (q.r(), k.r(), v.r());
         let g = gate.map(|g| g.r());
         vsa_reference(&q, &k, &v, g.as_deref().map(|g| &g[..]), spec, &mut out.w());
@@ -806,20 +1025,24 @@ impl Backend for Cpu {
         let (tt, hh, ww) = (t / pt, h / ph, w / pw);
         let f = c * pt * ph * pw;
         let mut o = out.w();
-        o[out_row * f..(out_row + tt * hh * ww) * f].par_chunks_mut(f).enumerate().for_each(|(row, dst)| {
-            let (ti, rem) = (row / (hh * ww), row % (hh * ww));
-            let (hi, wi) = (rem / ww, rem % ww);
-            for ci in 0..c {
-                for kt in 0..pt {
-                    for kh in 0..ph {
-                        for kw in 0..pw {
-                            let src = ((ci * t + ti * pt + kt) * h + hi * ph + kh) * w + wi * pw + kw;
-                            dst[((ci * pt + kt) * ph + kh) * pw + kw] = l[src];
+        o[out_row * f..(out_row + tt * hh * ww) * f]
+            .par_chunks_mut(f)
+            .enumerate()
+            .for_each(|(row, dst)| {
+                let (ti, rem) = (row / (hh * ww), row % (hh * ww));
+                let (hi, wi) = (rem / ww, rem % ww);
+                for ci in 0..c {
+                    for kt in 0..pt {
+                        for kh in 0..ph {
+                            for kw in 0..pw {
+                                let src =
+                                    ((ci * t + ti * pt + kt) * h + hi * ph + kh) * w + wi * pw + kw;
+                                dst[((ci * pt + kt) * ph + kh) * pw + kw] = l[src];
+                            }
                         }
                     }
                 }
-            }
-        });
+            });
     }
 
     fn unpatchify(
@@ -838,27 +1061,41 @@ impl Backend for Cpu {
         let xr = x.r();
         let (tt, hh, ww) = (t / pt, h / ph, w / pw);
         let mut o = out.w();
-        o[..c * t * h * w].par_chunks_mut(t * h * w).enumerate().for_each(|(ci, plane)| {
-            for ti in 0..tt {
-                for hi in 0..hh {
-                    for wi in 0..ww {
-                        let row = (ti * hh + hi) * ww + wi;
-                        let base = (x_row + row) * x_stride + col;
-                        for kt in 0..pt {
-                            for kh in 0..ph {
-                                for kw in 0..pw {
-                                    let feat = ((ci * pt + kt) * ph + kh) * pw + kw;
-                                    plane[((ti * pt + kt) * h + hi * ph + kh) * w + wi * pw + kw] = xr[base + feat];
+        o[..c * t * h * w]
+            .par_chunks_mut(t * h * w)
+            .enumerate()
+            .for_each(|(ci, plane)| {
+                for ti in 0..tt {
+                    for hi in 0..hh {
+                        for wi in 0..ww {
+                            let row = (ti * hh + hi) * ww + wi;
+                            let base = (x_row + row) * x_stride + col;
+                            for kt in 0..pt {
+                                for kh in 0..ph {
+                                    for kw in 0..pw {
+                                        let feat = ((ci * pt + kt) * ph + kh) * pw + kw;
+                                        plane[((ti * pt + kt) * h + hi * ph + kh) * w
+                                            + wi * pw
+                                            + kw] = xr[base + feat];
+                                    }
                                 }
                             }
                         }
                     }
                 }
-            }
-        });
+            });
     }
 
-    fn flow_step(&self, x: &CpuBuf, off: usize, v: &CpuBuf, v_off: usize, noise: Option<&CpuBuf>, n: usize, step: FlowStep) {
+    fn flow_step(
+        &self,
+        x: &CpuBuf,
+        off: usize,
+        v: &CpuBuf,
+        v_off: usize,
+        noise: Option<&CpuBuf>,
+        n: usize,
+        step: FlowStep,
+    ) {
         let v = v.r();
         let nz = noise.map(|z| z.r());
         let mut x = x.w();
@@ -877,7 +1114,9 @@ impl Backend for Cpu {
                     *x = (1.0 - next) * x0 + next * z;
                 });
             }
-            FlowStep::Terminal { sigma } => xs.par_iter_mut().zip(vs).for_each(|(x, v)| *x += sigma * v),
+            FlowStep::Terminal { sigma } => {
+                xs.par_iter_mut().zip(vs).for_each(|(x, v)| *x += sigma * v)
+            }
         }
     }
 
@@ -885,25 +1124,43 @@ impl Backend for Cpu {
         if Arc::ptr_eq(&y.0, &x.0) {
             let mut yy = y.w();
             let xs = yy[x_off..x_off + n].to_vec();
-            yy[off..off + n].iter_mut().zip(xs).for_each(|(y, x)| *y = a * *y + b * x);
+            yy[off..off + n]
+                .iter_mut()
+                .zip(xs)
+                .for_each(|(y, x)| *y = a * *y + b * x);
             return;
         }
         let x = x.r();
         let mut yy = y.w();
-        yy[off..off + n].par_iter_mut().zip(&x[x_off..x_off + n]).for_each(|(y, x)| *y = a * *y + b * x);
+        yy[off..off + n]
+            .par_iter_mut()
+            .zip(&x[x_off..x_off + n])
+            .for_each(|(y, x)| *y = a * *y + b * x);
     }
 
-    fn channel_affine(&self, x: &CpuBuf, c: usize, inner: usize, scale: &CpuBuf, shift: Option<&CpuBuf>, out: &CpuBuf) {
+    fn channel_affine(
+        &self,
+        x: &CpuBuf,
+        c: usize,
+        inner: usize,
+        scale: &CpuBuf,
+        shift: Option<&CpuBuf>,
+        out: &CpuBuf,
+    ) {
         let x = x.r();
         let s = scale.r();
         let sh = shift.map(|s| s.r());
         let mut o = out.w();
-        o[..c * inner].par_chunks_mut(inner).zip(x[..c * inner].par_chunks(inner)).enumerate().for_each(|(ci, (o, xr))| {
-            let b = sh.as_ref().map_or(0.0, |v| v[ci]);
-            for j in 0..inner {
-                o[j] = xr[j] * s[ci] + b;
-            }
-        });
+        o[..c * inner]
+            .par_chunks_mut(inner)
+            .zip(x[..c * inner].par_chunks(inner))
+            .enumerate()
+            .for_each(|(ci, (o, xr))| {
+                let b = sh.as_ref().map_or(0.0, |v| v[ci]);
+                for j in 0..inner {
+                    o[j] = xr[j] * s[ci] + b;
+                }
+            });
     }
 
     fn conv2d(
@@ -926,35 +1183,42 @@ impl Backend for Cpu {
         let up = if s.upsample { 2 } else { 1 };
         let pad = (s.k / 2) as isize;
         let mut o = out.w();
-        o[..s.out_len()].par_chunks_mut(oh * ow).enumerate().for_each(|(fc, plane)| {
-            let (f, co) = (fc / s.cout, fc % s.cout);
-            let wr = &w.data[co * s.k_len()..][..s.k_len()];
-            for y in 0..oh {
-                for xo in 0..ow {
-                    let mut acc = bias.as_ref().map_or(0.0, |b| b[co]);
-                    for ci in 0..s.cin() {
-                        let (src, c, cn): (&[f32], usize, usize) =
-                            if ci < s.cin_a { (&a, ci, s.cin_a) } else { (b.as_ref().unwrap(), ci - s.cin_a, s.cin_b) };
-                        for ky in 0..s.k {
-                            let yy = y as isize + ky as isize - pad;
-                            if yy < 0 || yy >= oh as isize {
-                                continue;
-                            }
-                            for kx in 0..s.k {
-                                let xx = xo as isize + kx as isize - pad;
-                                if xx < 0 || xx >= ow as isize {
+        o[..s.out_len()]
+            .par_chunks_mut(oh * ow)
+            .enumerate()
+            .for_each(|(fc, plane)| {
+                let (f, co) = (fc / s.cout, fc % s.cout);
+                let wr = &w.data[co * s.k_len()..][..s.k_len()];
+                for y in 0..oh {
+                    for xo in 0..ow {
+                        let mut acc = bias.as_ref().map_or(0.0, |b| b[co]);
+                        for ci in 0..s.cin() {
+                            let (src, c, cn): (&[f32], usize, usize) = if ci < s.cin_a {
+                                (&a, ci, s.cin_a)
+                            } else {
+                                (b.as_ref().unwrap(), ci - s.cin_a, s.cin_b)
+                            };
+                            for ky in 0..s.k {
+                                let yy = y as isize + ky as isize - pad;
+                                if yy < 0 || yy >= oh as isize {
                                     continue;
                                 }
-                                let (sy, sx) = (yy as usize / up, xx as usize / up);
-                                acc += wr[(ci * s.k + ky) * s.k + kx] * src[((f * cn + c) * s.h + sy) * s.w + sx];
+                                for kx in 0..s.k {
+                                    let xx = xo as isize + kx as isize - pad;
+                                    if xx < 0 || xx >= ow as isize {
+                                        continue;
+                                    }
+                                    let (sy, sx) = (yy as usize / up, xx as usize / up);
+                                    acc += wr[(ci * s.k + ky) * s.k + kx]
+                                        * src[((f * cn + c) * s.h + sy) * s.w + sx];
+                                }
                             }
                         }
+                        let i = y * ow + xo;
+                        plane[i] = epilogue(&ep, res.as_ref(), fc * oh * ow + i, acc);
                     }
-                    let i = y * ow + xo;
-                    plane[i] = epilogue(&ep, res.as_ref(), fc * oh * ow + i, acc);
                 }
-            }
-        });
+            });
     }
 
     fn conv3d(
@@ -978,42 +1242,50 @@ impl Backend for Cpu {
         let og = s.cout / s.groups;
         let (kt, kh, kw) = s.k;
         let mut o = out.w();
-        o[..s.out_len()].par_chunks_mut(oh * ow).enumerate().for_each(|(plane_i, plane)| {
-            let (co, to) = (plane_i / ot, plane_i % ot);
-            let g = co / og;
-            let wr = &w.data[co * s.k_len()..][..s.k_len()];
-            for yo in 0..oh {
-                for xo in 0..ow {
-                    let mut acc = bias.as_ref().map_or(0.0, |b| b[co]);
-                    for dt in 0..kt {
-                        let ti = (to * s.stride.0 + dt) as isize - s.pad_t.0 as isize;
-                        if ti < 0 || ti >= s.t as isize {
-                            continue; // temporal padding is always zero
-                        }
-                        for dy in 0..kh {
-                            let Some(yi) = pad_index((yo * s.stride.1 + dy) as isize - s.pad_h.0 as isize, s.h, s.spatial_pad)
-                            else {
-                                continue;
-                            };
-                            for dx in 0..kw {
-                                let Some(xi) =
-                                    pad_index((xo * s.stride.2 + dx) as isize - s.pad_w.0 as isize, s.w, s.spatial_pad)
-                                else {
+        o[..s.out_len()]
+            .par_chunks_mut(oh * ow)
+            .enumerate()
+            .for_each(|(plane_i, plane)| {
+                let (co, to) = (plane_i / ot, plane_i % ot);
+                let g = co / og;
+                let wr = &w.data[co * s.k_len()..][..s.k_len()];
+                for yo in 0..oh {
+                    for xo in 0..ow {
+                        let mut acc = bias.as_ref().map_or(0.0, |b| b[co]);
+                        for dt in 0..kt {
+                            let ti = (to * s.stride.0 + dt) as isize - s.pad_t.0 as isize;
+                            if ti < 0 || ti >= s.t as isize {
+                                continue; // temporal padding is always zero
+                            }
+                            for dy in 0..kh {
+                                let Some(yi) = pad_index(
+                                    (yo * s.stride.1 + dy) as isize - s.pad_h.0 as isize,
+                                    s.h,
+                                    s.spatial_pad,
+                                ) else {
                                     continue;
                                 };
-                                for cl in 0..cg {
-                                    let ci = g * cg + cl;
-                                    acc += wr[((cl * kt + dt) * kh + dy) * kw + dx]
-                                        * x[((ci * s.t + ti as usize) * s.h + yi) * s.w + xi];
+                                for dx in 0..kw {
+                                    let Some(xi) = pad_index(
+                                        (xo * s.stride.2 + dx) as isize - s.pad_w.0 as isize,
+                                        s.w,
+                                        s.spatial_pad,
+                                    ) else {
+                                        continue;
+                                    };
+                                    for cl in 0..cg {
+                                        let ci = g * cg + cl;
+                                        acc += wr[((cl * kt + dt) * kh + dy) * kw + dx]
+                                            * x[((ci * s.t + ti as usize) * s.h + yi) * s.w + xi];
+                                    }
                                 }
                             }
                         }
+                        let i = yo * ow + xo;
+                        plane[i] = epilogue(&ep, res.as_ref(), plane_i * oh * ow + i, acc);
                     }
-                    let i = yo * ow + xo;
-                    plane[i] = epilogue(&ep, res.as_ref(), plane_i * oh * ow + i, acc);
                 }
-            }
-        });
+            });
     }
 
     fn conv1d(
@@ -1034,38 +1306,59 @@ impl Backend for Cpu {
         let cg = s.cin / s.groups;
         let og = s.cout / s.groups;
         let mut o = out.w();
-        o[..s.cout * ol].par_chunks_mut(ol).enumerate().for_each(|(co, row)| {
-            let g = co / og;
-            let wr = &w.data[co * cg * s.k..][..cg * s.k];
-            for t in 0..ol {
-                let mut acc = bias.as_ref().map_or(0.0, |b| b[co]);
-                for kk in 0..s.k {
-                    let ti = (t * s.stride + kk * s.dilation) as isize - s.pad.0 as isize;
-                    if ti < 0 || ti >= s.len as isize {
-                        continue;
+        o[..s.cout * ol]
+            .par_chunks_mut(ol)
+            .enumerate()
+            .for_each(|(co, row)| {
+                let g = co / og;
+                let wr = &w.data[co * cg * s.k..][..cg * s.k];
+                for t in 0..ol {
+                    let mut acc = bias.as_ref().map_or(0.0, |b| b[co]);
+                    for kk in 0..s.k {
+                        let ti = (t * s.stride + kk * s.dilation) as isize - s.pad.0 as isize;
+                        if ti < 0 || ti >= s.len as isize {
+                            continue;
+                        }
+                        for cl in 0..cg {
+                            acc += wr[cl * s.k + kk] * x[(g * cg + cl) * s.len + ti as usize];
+                        }
                     }
-                    for cl in 0..cg {
-                        acc += wr[cl * s.k + kk] * x[(g * cg + cl) * s.len + ti as usize];
-                    }
+                    row[t] = epilogue(&ep, res.as_ref(), co * ol + t, acc);
                 }
-                row[t] = epilogue(&ep, res.as_ref(), co * ol + t, acc);
-            }
-        });
+            });
     }
 
-    fn replicate_pad1d(&self, x: &CpuBuf, c: usize, len: usize, left: usize, right: usize, out: &CpuBuf) {
+    fn replicate_pad1d(
+        &self,
+        x: &CpuBuf,
+        c: usize,
+        len: usize,
+        left: usize,
+        right: usize,
+        out: &CpuBuf,
+    ) {
         let x = x.r();
         let ol = len + left + right;
         let mut o = out.w();
-        o[..c * ol].par_chunks_mut(ol).enumerate().for_each(|(ci, row)| {
-            for i in 0..ol {
-                let src = (i as isize - left as isize).clamp(0, len as isize - 1) as usize;
-                row[i] = x[ci * len + src];
-            }
-        });
+        o[..c * ol]
+            .par_chunks_mut(ol)
+            .enumerate()
+            .for_each(|(ci, row)| {
+                for i in 0..ol {
+                    let src = (i as isize - left as isize).clamp(0, len as isize - 1) as usize;
+                    row[i] = x[ci * len + src];
+                }
+            });
     }
 
-    fn conv_transpose1d(&self, x: &CpuBuf, s: &ConvT1dShape, w: &CpuWeight, bias: Option<&CpuBuf>, out: &CpuBuf) {
+    fn conv_transpose1d(
+        &self,
+        x: &CpuBuf,
+        s: &ConvT1dShape,
+        w: &CpuWeight,
+        bias: Option<&CpuBuf>,
+        out: &CpuBuf,
+    ) {
         assert_eq!(w.rows, s.cin);
         assert_eq!(w.cols, (s.cout / s.groups) * s.k);
         let x = x.r();
@@ -1074,25 +1367,28 @@ impl Backend for Cpu {
         let cg = s.cin / s.groups;
         let og = s.cout / s.groups;
         let mut o = out.w();
-        o[..s.cout * ol].par_chunks_mut(ol).enumerate().for_each(|(co, row)| {
-            let g = co / og;
-            let col = co % og;
-            let b = bias.as_ref().map_or(0.0, |b| b[co]);
-            row.fill(b);
-            for cl in 0..cg {
-                let ci = g * cg + cl;
-                let wr = &w.data[ci * og * s.k + col * s.k..][..s.k];
-                for i in 0..s.len {
-                    let xv = x[ci * s.len + i];
-                    for kk in 0..s.k {
-                        let t = (i * s.stride + kk) as isize - s.pad as isize;
-                        if t >= 0 && (t as usize) < ol {
-                            row[t as usize] += xv * wr[kk];
+        o[..s.cout * ol]
+            .par_chunks_mut(ol)
+            .enumerate()
+            .for_each(|(co, row)| {
+                let g = co / og;
+                let col = co % og;
+                let b = bias.as_ref().map_or(0.0, |b| b[co]);
+                row.fill(b);
+                for cl in 0..cg {
+                    let ci = g * cg + cl;
+                    let wr = &w.data[ci * og * s.k + col * s.k..][..s.k];
+                    for i in 0..s.len {
+                        let xv = x[ci * s.len + i];
+                        for kk in 0..s.k {
+                            let t = (i * s.stride + kk) as isize - s.pad as isize;
+                            if t >= 0 && (t as usize) < ol {
+                                row[t as usize] += xv * wr[kk];
+                            }
                         }
                     }
                 }
-            }
-        });
+            });
     }
 
     fn group_norm(
@@ -1140,16 +1436,19 @@ impl Backend for Cpu {
             })
             .collect();
         let mut o = out.w();
-        o[..c * t * hw].par_chunks_mut(hw).enumerate().for_each(|(ct, row)| {
-            let (ci, ti) = (ct / t, ct % t);
-            let g = ci / cg;
-            let (mean, inv) = stats[if per_frame { ti * groups + g } else { g }];
-            let base = ct * hw;
-            for j in 0..hw {
-                let y = ((x[base + j] as f64 - mean) * inv) as f32 * w[ci] + b[ci];
-                row[j] = act(a, y);
-            }
-        });
+        o[..c * t * hw]
+            .par_chunks_mut(hw)
+            .enumerate()
+            .for_each(|(ct, row)| {
+                let (ci, ti) = (ct / t, ct % t);
+                let g = ci / cg;
+                let (mean, inv) = stats[if per_frame { ti * groups + g } else { g }];
+                let base = ct * hw;
+                for j in 0..hw {
+                    let y = ((x[base + j] as f64 - mean) * inv) as f32 * w[ci] + b[ci];
+                    row[j] = act(a, y);
+                }
+            });
     }
 
     fn snake(&self, x: &CpuBuf, c: usize, len: usize, snake: Snake<'_, CpuBuf>) {
@@ -1157,30 +1456,47 @@ impl Backend for Cpu {
         match snake {
             Snake::Alpha(a) => {
                 let a = a.r();
-                xx[..c * len].par_chunks_mut(len).enumerate().for_each(|(ci, row)| {
-                    let al = a[ci];
-                    let inv = 1.0 / (al + 1e-9);
-                    for v in row.iter_mut() {
-                        let s = (al * *v).sin();
-                        *v += inv * s * s;
-                    }
-                });
+                xx[..c * len]
+                    .par_chunks_mut(len)
+                    .enumerate()
+                    .for_each(|(ci, row)| {
+                        let al = a[ci];
+                        let inv = 1.0 / (al + 1e-9);
+                        for v in row.iter_mut() {
+                            let s = (al * *v).sin();
+                            *v += inv * s * s;
+                        }
+                    });
             }
             Snake::AlphaBeta { alpha, beta } => {
                 let (a, b) = (alpha.r(), beta.r());
-                xx[..c * len].par_chunks_mut(len).enumerate().for_each(|(ci, row)| {
-                    let al = a[ci].exp();
-                    let inv = 1.0 / (b[ci].exp() + 1e-9);
-                    for v in row.iter_mut() {
-                        let s = (al * *v).sin();
-                        *v += inv * s * s;
-                    }
-                });
+                xx[..c * len]
+                    .par_chunks_mut(len)
+                    .enumerate()
+                    .for_each(|(ci, row)| {
+                        let al = a[ci].exp();
+                        let inv = 1.0 / (b[ci].exp() + 1e-9);
+                        for v in row.iter_mut() {
+                            let s = (al * *v).sin();
+                            *v += inv * s * s;
+                        }
+                    });
             }
         }
     }
 
-    fn trilinear_resize(&self, x: &CpuBuf, c: usize, t: usize, h: usize, w: usize, t2: usize, h2: usize, w2: usize, out: &CpuBuf) {
+    fn trilinear_resize(
+        &self,
+        x: &CpuBuf,
+        c: usize,
+        t: usize,
+        h: usize,
+        w: usize,
+        t2: usize,
+        h2: usize,
+        w2: usize,
+        out: &CpuBuf,
+    ) {
         let x = x.r();
         let coord = |o: usize, n_in: usize, n_out: usize| -> (usize, usize, f32) {
             if n_in == n_out {
@@ -1193,38 +1509,54 @@ impl Backend for Cpu {
             (i0, i1, src - i0 as f32)
         };
         let mut o = out.w();
-        o[..c * t2 * h2 * w2].par_chunks_mut(h2 * w2).enumerate().for_each(|(ct, plane)| {
-            let (ci, to) = (ct / t2, ct % t2);
-            let (t0, t1, lt) = coord(to, t, t2);
-            for yo in 0..h2 {
-                let (y0, y1, ly) = coord(yo, h, h2);
-                for xo in 0..w2 {
-                    let (x0, x1, lx) = coord(xo, w, w2);
-                    let at = |ti: usize, yi: usize, xi: usize| x[((ci * t + ti) * h + yi) * w + xi];
-                    let lerp = |a: f32, b: f32, l: f32| a + (b - a) * l;
-                    let c00 = lerp(at(t0, y0, x0), at(t0, y0, x1), lx);
-                    let c01 = lerp(at(t0, y1, x0), at(t0, y1, x1), lx);
-                    let c10 = lerp(at(t1, y0, x0), at(t1, y0, x1), lx);
-                    let c11 = lerp(at(t1, y1, x0), at(t1, y1, x1), lx);
-                    plane[yo * w2 + xo] = lerp(lerp(c00, c01, ly), lerp(c10, c11, ly), lt);
+        o[..c * t2 * h2 * w2]
+            .par_chunks_mut(h2 * w2)
+            .enumerate()
+            .for_each(|(ct, plane)| {
+                let (ci, to) = (ct / t2, ct % t2);
+                let (t0, t1, lt) = coord(to, t, t2);
+                for yo in 0..h2 {
+                    let (y0, y1, ly) = coord(yo, h, h2);
+                    for xo in 0..w2 {
+                        let (x0, x1, lx) = coord(xo, w, w2);
+                        let at =
+                            |ti: usize, yi: usize, xi: usize| x[((ci * t + ti) * h + yi) * w + xi];
+                        let lerp = |a: f32, b: f32, l: f32| a + (b - a) * l;
+                        let c00 = lerp(at(t0, y0, x0), at(t0, y0, x1), lx);
+                        let c01 = lerp(at(t0, y1, x0), at(t0, y1, x1), lx);
+                        let c10 = lerp(at(t1, y0, x0), at(t1, y0, x1), lx);
+                        let c11 = lerp(at(t1, y1, x0), at(t1, y1, x1), lx);
+                        plane[yo * w2 + xo] = lerp(lerp(c00, c01, ly), lerp(c10, c11, ly), lt);
+                    }
                 }
-            }
-        });
+            });
     }
 
-    fn pixel_shuffle(&self, x: &CpuBuf, frames: usize, c: usize, h: usize, w: usize, r: usize, out: &CpuBuf) {
+    fn pixel_shuffle(
+        &self,
+        x: &CpuBuf,
+        frames: usize,
+        c: usize,
+        h: usize,
+        w: usize,
+        r: usize,
+        out: &CpuBuf,
+    ) {
         let x = x.r();
         let mut o = out.w();
         let (oh, ow) = (h * r, w * r);
-        o[..frames * c * oh * ow].par_chunks_mut(oh * ow).enumerate().for_each(|(fc, plane)| {
-            let (f, co) = (fc / c, fc % c);
-            for y in 0..oh {
-                for xx in 0..ow {
-                    let ci = co * r * r + (y % r) * r + (xx % r);
-                    plane[y * ow + xx] = x[((f * c * r * r + ci) * h + y / r) * w + xx / r];
+        o[..frames * c * oh * ow]
+            .par_chunks_mut(oh * ow)
+            .enumerate()
+            .for_each(|(fc, plane)| {
+                let (f, co) = (fc / c, fc % c);
+                for y in 0..oh {
+                    for xx in 0..ow {
+                        let ci = co * r * r + (y % r) * r + (xx % r);
+                        plane[y * ow + xx] = x[((f * c * r * r + ci) * h + y / r) * w + xx / r];
+                    }
                 }
-            }
-        });
+            });
     }
 
     fn tanh_clamp(&self, x: &CpuBuf, n: usize, s: f32) {
@@ -1255,12 +1587,22 @@ mod tests {
     #[test]
     fn vsa_with_every_tile_is_dense_attention() {
         let (heads, d) = (2, 16);
-        let segs = [Segment::Dense(70), Segment::Video { grid: (5, 6, 9), sparsity: 0.0 }];
+        let segs = [
+            Segment::Dense(70),
+            Segment::Video {
+                grid: (5, 6, 9),
+                sparsity: 0.0,
+            },
+        ];
         let spec = VsaSpec::new(&segs, 64, heads, d);
         assert!(spec.plan.is_dense());
         let s = spec.plan.seq;
         let mut r = Rng::new(1);
-        let (q, k, v) = (r.normal(heads * s * d), r.normal(heads * s * d), r.normal(heads * s * d));
+        let (q, k, v) = (
+            r.normal(heads * s * d),
+            r.normal(heads * s * d),
+            r.normal(heads * s * d),
+        );
         let be = Cpu;
         let (gq, gk, gv) = (be.upload(&q), be.upload(&k), be.upload(&v));
         let dense = be.alloc(s * heads * d);
@@ -1287,7 +1629,18 @@ mod tests {
         let v = r.normal(kv * s * d);
         let be = Cpu;
         let out = be.alloc(s * heads * d);
-        be.attention(&be.upload(&q), &be.upload(&k), &be.upload(&v), heads, kv, s, s, d, false, &out);
+        be.attention(
+            &be.upload(&q),
+            &be.upload(&k),
+            &be.upload(&v),
+            heads,
+            kv,
+            s,
+            s,
+            d,
+            false,
+            &out,
+        );
         // Repeat each KV head twice.
         let rep = |x: &[f32]| -> Vec<f32> {
             let mut o = Vec::new();
@@ -1297,10 +1650,32 @@ mod tests {
             o
         };
         let out2 = be.alloc(s * heads * d);
-        be.attention(&be.upload(&q), &be.upload(&rep(&k)), &be.upload(&rep(&v)), heads, heads, s, s, d, false, &out2);
+        be.attention(
+            &be.upload(&q),
+            &be.upload(&rep(&k)),
+            &be.upload(&rep(&v)),
+            heads,
+            heads,
+            s,
+            s,
+            d,
+            false,
+            &out2,
+        );
         assert!(max_err(&be.download(&out), &be.download(&out2)) < 1e-6);
         // Causal: row 0 attends only to key 0 → equals v[0].
-        be.attention(&be.upload(&q), &be.upload(&k), &be.upload(&v), heads, kv, s, s, d, true, &out);
+        be.attention(
+            &be.upload(&q),
+            &be.upload(&k),
+            &be.upload(&v),
+            heads,
+            kv,
+            s,
+            s,
+            d,
+            true,
+            &out,
+        );
         let o = be.download(&out);
         for h in 0..heads {
             assert!(max_err(&o[h * d..(h + 1) * d], &v[(h / 2) * s * d..][..d]) < 1e-6);
@@ -1343,7 +1718,11 @@ mod tests {
             heads,
             hd,
             None,
-            Some(Rope { cos: &be.upload(&cos), sin: &be.upload(&sin), rot }),
+            Some(Rope {
+                cos: &be.upload(&cos),
+                sin: &be.upload(&sin),
+                rot,
+            }),
             &out,
         );
         let o = be.download(&out);
@@ -1354,7 +1733,20 @@ mod tests {
         // head 1 row 0 lands at [heads, rows, hd] index (1·rows + 0)·hd.
         assert_eq!(o[rows * hd + 4], src[hd + 4]);
         let w = be.upload(&vec![2.0; hd]);
-        be.head_split(&be.upload(&src), rows, heads * hd, 0, heads, hd, Some(HeadNorm { w: Some(&w), eps: 0.0 }), None, &out);
+        be.head_split(
+            &be.upload(&src),
+            rows,
+            heads * hd,
+            0,
+            heads,
+            hd,
+            Some(HeadNorm {
+                w: Some(&w),
+                eps: 0.0,
+            }),
+            None,
+            &out,
+        );
         let o = be.download(&out);
         let ms: f32 = (0..hd).map(|j| o[j] * o[j]).sum::<f32>() / hd as f32;
         assert!((ms - 4.0).abs() < 1e-4);
@@ -1373,7 +1765,14 @@ mod tests {
         }
         let s = Conv3dShape::causal(1, 1, 1, 3, 3, 3);
         let out = be.alloc(s.out_len());
-        be.conv3d(&be.upload(&x), &s, &be.weight(&w, 1, 27), None, ConvEpilogue::None, &out);
+        be.conv3d(
+            &be.upload(&x),
+            &s,
+            &be.weight(&w, 1, 27),
+            None,
+            ConvEpilogue::None,
+            &out,
+        );
         let o = be.download(&out);
         // Centre pixel: sum of all 9. Corner (0,0) with reflect: rows {1,0,1} × cols {1,0,1}.
         assert_eq!(o[4], 45.0);
@@ -1382,10 +1781,26 @@ mod tests {
         // The causal pad reads only t = 0 from the front taps: temporal taps 0 and 1 see zeros when t=1.
         let mut wt = vec![0.0f32; 27];
         wt[4] = 1.0; // kt = 0 centre
-        be.conv3d(&be.upload(&x), &s, &be.weight(&wt, 1, 27), None, ConvEpilogue::None, &out);
+        be.conv3d(
+            &be.upload(&x),
+            &s,
+            &be.weight(&wt, 1, 27),
+            None,
+            ConvEpilogue::None,
+            &out,
+        );
         assert!(be.download(&out).iter().all(|&v| v == 0.0));
         // Stride-2 downsampler with asymmetric zero padding (0,1): 3→2.
-        let ds = Conv3dShape { h: 4, w: 4, stride: (1, 2, 2), pad_h: (0, 1), pad_w: (0, 1), spatial_pad: Pad::Zero, pad_t: (2, 0), ..s };
+        let ds = Conv3dShape {
+            h: 4,
+            w: 4,
+            stride: (1, 2, 2),
+            pad_h: (0, 1),
+            pad_w: (0, 1),
+            spatial_pad: Pad::Zero,
+            pad_t: (2, 0),
+            ..s
+        };
         assert_eq!(ds.out_dims(), (1, 2, 2));
     }
 
@@ -1394,16 +1809,49 @@ mod tests {
         let be = Cpu;
         // Depthwise conv1d: 2 channels, k=3, pad 1, identity taps per channel.
         let x = vec![1.0f32, 2.0, 3.0, 4.0, 10.0, 20.0, 30.0, 40.0];
-        let s = Conv1dShape { cin: 2, cout: 2, groups: 2, len: 4, k: 3, stride: 1, dilation: 1, pad: (1, 1) };
+        let s = Conv1dShape {
+            cin: 2,
+            cout: 2,
+            groups: 2,
+            len: 4,
+            k: 3,
+            stride: 1,
+            dilation: 1,
+            pad: (1, 1),
+        };
         let w = vec![0.0, 1.0, 0.0, 0.0, 0.0, 1.0]; // ch0 identity, ch1 shift left
         let out = be.alloc(s.out_len());
-        be.conv1d(&be.upload(&x), &s, &be.weight(&w, 2, 3), None, ConvEpilogue::None, &out);
-        assert_eq!(be.download(&out), vec![1.0, 2.0, 3.0, 4.0, 20.0, 30.0, 40.0, 0.0]);
+        be.conv1d(
+            &be.upload(&x),
+            &s,
+            &be.weight(&w, 2, 3),
+            None,
+            ConvEpilogue::None,
+            &out,
+        );
+        assert_eq!(
+            be.download(&out),
+            vec![1.0, 2.0, 3.0, 4.0, 20.0, 30.0, 40.0, 0.0]
+        );
         // Transposed: cin 1 → cout 1, k 4, stride 2, pad 1: (len−1)·2 − 2 + 4.
-        let ts = ConvT1dShape { cin: 1, cout: 1, groups: 1, len: 3, k: 4, stride: 2, pad: 1 };
+        let ts = ConvT1dShape {
+            cin: 1,
+            cout: 1,
+            groups: 1,
+            len: 3,
+            k: 4,
+            stride: 2,
+            pad: 1,
+        };
         assert_eq!(ts.out_len_1d(), 6);
         let o = be.alloc(6);
-        be.conv_transpose1d(&be.upload(&[1.0, 0.0, 0.0]), &ts, &be.weight(&[1.0, 2.0, 3.0, 4.0], 1, 4), None, &o);
+        be.conv_transpose1d(
+            &be.upload(&[1.0, 0.0, 0.0]),
+            &ts,
+            &be.weight(&[1.0, 2.0, 3.0, 4.0], 1, 4),
+            None,
+            &o,
+        );
         // x[0] spreads to t = 0·2 − 1 + k = k − 1: taps k=1..3 land at 0..2.
         assert_eq!(be.download(&o), vec![2.0, 3.0, 4.0, 0.0, 0.0, 0.0]);
     }
@@ -1423,7 +1871,19 @@ mod tests {
         let out = be.alloc(x.len());
         let w = be.upload(&[1.0; 4]);
         let b = be.upload(&[0.0; 4]);
-        be.group_norm(&be.upload(&x), 4, 2, 2, 2, true, &w, &b, 1e-6, Act::None, &out);
+        be.group_norm(
+            &be.upload(&x),
+            4,
+            2,
+            2,
+            2,
+            true,
+            &w,
+            &b,
+            1e-6,
+            Act::None,
+            &out,
+        );
         let o = be.download(&out);
         for c in 0..4 {
             for j in 0..2 {
@@ -1440,8 +1900,19 @@ mod tests {
         be.pixel_shuffle(&be.upload(&[1.0, 2.0, 3.0, 4.0]), 1, 1, 1, 1, 2, &ps);
         assert_eq!(be.download(&ps), vec![1.0, 2.0, 3.0, 4.0]);
         let ps2 = be.alloc(8);
-        be.pixel_shuffle(&be.upload(&[1.0, 5.0, 2.0, 6.0, 3.0, 7.0, 4.0, 8.0]), 1, 1, 2, 1, 2, &ps2);
-        assert_eq!(be.download(&ps2), vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]);
+        be.pixel_shuffle(
+            &be.upload(&[1.0, 5.0, 2.0, 6.0, 3.0, 7.0, 4.0, 8.0]),
+            1,
+            1,
+            2,
+            1,
+            2,
+            &ps2,
+        );
+        assert_eq!(
+            be.download(&ps2),
+            vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]
+        );
     }
 
     #[test]
@@ -1459,15 +1930,37 @@ mod tests {
         let idx = be.upload_u32(&[0, 1, 0]);
         let tab = be.upload_table(&table);
         let out = be.alloc(rows * dim);
-        let m = ModTable { table: &tab, idx: &idx, slots: 6 };
-        be.rms_norm(&be.upload(&x), rows, dim, None, Modulation::Table { m, scale: 1, shift: 0 }, 0.0, &out);
+        let m = ModTable {
+            table: &tab,
+            idx: &idx,
+            slots: 6,
+        };
+        be.rms_norm(
+            &be.upload(&x),
+            rows,
+            dim,
+            None,
+            Modulation::Table {
+                m,
+                scale: 1,
+                shift: 0,
+            },
+            0.0,
+            &out,
+        );
         let o = be.download(&out);
         let ms = (x[..dim].iter().map(|v| v * v).sum::<f32>() / dim as f32).sqrt();
         assert!((o[0] - x[0] / ms).abs() < 1e-6);
         assert!((o[dim] - (x[dim] / ms * 2.0 + 2.0)).abs() < 1e-6);
         let h = be.upload(&vec![1.0; rows * dim]);
         let a = be.upload(&vec![2.0; rows * dim]);
-        be.gate_residual(&h, &a, rows, dim, Gate::Table(h3_core::backend::ModRef { table: m, slot: 2 }));
+        be.gate_residual(
+            &h,
+            &a,
+            rows,
+            dim,
+            Gate::Table(h3_core::backend::ModRef { table: m, slot: 2 }),
+        );
         let hv = be.download(&h);
         assert_eq!(hv[0], 1.0);
         assert_eq!(hv[dim], 2.0);

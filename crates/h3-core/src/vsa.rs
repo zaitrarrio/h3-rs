@@ -48,14 +48,19 @@ pub enum Segment {
     Dense(usize),
     /// A `(t, h, w)` token grid, row-major in packed order, with its own
     /// keep rate.
-    Video { grid: (usize, usize, usize), sparsity: f64 },
+    Video {
+        grid: (usize, usize, usize),
+        sparsity: f64,
+    },
 }
 
 impl Segment {
     pub fn rows(&self) -> usize {
         match self {
             Segment::Dense(n) => *n,
-            Segment::Video { grid: (t, h, w), .. } => t * h * w,
+            Segment::Video {
+                grid: (t, h, w), ..
+            } => t * h * w,
         }
     }
 }
@@ -151,9 +156,21 @@ impl TilePlan {
                 }
             }
             let end = block_sizes.len();
-            regions.push(Region { start: first, end, topk: topk_for(sparsity, end - first) });
+            regions.push(Region {
+                start: first,
+                end,
+                topk: topk_for(sparsity, end - first),
+            });
         }
-        Self { tile, tile_elems, seq: cursor, num_prefix_tiles, regions, slot_src, block_sizes }
+        Self {
+            tile,
+            tile_elems,
+            seq: cursor,
+            num_prefix_tiles,
+            regions,
+            slot_src,
+            block_sizes,
+        }
     }
 
     pub fn num_tiles(&self) -> usize {
@@ -221,16 +238,33 @@ pub struct VsaSpec {
 
 impl VsaSpec {
     pub fn new(segments: &[Segment], tile_elems: usize, heads: usize, head_dim: usize) -> Self {
-        Self { plan: TilePlan::new(segments, tile_elems), heads, head_dim, scale: 1.0 / (head_dim as f32).sqrt(), qk8: false, pv8: false }
+        Self {
+            plan: TilePlan::new(segments, tile_elems),
+            heads,
+            head_dim,
+            scale: 1.0 / (head_dim as f32).sqrt(),
+            qk8: false,
+            pv8: false,
+        }
     }
     pub fn with_qk8(self, qk8: bool) -> Self {
-        Self { qk8: qk8 || self.pv8, ..self }
+        Self {
+            qk8: qk8 || self.pv8,
+            ..self
+        }
     }
     pub fn with_pv8(self, pv8: bool) -> Self {
-        Self { qk8: self.qk8 || pv8, pv8, ..self }
+        Self {
+            qk8: self.qk8 || pv8,
+            pv8,
+            ..self
+        }
     }
     pub fn dense(&self) -> Self {
-        Self { plan: self.plan.dense(), ..self.clone() }
+        Self {
+            plan: self.plan.dense(),
+            ..self.clone()
+        }
     }
 }
 
@@ -256,7 +290,9 @@ pub fn qk8_round(q: &[f32], k: &[f32], spec: &VsaSpec) -> (Vec<f32>, Vec<f32>) {
         }
         let kmean: Vec<f32> = kmean.iter().map(|m| (m / seq as f64) as f32).collect();
         for t in 0..nb {
-            let toks: Vec<usize> = (0..plan.block_sizes[t] as usize).map(|s| plan.slot_src[t * te + s] as usize).collect();
+            let toks: Vec<usize> = (0..plan.block_sizes[t] as usize)
+                .map(|s| plan.slot_src[t * te + s] as usize)
+                .collect();
             let (mut qmax, mut kmax) = (0f32, 0f32);
             for &tok in &toks {
                 for c in 0..d {
@@ -268,12 +304,18 @@ pub fn qk8_round(q: &[f32], k: &[f32], spec: &VsaSpec) -> (Vec<f32>, Vec<f32>) {
             // `x * (1 / scale)`, the kernels' form (`__float2int_rn(v * inv)`):
             // `x / scale` differs in the last bit one time in a million, and
             // a code flip moves a score by ~3e-3, enough to re-round P.
-            let (qi, ki) = (if qs > 0.0 { 1.0 / qs } else { 0.0 }, if ks > 0.0 { 1.0 / ks } else { 0.0 });
+            let (qi, ki) = (
+                if qs > 0.0 { 1.0 / qs } else { 0.0 },
+                if ks > 0.0 { 1.0 / ks } else { 0.0 },
+            );
             for &tok in &toks {
                 for c in 0..d {
                     let i = base + tok * d + c;
                     qo[i] = (q[i] * qi).round_ties_even().clamp(-127.0, 127.0) * qs;
-                    ko[i] = ((k[i] - kmean[c]) * ki).round_ties_even().clamp(-127.0, 127.0) * ks;
+                    ko[i] = ((k[i] - kmean[c]) * ki)
+                        .round_ties_even()
+                        .clamp(-127.0, 127.0)
+                        * ks;
                 }
             }
         }
@@ -291,7 +333,15 @@ pub const QK8_TILE: usize = 64;
 /// as f32 copies (K without the mean: a per-query constant softmax ignores)
 /// so that `attention(q', k', v)` is the oracle of the int8 kernels. Layouts
 /// `[heads][sq][d]` and `[kv_heads][sk][d]`.
-pub fn attn_qk8_round(q: &[f32], k: &[f32], heads: usize, kv_heads: usize, sq: usize, sk: usize, d: usize) -> (Vec<f32>, Vec<f32>) {
+pub fn attn_qk8_round(
+    q: &[f32],
+    k: &[f32],
+    heads: usize,
+    kv_heads: usize,
+    sq: usize,
+    sk: usize,
+    d: usize,
+) -> (Vec<f32>, Vec<f32>) {
     let round = |x: &[f32], out: &mut [f32], rows: usize, mean: Option<&[f32]>| {
         for t0 in (0..rows).step_by(QK8_TILE) {
             let t1 = (t0 + QK8_TILE).min(rows);
@@ -313,7 +363,12 @@ pub fn attn_qk8_round(q: &[f32], k: &[f32], heads: usize, kv_heads: usize, sq: u
     };
     let mut qo = vec![0f32; heads * sq * d];
     for h in 0..heads {
-        round(&q[h * sq * d..][..sq * d], &mut qo[h * sq * d..][..sq * d], sq, None);
+        round(
+            &q[h * sq * d..][..sq * d],
+            &mut qo[h * sq * d..][..sq * d],
+            sq,
+            None,
+        );
     }
     let mut ko = vec![0f32; kv_heads * sk * d];
     for h in 0..kv_heads {
@@ -334,7 +389,12 @@ pub fn attn_qk8_round(q: &[f32], k: &[f32], heads: usize, kv_heads: usize, sq: u
 /// its per-channel mean over the keys (per KV head), rounded to E4M3 with one
 /// scale `max|v − mean| / 448` per KV head, and stored as unitless codes.
 /// Returns `(codes as f32, mean [kv_heads][d], scale [kv_heads])`.
-pub fn attn_v8_round(v: &[f32], kv_heads: usize, sk: usize, d: usize) -> (Vec<f32>, Vec<f32>, Vec<f32>) {
+pub fn attn_v8_round(
+    v: &[f32],
+    kv_heads: usize,
+    sk: usize,
+    d: usize,
+) -> (Vec<f32>, Vec<f32>, Vec<f32>) {
     let mut codes = vec![0f32; kv_heads * sk * d];
     let mut mean = vec![0f32; kv_heads * d];
     let mut scale = vec![0f32; kv_heads];
@@ -361,7 +421,8 @@ pub fn attn_v8_round(v: &[f32], kv_heads: usize, sk: usize, d: usize) -> (Vec<f3
         for r in 0..sk {
             for c in 0..d {
                 let x = (vh[r * d + c] - mean[h * d + c]) * inv;
-                codes[(h * sk + r) * d + c] = crate::quant::e4m3_decode(crate::quant::e4m3_satfinite(x));
+                codes[(h * sk + r) * d + c] =
+                    crate::quant::e4m3_decode(crate::quant::e4m3_satfinite(x));
             }
         }
     }
@@ -395,7 +456,17 @@ pub fn e4m3_flip_slack(x: f32, eps: f32) -> f32 {
 /// product and kept exact for the denominator; `o = Σ p₈·v₈ · scale / Σ p
 /// + mean`. Output `[sq][heads][d]`.
 #[allow(clippy::too_many_arguments)]
-pub fn attention_pv8_reference(q: &[f32], k: &[f32], v: &[f32], heads: usize, kv_heads: usize, sq: usize, sk: usize, d: usize, causal: bool) -> Vec<f32> {
+pub fn attention_pv8_reference(
+    q: &[f32],
+    k: &[f32],
+    v: &[f32],
+    heads: usize,
+    kv_heads: usize,
+    sq: usize,
+    sk: usize,
+    d: usize,
+    causal: bool,
+) -> Vec<f32> {
     pv8_reference(q, k, v, heads, kv_heads, sq, sk, d, causal, None)
 }
 
@@ -404,14 +475,46 @@ pub fn attention_pv8_reference(q: &[f32], k: &[f32], v: &[f32], heads: usize, kv
 /// (`Σ step(p_j)·|v₈ⱼ| · scale / Σ p`): what a kernel whose scores differ
 /// from this f32 arithmetic in the last bits may legitimately differ by.
 #[allow(clippy::too_many_arguments)]
-pub fn attention_pv8_reference_slack(q: &[f32], k: &[f32], v: &[f32], heads: usize, kv_heads: usize, sq: usize, sk: usize, d: usize, causal: bool) -> (Vec<f32>, Vec<f32>) {
+pub fn attention_pv8_reference_slack(
+    q: &[f32],
+    k: &[f32],
+    v: &[f32],
+    heads: usize,
+    kv_heads: usize,
+    sq: usize,
+    sk: usize,
+    d: usize,
+    causal: bool,
+) -> (Vec<f32>, Vec<f32>) {
     let mut slack = vec![0f32; sq * heads * d];
-    let out = pv8_reference(q, k, v, heads, kv_heads, sq, sk, d, causal, Some(&mut slack));
+    let out = pv8_reference(
+        q,
+        k,
+        v,
+        heads,
+        kv_heads,
+        sq,
+        sk,
+        d,
+        causal,
+        Some(&mut slack),
+    );
     (out, slack)
 }
 
 #[allow(clippy::too_many_arguments)]
-fn pv8_reference(q: &[f32], k: &[f32], v: &[f32], heads: usize, kv_heads: usize, sq: usize, sk: usize, d: usize, causal: bool, mut slack: Option<&mut [f32]>) -> Vec<f32> {
+fn pv8_reference(
+    q: &[f32],
+    k: &[f32],
+    v: &[f32],
+    heads: usize,
+    kv_heads: usize,
+    sq: usize,
+    sk: usize,
+    d: usize,
+    causal: bool,
+    mut slack: Option<&mut [f32]>,
+) -> Vec<f32> {
     let (q8, k8) = attn_qk8_round(q, k, heads, kv_heads, sq, sk, d);
     let (v8, mean, vs) = attn_v8_round(v, kv_heads, sk, d);
     let group = heads / kv_heads;
@@ -419,7 +522,11 @@ fn pv8_reference(q: &[f32], k: &[f32], v: &[f32], heads: usize, kv_heads: usize,
     let mut out = vec![0f32; sq * heads * d];
     let mut s2 = vec![0f32; sk];
     for i in 0..sq {
-        let limit = if causal { (i + 1 + sk - sq).min(sk) } else { sk };
+        let limit = if causal {
+            (i + 1 + sk - sq).min(sk)
+        } else {
+            sk
+        };
         for h in 0..heads {
             let kh = h / group;
             let qi = &q8[(h * sq + i) * d..][..d];
@@ -519,7 +626,11 @@ mod tests {
         // the other way (what a kernel's exp2 may do).
         let mut rng = crate::rng::Rng::new(7);
         let (heads, kv, sq, sk, d) = (2usize, 1usize, 40usize, 72usize, 32usize);
-        let (q, k, v) = (rng.normal(heads * sq * d), rng.normal(kv * sk * d), rng.normal(kv * sk * d));
+        let (q, k, v) = (
+            rng.normal(heads * sq * d),
+            rng.normal(kv * sk * d),
+            rng.normal(kv * sk * d),
+        );
         let plain = attention_pv8_reference(&q, &k, &v, heads, kv, sq, sk, d, true);
         let (out, slack) = attention_pv8_reference_slack(&q, &k, &v, heads, kv, sq, sk, d, true);
         assert_eq!(plain, out);
@@ -534,7 +645,15 @@ mod tests {
             let limit = (i + 1 + sk - sq).min(sk);
             for h in 0..heads {
                 let qi = &q8[(h * sq + i) * d..][..d];
-                let s: Vec<f32> = (0..limit).map(|j| qi.iter().zip(&k8[j * d..][..d]).map(|(a, b)| a * b).sum::<f32>() * sl2).collect();
+                let s: Vec<f32> = (0..limit)
+                    .map(|j| {
+                        qi.iter()
+                            .zip(&k8[j * d..][..d])
+                            .map(|(a, b)| a * b)
+                            .sum::<f32>()
+                            * sl2
+                    })
+                    .collect();
                 let mi = s.iter().cloned().fold(f32::NEG_INFINITY, f32::max).ceil();
                 for sign in [-1.0f32, 1.0] {
                     let mut l = 0f32;
@@ -542,7 +661,9 @@ mod tests {
                     for (j, &sj) in s.iter().enumerate() {
                         let p = (sj - mi + PV8_SHIFT).exp2();
                         l += p;
-                        let p8 = crate::quant::e4m3_decode(crate::quant::e4m3_satfinite(p * (1.0 + sign * PV8_FLIP_EPS * 0.5)));
+                        let p8 = crate::quant::e4m3_decode(crate::quant::e4m3_satfinite(
+                            p * (1.0 + sign * PV8_FLIP_EPS * 0.5),
+                        ));
                         for c in 0..d {
                             acc[c] += p8 * v8[j * d + c];
                         }
@@ -553,26 +674,46 @@ mod tests {
                         let diff = (o - out[idx]).abs();
                         if diff > 0.0 {
                             flips += 1;
-                            assert!(diff <= slack[idx] * (1.0 + 1e-5) + 1e-6, "row {i} head {h} ch {c}: moved {diff} with slack {}", slack[idx]);
+                            assert!(
+                                diff <= slack[idx] * (1.0 + 1e-5) + 1e-6,
+                                "row {i} head {h} ch {c}: moved {diff} with slack {}",
+                                slack[idx]
+                            );
                         }
                     }
                 }
             }
         }
         // Boundaries are rare at this eps; the seed is chosen so a few are hit.
-        assert!(flips > 0, "no near-boundary P in this draw; choose another seed");
+        assert!(
+            flips > 0,
+            "no near-boundary P in this draw; choose another seed"
+        );
     }
 
     #[test]
     fn t2va_plan_768p() {
         // 10 text + 414 audio rows dense, then a 37×24×42 video grid.
-        let segs = [Segment::Dense(424), Segment::Video { grid: (37, 24, 42), sparsity: 0.8 }];
+        let segs = [
+            Segment::Dense(424),
+            Segment::Video {
+                grid: (37, 24, 42),
+                sparsity: 0.8,
+            },
+        ];
         let p = TilePlan::new(&segs, 64);
         assert_eq!(p.num_prefix_tiles, 7); // 6 full + one of 40
         assert_eq!(p.block_sizes[6], 40);
         let tiles = 10 * 6 * 11;
         assert_eq!(p.num_video_tiles(), tiles);
-        assert_eq!(p.regions, vec![Region { start: 7, end: 7 + tiles, topk: topk_for(0.8, tiles) }]);
+        assert_eq!(
+            p.regions,
+            vec![Region {
+                start: 7,
+                end: 7 + tiles,
+                topk: topk_for(0.8, tiles)
+            }]
+        );
         assert_eq!(topk_for(0.8, tiles), 132);
         // Every row lands in exactly one slot.
         let mut seen = vec![false; p.seq];
@@ -583,7 +724,10 @@ mod tests {
             }
         }
         assert!(seen.iter().all(|&x| x));
-        assert_eq!(p.block_sizes.iter().map(|&b| b as usize).sum::<usize>(), p.seq);
+        assert_eq!(
+            p.block_sizes.iter().map(|&b| b as usize).sum::<usize>(),
+            p.seq
+        );
         // Last video tile: 1 frame (37 = 9·4 + 1), 4 rows, 2 cols (42 = 10·4 + 2).
         assert_eq!(*p.block_sizes.last().unwrap(), 1 * 4 * 2);
         let inv = p.slot_of_row();
@@ -595,17 +739,37 @@ mod tests {
     fn dense_segments_never_straddle_and_regions_select_independently() {
         let segs = [
             Segment::Dense(70),
-            Segment::Video { grid: (2, 4, 8), sparsity: 0.5 },
+            Segment::Video {
+                grid: (2, 4, 8),
+                sparsity: 0.5,
+            },
             Segment::Dense(5),
-            Segment::Video { grid: (4, 4, 4), sparsity: 0.0 },
+            Segment::Video {
+                grid: (4, 4, 4),
+                sparsity: 0.0,
+            },
         ];
         let p = TilePlan::new(&segs, 64);
         // 70 → tiles of 64 and 6; 5 → one tile of 5. All prefix tiles first.
         assert_eq!(p.num_prefix_tiles, 3);
         assert_eq!(&p.block_sizes[..3], &[64, 6, 5]);
         assert_eq!(p.regions.len(), 2);
-        assert_eq!(p.regions[0], Region { start: 3, end: 5, topk: 1 });
-        assert_eq!(p.regions[1], Region { start: 5, end: 6, topk: 1 });
+        assert_eq!(
+            p.regions[0],
+            Region {
+                start: 3,
+                end: 5,
+                topk: 1
+            }
+        );
+        assert_eq!(
+            p.regions[1],
+            Region {
+                start: 5,
+                end: 6,
+                topk: 1
+            }
+        );
         assert!(p.regions[1].is_dense());
         let scores = vec![0.0, 0.0, 0.0, 1.0, 2.0, 0.0];
         let keep = select(&p, 4, &scores);
@@ -641,7 +805,10 @@ pub fn segments_for_layout(
         for &(kind, rows, (t, h, w)) in &layout.reference_segments {
             if kind == SegmentKind::Video {
                 flush(&mut segs, &mut dense);
-                segs.push(Segment::Video { grid: (t / patch.0, h / patch.1, w / patch.2), sparsity: ref_sparsity });
+                segs.push(Segment::Video {
+                    grid: (t / patch.0, h / patch.1, w / patch.2),
+                    sparsity: ref_sparsity,
+                });
             } else {
                 dense += rows;
             }
@@ -649,7 +816,13 @@ pub fn segments_for_layout(
         dense += layout.num_target_audio_rows();
     }
     flush(&mut segs, &mut dense);
-    segs.push(Segment::Video { grid: layout.video_grid(patch), sparsity });
-    debug_assert_eq!(segs.iter().map(Segment::rows).sum::<usize>(), layout.sequence_length);
+    segs.push(Segment::Video {
+        grid: layout.video_grid(patch),
+        sparsity,
+    });
+    debug_assert_eq!(
+        segs.iter().map(Segment::rows).sum::<usize>(),
+        layout.sequence_length
+    );
     segs
 }

@@ -10,8 +10,8 @@ pub mod present;
 pub mod qwen3vl;
 pub mod vision;
 
-use h3_core::{Result, config::Qwen3VlConfig, packing::TEXT_TAG, weights::SafetensorsDir};
 use h3_core::backend::Backend;
+use h3_core::{Result, config::Qwen3VlConfig, packing::TEXT_TAG, weights::SafetensorsDir};
 use h3_model::pipeline::Prompt;
 use image::Image;
 use present::{Presentation, RefTokens, Tokenizer};
@@ -25,7 +25,10 @@ pub enum PresentedRef {
     /// Reference image at its canvas (short edge 2048 for the release).
     Image(Image),
     /// 24-fps frames at the target canvas and whether a soundtrack exists.
-    Video { frames: Vec<Image>, has_audio: bool },
+    Video {
+        frames: Vec<Image>,
+        has_audio: bool,
+    },
     Audio,
 }
 
@@ -37,13 +40,32 @@ pub struct Conditioner<B: Backend> {
 impl<B: Backend> Conditioner<B> {
     /// `tokenizer`: `tokenizer/tokenizer.json`; `text_encoder`: the checkpoint's
     /// `text_encoder/` directory.
-    pub fn open(be: &B, tokenizer: &Path, text_encoder: &Path, cfg: Qwen3VlConfig, resident: bool, vision: bool) -> Result<Self> {
-        Ok(Self { tokenizer: Tokenizer::from_file(tokenizer)?, model: Qwen3Vl::open(be, cfg, SafetensorsDir::open(text_encoder)?, resident, vision)? })
+    pub fn open(
+        be: &B,
+        tokenizer: &Path,
+        text_encoder: &Path,
+        cfg: Qwen3VlConfig,
+        resident: bool,
+        vision: bool,
+    ) -> Result<Self> {
+        Ok(Self {
+            tokenizer: Tokenizer::from_file(tokenizer)?,
+            model: Qwen3Vl::open(
+                be,
+                cfg,
+                SafetensorsDir::open(text_encoder)?,
+                resident,
+                vision,
+            )?,
+        })
     }
 
     fn finish(&self, be: &B, p: &Presentation, inputs: &[&VisionInput]) -> Result<Prompt> {
         let enc = self.model.encode(be, p, inputs)?;
-        Ok(Prompt { embeds: enc.embeds, tags: p.tags.clone() })
+        Ok(Prompt {
+            embeds: enc.embeds,
+            tags: p.tags.clone(),
+        })
     }
 
     /// T2VA: the prompt alone.
@@ -55,7 +77,10 @@ impl<B: Backend> Conditioner<B> {
 
     /// FL2VA: keyframes at the canvas, in anchor order.
     pub fn encode_fl2va(&self, be: &B, prompt: &str, keyframes: &[Image]) -> Result<Prompt> {
-        let inputs: Vec<VisionInput> = keyframes.iter().map(vision::preprocess_image).collect::<Result<_>>()?;
+        let inputs: Vec<VisionInput> = keyframes
+            .iter()
+            .map(vision::preprocess_image)
+            .collect::<Result<_>>()?;
         let p = present::present_fl2va(&self.tokenizer, prompt, &inputs)?;
         let refs: Vec<&VisionInput> = inputs.iter().collect();
         self.finish(be, &p, &refs)
@@ -87,7 +112,11 @@ impl<B: Backend> Conditioner<B> {
                     ii += 1;
                 }
                 PresentedRef::Video { has_audio, .. } => {
-                    toks.push(RefTokens::Video { input: &inputs[ii], timestamps: &stamps[si], has_audio: *has_audio });
+                    toks.push(RefTokens::Video {
+                        input: &inputs[ii],
+                        timestamps: &stamps[si],
+                        has_audio: *has_audio,
+                    });
                     ii += 1;
                     si += 1;
                 }

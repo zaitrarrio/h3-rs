@@ -66,7 +66,10 @@ impl AdalnTable {
         let pos = t.clamp(0.0, 1.0) * (self.grid - 1) as f32;
         let i0 = (pos.floor() as usize).min(self.grid - 2);
         let f = pos - i0 as f32;
-        let (a, b) = (&self.data[i0 * self.width..(i0 + 1) * self.width], &self.data[(i0 + 1) * self.width..(i0 + 2) * self.width]);
+        let (a, b) = (
+            &self.data[i0 * self.width..(i0 + 1) * self.width],
+            &self.data[(i0 + 1) * self.width..(i0 + 2) * self.width],
+        );
         a.iter().zip(b).map(|(&x, &y)| x + (y - x) * f).collect()
     }
 }
@@ -74,7 +77,15 @@ impl AdalnTable {
 impl TimeEmbedder {
     /// An embedder that only holds a table (no MLP weights).
     pub fn from_table(table: AdalnTable) -> Self {
-        Self { freq_dim: 0, l1w: Vec::new(), l1b: Vec::new(), l2w: Vec::new(), l2b: Vec::new(), basis: None, table: Some(table) }
+        Self {
+            freq_dim: 0,
+            l1w: Vec::new(),
+            l1b: Vec::new(),
+            l2w: Vec::new(),
+            l2b: Vec::new(),
+            basis: None,
+            table: Some(table),
+        }
     }
 
     /// `temb(t)`: the MLP output (`[time_embed_dim]`).
@@ -105,7 +116,11 @@ mod tests {
 
     #[test]
     fn table_interpolates_linearly_and_clamps() {
-        let tab = AdalnTable { grid: 3, width: 2, data: vec![0.0, 10.0, 1.0, 20.0, 4.0, 40.0] };
+        let tab = AdalnTable {
+            grid: 3,
+            width: 2,
+            data: vec![0.0, 10.0, 1.0, 20.0, 4.0, 40.0],
+        };
         assert_eq!(tab.at(0.0), vec![0.0, 10.0]);
         assert_eq!(tab.at(0.25), vec![0.5, 15.0]);
         assert_eq!(tab.at(0.5), vec![1.0, 20.0]);

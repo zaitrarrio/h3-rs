@@ -23,7 +23,11 @@ pub enum WeightQuant {
     Int8,
     /// 4-bit with `group` columns per scale/zero; `ffn_only` keeps attention
     /// and gate linears at int8.
-    Int4 { group: usize, hqq: bool, ffn_only: bool },
+    Int4 {
+        group: usize,
+        hqq: bool,
+        ffn_only: bool,
+    },
     /// NVFP4 as stored by the Trim checkpoint (FP4 E2M1 codes, 16-column
     /// E4M3 scales, one f32 alpha per tensor). Only loaded, never made here.
     Nvfp4,
@@ -56,7 +60,9 @@ impl WeightQuant {
         };
         match role {
             "ff.net.0.proj" | "ff.net.2" => self,
-            "attn.to_q" | "attn.to_k" | "attn.to_v" | "attn.to_out.0" | "attn.to_gate_compress" => self.attn(),
+            "attn.to_q" | "attn.to_k" | "attn.to_v" | "attn.to_out.0" | "attn.to_gate_compress" => {
+                self.attn()
+            }
             _ => Self::Native,
         }
     }
@@ -71,7 +77,9 @@ impl WeightQuant {
     /// same edges). Every other format applies to every block.
     pub fn for_block(self, block: usize, layers: usize) -> Self {
         match self {
-            Self::Mxfp8 if block < MXFP8_FIRST_BLOCK || block + MXFP8_BF16_TAIL >= layers => Self::Native,
+            Self::Mxfp8 if block < MXFP8_FIRST_BLOCK || block + MXFP8_BF16_TAIL >= layers => {
+                Self::Native
+            }
             q => q,
         }
     }
@@ -79,7 +87,10 @@ impl WeightQuant {
     /// [`Self::for_block`] then [`Self::for_key`] for a key of a `layers`-deep
     /// DiT (the exporter's rule; the loader knows the block it is loading).
     pub fn for_layer_key(self, key: &str, layers: usize) -> Self {
-        let block = key.strip_prefix("transformer_blocks.").and_then(|r| r.split_once('.')).and_then(|(i, _)| i.parse().ok());
+        let block = key
+            .strip_prefix("transformer_blocks.")
+            .and_then(|r| r.split_once('.'))
+            .and_then(|(i, _)| i.parse().ok());
         match block {
             Some(b) => self.for_block(b, layers).for_key(key),
             None => self.for_key(key),
@@ -99,7 +110,11 @@ impl std::fmt::Display for WeightQuant {
             Self::Int8 => f.write_str("int8"),
             Self::Nvfp4 => f.write_str("nvfp4"),
             Self::Mxfp8 => f.write_str("mxfp8"),
-            Self::Int4 { group, hqq, ffn_only } => write!(
+            Self::Int4 {
+                group,
+                hqq,
+                ffn_only,
+            } => write!(
                 f,
                 "int4{}-g{group}{}",
                 if *hqq { "-hqq" } else { "" },
@@ -137,7 +152,11 @@ impl std::str::FromStr for WeightQuant {
                 if group == 0 || group % 8 != 0 {
                     return Err(format!("int4 group must be a multiple of 8, got {group}"));
                 }
-                Ok(Self::Int4 { group, hqq, ffn_only })
+                Ok(Self::Int4 {
+                    group,
+                    hqq,
+                    ffn_only,
+                })
             }
         }
     }
@@ -185,7 +204,11 @@ pub struct Q8 {
 impl Q8 {
     pub fn quantize(data: &[f32], rows: usize, cols: usize) -> Self {
         assert_eq!(data.len(), rows * cols);
-        let group = if cols.is_multiple_of(Q8_GROUP) { Q8_GROUP } else { cols };
+        let group = if cols.is_multiple_of(Q8_GROUP) {
+            Q8_GROUP
+        } else {
+            cols
+        };
         let mut q = vec![0i8; data.len()];
         let mut scales = Vec::with_capacity(data.len() / group);
         for (src, dst) in data.chunks(group).zip(q.chunks_mut(group)) {
@@ -196,11 +219,21 @@ impl Q8 {
             }
             scales.push(s);
         }
-        Self { q, scales, rows, cols, group }
+        Self {
+            q,
+            scales,
+            rows,
+            cols,
+            group,
+        }
     }
 
     pub fn dequantize(&self) -> Vec<f32> {
-        self.q.iter().enumerate().map(|(i, &q)| q as f32 * self.scales[i / self.group]).collect()
+        self.q
+            .iter()
+            .enumerate()
+            .map(|(i, &q)| q as f32 * self.scales[i / self.group])
+            .collect()
     }
 
     /// Stack matrices with the same columns and group by rows (fused QKV).
@@ -242,17 +275,27 @@ impl Q4 {
     /// iterations).
     pub fn quantize(data: &[f32], rows: usize, cols: usize, group: usize, hqq: bool) -> Self {
         assert_eq!(data.len(), rows * cols);
-        let group = if cols.is_multiple_of(group) { group } else { cols };
+        let group = if cols.is_multiple_of(group) {
+            group
+        } else {
+            cols
+        };
         let n = data.len() / group;
         let mut q = vec![0u8; data.len()];
         let mut sz = vec![(0.0f32, 0.0f32); n];
         let threads = std::thread::available_parallelism().map_or(1, |t| t.get());
         let per = n.div_ceil(threads).max(1);
         std::thread::scope(|sc| {
-            for ((w, qc), szc) in data.chunks(per * group).zip(q.chunks_mut(per * group)).zip(sz.chunks_mut(per)) {
+            for ((w, qc), szc) in data
+                .chunks(per * group)
+                .zip(q.chunks_mut(per * group))
+                .zip(sz.chunks_mut(per))
+            {
                 sc.spawn(move || {
                     for ((w, qg), sz) in w.chunks(group).zip(qc.chunks_mut(group)).zip(szc) {
-                        let (lo, hi) = w.iter().fold((f32::MAX, f32::MIN), |(a, b), &v| (a.min(v), b.max(v)));
+                        let (lo, hi) = w
+                            .iter()
+                            .fold((f32::MAX, f32::MIN), |(a, b), &v| (a.min(v), b.max(v)));
                         let is = if hi > lo { 15.0 / (hi - lo) } else { 1.0 };
                         let mut z = -lo * is;
                         let code = |v: f32, z: f32| (v * is + z).round().clamp(0.0, 15.0);
@@ -268,7 +311,11 @@ impl Q4 {
                                     let e = v - r;
                                     err += e.abs();
                                     let a = e.abs();
-                                    let sh = if a > 0.0 { e.signum() * (a - a.powf(p - 1.0) / beta).max(0.0) } else { 0.0 };
+                                    let sh = if a > 0.0 {
+                                        e.signum() * (a - a.powf(p - 1.0) / beta).max(0.0)
+                                    } else {
+                                        0.0
+                                    };
                                     zsum += c - (v - sh) * is;
                                 }
                                 let err = err / w.len() as f32;
@@ -291,7 +338,14 @@ impl Q4 {
             }
         });
         let (scales, zeros) = sz.into_iter().unzip();
-        Self { q, scales, zeros, rows, cols, group }
+        Self {
+            q,
+            scales,
+            zeros,
+            rows,
+            cols,
+            group,
+        }
     }
 
     pub fn dequantize(&self) -> Vec<f32> {
@@ -307,17 +361,35 @@ impl Q4 {
 
     /// Two codes per byte, element `2i` in the low nibble.
     pub fn packed(&self) -> Vec<u8> {
-        self.q.chunks(2).map(|c| c[0] | (c.get(1).copied().unwrap_or(0) << 4)).collect()
+        self.q
+            .chunks(2)
+            .map(|c| c[0] | (c.get(1).copied().unwrap_or(0) << 4))
+            .collect()
     }
 
-    pub fn from_packed(packed: &[u8], scales: Vec<f32>, zeros: Vec<f32>, rows: usize, cols: usize) -> Self {
+    pub fn from_packed(
+        packed: &[u8],
+        scales: Vec<f32>,
+        zeros: Vec<f32>,
+        rows: usize,
+        cols: usize,
+    ) -> Self {
         let n = rows * cols;
         assert_eq!(packed.len(), n.div_ceil(2));
         assert!(!scales.is_empty() && scales.len() == zeros.len());
         assert_eq!(n % scales.len(), 0);
-        let q = (0..n).map(|i| (packed[i / 2] >> (4 * (i % 2))) & 15).collect();
+        let q = (0..n)
+            .map(|i| (packed[i / 2] >> (4 * (i % 2))) & 15)
+            .collect();
         let group = n / scales.len();
-        Self { q, scales, zeros, rows, cols, group }
+        Self {
+            q,
+            scales,
+            zeros,
+            rows,
+            cols,
+            group,
+        }
     }
 
     pub fn concat(parts: Vec<Q4>) -> Self {
@@ -339,8 +411,9 @@ impl Q4 {
 }
 
 /// FP4 E2M1 values by code (sign bit 3).
-pub const E2M1: [f32; 16] =
-    [0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0, -0.0, -0.5, -1.0, -1.5, -2.0, -3.0, -4.0, -6.0];
+pub const E2M1: [f32; 16] = [
+    0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0, -0.0, -0.5, -1.0, -1.5, -2.0, -3.0, -4.0, -6.0,
+];
 
 /// Decode an FP8 E4M3 (finite-only, "fn") byte.
 pub fn e4m3_to_f32(b: u8) -> f32 {
@@ -385,7 +458,13 @@ impl Nvfp4 {
     pub fn unswizzle_scales(swizzled: &[u8], rows: usize, groups: usize) -> Vec<u8> {
         let rp = rows.div_ceil(128) * 128;
         let gp = groups.div_ceil(4) * 4;
-        assert_eq!(swizzled.len(), rp * gp, "swizzled scale tensor is {} bytes, expected {}", swizzled.len(), rp * gp);
+        assert_eq!(
+            swizzled.len(),
+            rp * gp,
+            "swizzled scale tensor is {} bytes, expected {}",
+            swizzled.len(),
+            rp * gp
+        );
         let nc = gp / 4;
         let mut out = vec![0u8; rows * groups];
         for r in 0..rows {
@@ -401,20 +480,45 @@ impl Nvfp4 {
 
     /// Where the scale of logical row `i0·128 + i3·32 + i2`, group `i1·4 + i4`
     /// sits in the blocked tensor (`nc` = padded groups / 4).
-    pub fn swizzled_index(i0: usize, i1: usize, i2: usize, i3: usize, i4: usize, nc: usize) -> usize {
+    pub fn swizzled_index(
+        i0: usize,
+        i1: usize,
+        i2: usize,
+        i3: usize,
+        i4: usize,
+        nc: usize,
+    ) -> usize {
         (((i0 * nc + i1) * 32 + i2) * 4 + i3) * 4 + i4
     }
 
-    pub fn from_stored(packed: &[u8], swizzled_scales: &[u8], alpha: f32, rows: usize, cols: usize, first_high: bool) -> Self {
+    pub fn from_stored(
+        packed: &[u8],
+        swizzled_scales: &[u8],
+        alpha: f32,
+        rows: usize,
+        cols: usize,
+        first_high: bool,
+    ) -> Self {
         assert_eq!(packed.len(), rows * cols / 2);
         assert_eq!(cols % NVFP4_GROUP, 0);
         let scales = Self::unswizzle_scales(swizzled_scales, rows, cols / NVFP4_GROUP);
-        Self { packed: packed.to_vec(), scales, alpha, rows, cols, first_high }
+        Self {
+            packed: packed.to_vec(),
+            scales,
+            alpha,
+            rows,
+            cols,
+            first_high,
+        }
     }
 
     pub fn code(&self, r: usize, c: usize) -> u8 {
         let b = self.packed[(r * self.cols + c) / 2];
-        if (c % 2 == 0) != self.first_high { b & 15 } else { b >> 4 }
+        if (c % 2 == 0) != self.first_high {
+            b & 15
+        } else {
+            b >> 4
+        }
     }
 
     /// Rows `[start, end)` as their own matrix (a part of a fused QKV).
@@ -456,7 +560,10 @@ impl Nvfp4 {
 
     /// Scales as f32, `[rows, cols/16]`, for kernels that take them as numbers.
     pub fn scales_f32(&self) -> Vec<f32> {
-        self.scales.iter().map(|&b| e4m3_to_f32(b) * self.alpha).collect()
+        self.scales
+            .iter()
+            .map(|&b| e4m3_to_f32(b) * self.alpha)
+            .collect()
     }
 
     /// Stack by rows (fused QKV) when the alphas agree; otherwise the caller
@@ -582,33 +689,50 @@ impl Mxfp8 {
     /// Quantize `data` (`cols % 32 == 0`); one task per 128-row scale tile.
     pub fn quantize(data: &[f32], rows: usize, cols: usize) -> Self {
         assert_eq!(data.len(), rows * cols);
-        assert!(cols.is_multiple_of(MX_BLOCK), "MXFP8 needs cols % 32 == 0, got {cols}");
+        assert!(
+            cols.is_multiple_of(MX_BLOCK),
+            "MXFP8 needs cols % 32 == 0, got {cols}"
+        );
         let cb = (cols / MX_BLOCK).div_ceil(4);
         let tile = cb * 512;
         let mut codes = vec![0u8; rows * cols];
         let mut scales = vec![0u8; mx_scale_len(rows, cols)];
-        codes.par_chunks_mut(128 * cols).zip(scales.par_chunks_mut(tile)).enumerate().for_each(|(t, (cq, sq))| {
-            let nrows = cq.len() / cols;
-            for r in 0..nrows {
-                let row = t * 128 + r;
-                for g in 0..cols / MX_BLOCK {
-                    let blk = &data[row * cols + g * MX_BLOCK..][..MX_BLOCK];
-                    let (byte, inv) = mx_e8m0(amax_abs(blk));
-                    sq[mx_scale_offset(r, g, cb)] = byte;
-                    for (j, &v) in blk.iter().enumerate() {
-                        cq[r * cols + g * MX_BLOCK + j] = e4m3_satfinite(v * inv);
+        codes
+            .par_chunks_mut(128 * cols)
+            .zip(scales.par_chunks_mut(tile))
+            .enumerate()
+            .for_each(|(t, (cq, sq))| {
+                let nrows = cq.len() / cols;
+                for r in 0..nrows {
+                    let row = t * 128 + r;
+                    for g in 0..cols / MX_BLOCK {
+                        let blk = &data[row * cols + g * MX_BLOCK..][..MX_BLOCK];
+                        let (byte, inv) = mx_e8m0(amax_abs(blk));
+                        sq[mx_scale_offset(r, g, cb)] = byte;
+                        for (j, &v) in blk.iter().enumerate() {
+                            cq[r * cols + g * MX_BLOCK + j] = e4m3_satfinite(v * inv);
+                        }
                     }
                 }
-            }
-        });
-        Self { codes, scales, rows, cols }
+            });
+        Self {
+            codes,
+            scales,
+            rows,
+            cols,
+        }
     }
 
     /// From stored codes `[rows, cols]` and swizzled scales ([`mx_scale_len`] bytes).
     pub fn from_stored(codes: Vec<u8>, scales: Vec<u8>, rows: usize, cols: usize) -> Self {
         assert_eq!(codes.len(), rows * cols);
         assert_eq!(scales.len(), mx_scale_len(rows, cols));
-        Self { codes, scales, rows, cols }
+        Self {
+            codes,
+            scales,
+            rows,
+            cols,
+        }
     }
 
     /// Stack matrices with the same columns by rows (fused QKV): the scale
@@ -630,7 +754,12 @@ impl Mxfp8 {
             }
             r0 += p.rows;
         }
-        Self { codes, scales, rows, cols }
+        Self {
+            codes,
+            scales,
+            rows,
+            cols,
+        }
     }
 
     pub fn scale_of(&self, row: usize, group: usize) -> f32 {
@@ -684,8 +813,9 @@ mod tests {
     #[test]
     fn q8_round_trip_error_is_half_a_step() {
         let (rows, cols) = (8, 256);
-        let w: Vec<f32> =
-            (0..rows * cols).map(|i| ((i * 7919 % 1000) as f32 / 500.0 - 1.0) * (1 + i / cols) as f32).collect();
+        let w: Vec<f32> = (0..rows * cols)
+            .map(|i| ((i * 7919 % 1000) as f32 / 500.0 - 1.0) * (1 + i / cols) as f32)
+            .collect();
         let q = Q8::quantize(&w, rows, cols);
         assert_eq!(q.group, 128);
         let d = q.dequantize();
@@ -703,17 +833,38 @@ mod tests {
                 if i % 97 == 0 { u * 8.0 } else { u * 0.3 }
             })
             .collect();
-        let err = |q: &Q4| -> f32 { w.iter().zip(q.dequantize()).map(|(a, b)| (a - b).powi(2)).sum() };
+        let err = |q: &Q4| -> f32 {
+            w.iter()
+                .zip(q.dequantize())
+                .map(|(a, b)| (a - b).powi(2))
+                .sum()
+        };
         let rtn = Q4::quantize(&w, rows, cols, 64, false);
         for (i, (a, b)) in w.iter().zip(rtn.dequantize()).enumerate() {
             assert!((a - b).abs() <= rtn.scales[i / 64] * 0.52 + 1e-5);
         }
         let hqq = Q4::quantize(&w, rows, cols, 64, true);
         assert!(err(&hqq) <= err(&rtn) * 1.05);
-        let back = Q4::from_packed(&rtn.packed(), rtn.scales.clone(), rtn.zeros.clone(), rows, cols);
+        let back = Q4::from_packed(
+            &rtn.packed(),
+            rtn.scales.clone(),
+            rtn.zeros.clone(),
+            rows,
+            cols,
+        );
         assert_eq!(back.q, rtn.q);
-        assert_eq!("int4-hqq-g32".parse(), Ok(WeightQuant::Int4 { group: 32, hqq: true, ffn_only: false }));
-        assert_eq!("int4-hqq-g64-ffn".parse::<WeightQuant>().map(|q| q.attn()), Ok(WeightQuant::Int8));
+        assert_eq!(
+            "int4-hqq-g32".parse(),
+            Ok(WeightQuant::Int4 {
+                group: 32,
+                hqq: true,
+                ffn_only: false
+            })
+        );
+        assert_eq!(
+            "int4-hqq-g64-ffn".parse::<WeightQuant>().map(|q| q.attn()),
+            Ok(WeightQuant::Int8)
+        );
         assert_eq!("nvfp4".parse(), Ok(WeightQuant::Nvfp4));
     }
 
@@ -730,7 +881,11 @@ mod tests {
         assert_eq!(e4m3_decode(e4m3_satfinite(1000.0)), 448.0);
         assert_eq!(e4m3_decode(e4m3_satfinite(-1000.0)), -448.0);
         assert_eq!(e4m3_satfinite(1.0 / 512.0), 1);
-        assert_eq!(e4m3_satfinite(1.0 / 1024.0), 0, "ties to even: half a quantum rounds to 0");
+        assert_eq!(
+            e4m3_satfinite(1.0 / 1024.0),
+            0,
+            "ties to even: half a quantum rounds to 0"
+        );
         assert_eq!(e4m3_satfinite(3.0 / 1024.0), 2);
         // E8M0: a block max of 448 scales by 1, of 449 by 1/2, of 1 by 2^-... keeps the max ≤ 448.
         assert_eq!(mx_e8m0(448.0), (127, 1.0));
@@ -764,16 +919,34 @@ mod tests {
             for c in 0..cols {
                 let s = q.scale_of(r, c / 32);
                 let v = w[r * cols + c];
-                assert!((d[r * cols + c] - v).abs() <= v.abs() / 16.0 + s / 1024.0 + 1e-7, "({r}, {c})");
+                assert!(
+                    (d[r * cols + c] - v).abs() <= v.abs() / 16.0 + s / 1024.0 + 1e-7,
+                    "({r}, {c})"
+                );
             }
         }
         // concat re-lays the scale tiles: equal to quantizing the stacked matrix.
         let (a, b) = (rng.normal(37 * 96), rng.normal(100 * 96));
         let stacked: Vec<f32> = a.iter().chain(&b).copied().collect();
-        assert_eq!(Mxfp8::concat(vec![Mxfp8::quantize(&a, 37, 96), Mxfp8::quantize(&b, 100, 96)]), Mxfp8::quantize(&stacked, 137, 96));
-        assert_eq!(WeightQuant::Mxfp8.for_layer_key("transformer_blocks.1.ff.net.2", 50), WeightQuant::Native);
-        assert_eq!(WeightQuant::Mxfp8.for_layer_key("transformer_blocks.2.ff.net.2", 50), WeightQuant::Mxfp8);
-        assert_eq!(WeightQuant::Mxfp8.for_layer_key("transformer_blocks.2.norm1", 50), WeightQuant::Native);
+        assert_eq!(
+            Mxfp8::concat(vec![
+                Mxfp8::quantize(&a, 37, 96),
+                Mxfp8::quantize(&b, 100, 96)
+            ]),
+            Mxfp8::quantize(&stacked, 137, 96)
+        );
+        assert_eq!(
+            WeightQuant::Mxfp8.for_layer_key("transformer_blocks.1.ff.net.2", 50),
+            WeightQuant::Native
+        );
+        assert_eq!(
+            WeightQuant::Mxfp8.for_layer_key("transformer_blocks.2.ff.net.2", 50),
+            WeightQuant::Mxfp8
+        );
+        assert_eq!(
+            WeightQuant::Mxfp8.for_layer_key("transformer_blocks.2.norm1", 50),
+            WeightQuant::Native
+        );
         // round_rows is quantize ∘ dequantize of the bf16-rounded rows.
         let x: Vec<f32> = rng.normal(5 * 64);
         let rr = Mxfp8::round_rows(&x, 64);
@@ -794,10 +967,22 @@ mod tests {
     #[test]
     fn for_key_routes_block_linears_only() {
         let q = WeightQuant::Int8;
-        assert_eq!(q.for_key("transformer_blocks.3.ff.net.0.proj"), WeightQuant::Int8);
-        assert_eq!(q.for_key("transformer_blocks.3.attn.to_gate_compress"), WeightQuant::Int8);
-        assert_eq!(q.for_key("transformer_blocks.3.adaln_proj.linear"), WeightQuant::Native);
-        assert_eq!(q.for_key("token_refiner.refiner_blocks.0.attn.to_q"), WeightQuant::Native);
+        assert_eq!(
+            q.for_key("transformer_blocks.3.ff.net.0.proj"),
+            WeightQuant::Int8
+        );
+        assert_eq!(
+            q.for_key("transformer_blocks.3.attn.to_gate_compress"),
+            WeightQuant::Int8
+        );
+        assert_eq!(
+            q.for_key("transformer_blocks.3.adaln_proj.linear"),
+            WeightQuant::Native
+        );
+        assert_eq!(
+            q.for_key("token_refiner.refiner_blocks.0.attn.to_q"),
+            WeightQuant::Native
+        );
         assert_eq!(q.for_key("proj_in"), WeightQuant::Native);
     }
 
@@ -858,6 +1043,9 @@ mod tests {
         let part = q.rows(100, 140);
         assert_eq!(bits(&part.dequantize()), bits(&d[100 * cols..140 * cols]));
         let sw2 = q.swap_halves();
-        assert_eq!(bits(&sw2.dequantize()[..cols]), bits(&d[(rows / 2) * cols..(rows / 2 + 1) * cols]));
+        assert_eq!(
+            bits(&sw2.dequantize()[..cols]),
+            bits(&d[(rows / 2) * cols..(rows / 2 + 1) * cols])
+        );
     }
 }

@@ -5,16 +5,16 @@
 //! f32, exactly as the reference does.
 
 use crate::linear::{Linear, load_plain};
-use rayon::prelude::*;
 use h3_core::{
-    quant::{Mxfp8, Q8, WeightQuant},
     Error, Result,
     backend::{Act, Backend, Conv3dShape, ConvEpilogue, Gate, HeadNorm, Modulation, Pad, Rope},
     config::{PIXEL_MEAN, PIXEL_STD, VideoVaeConfig},
+    quant::{Mxfp8, Q8, WeightQuant},
     rng::Rng,
     rope::vae_decoder_rope,
     weights::WeightSource,
 };
+use rayon::prelude::*;
 
 /// A host `[c, t, h, w]` f32 volume.
 #[derive(Debug, Clone, PartialEq)]
@@ -28,7 +28,13 @@ pub struct Volume {
 
 impl Volume {
     pub fn zeros(c: usize, t: usize, h: usize, w: usize) -> Self {
-        Self { c, t, h, w, data: vec![0.0; c * t * h * w] }
+        Self {
+            c,
+            t,
+            h,
+            w,
+            data: vec![0.0; c * t * h * w],
+        }
     }
     pub fn from_data(c: usize, t: usize, h: usize, w: usize, data: Vec<f32>) -> Self {
         assert_eq!(data.len(), c * t * h * w);
@@ -40,7 +46,10 @@ impl Volume {
     }
     /// Sub-volume `[t0..t0+nt, y0..y0+nh, x0..x0+nw]`.
     pub fn crop(&self, t0: usize, nt: usize, y0: usize, nh: usize, x0: usize, nw: usize) -> Volume {
-        assert!(t0 + nt <= self.t && y0 + nh <= self.h && x0 + nw <= self.w, "crop out of range");
+        assert!(
+            t0 + nt <= self.t && y0 + nh <= self.h && x0 + nw <= self.w,
+            "crop out of range"
+        );
         if (t0, nt, y0, nh, x0, nw) == (0, self.t, 0, self.h, 0, self.w) {
             return self.clone();
         }
@@ -117,39 +126,47 @@ pub fn blend(a: &Volume, b: &Volume, extent: usize, axis: Axis) -> Volume {
     let (bt, bh, bw) = (b.t, b.h, b.w);
     // One task per output row [c, t, y]; a row is untouched unless its position
     // along `axis` lies in the crossfade.
-    out.data.par_chunks_mut(bw).enumerate().for_each(|(r, row)| {
-        let (y, r) = (r % bh, r / bh);
-        let (t, c) = (r % bt, r / bt);
-        match axis {
-            Axis::T if t < extent => {
-                let wb = t as f32 / extent as f32;
-                let src = ((c * a.t + la - extent + t) * a.h + y) * a.w;
-                for (o, &av) in row.iter_mut().zip(&a.data[src..src + bw]) {
-                    *o = av * (1.0 - wb) + *o * wb;
+    out.data
+        .par_chunks_mut(bw)
+        .enumerate()
+        .for_each(|(r, row)| {
+            let (y, r) = (r % bh, r / bh);
+            let (t, c) = (r % bt, r / bt);
+            match axis {
+                Axis::T if t < extent => {
+                    let wb = t as f32 / extent as f32;
+                    let src = ((c * a.t + la - extent + t) * a.h + y) * a.w;
+                    for (o, &av) in row.iter_mut().zip(&a.data[src..src + bw]) {
+                        *o = av * (1.0 - wb) + *o * wb;
+                    }
                 }
-            }
-            Axis::H if y < extent => {
-                let wb = y as f32 / extent as f32;
-                let src = ((c * a.t + t) * a.h + la - extent + y) * a.w;
-                for (o, &av) in row.iter_mut().zip(&a.data[src..src + bw]) {
-                    *o = av * (1.0 - wb) + *o * wb;
+                Axis::H if y < extent => {
+                    let wb = y as f32 / extent as f32;
+                    let src = ((c * a.t + t) * a.h + la - extent + y) * a.w;
+                    for (o, &av) in row.iter_mut().zip(&a.data[src..src + bw]) {
+                        *o = av * (1.0 - wb) + *o * wb;
+                    }
                 }
-            }
-            Axis::W => {
-                let src = ((c * a.t + t) * a.h + y) * a.w + la - extent;
-                for (x, o) in row.iter_mut().enumerate().take(extent) {
-                    let wb = x as f32 / extent as f32;
-                    *o = a.data[src + x] * (1.0 - wb) + *o * wb;
+                Axis::W => {
+                    let src = ((c * a.t + t) * a.h + y) * a.w + la - extent;
+                    for (x, o) in row.iter_mut().enumerate().take(extent) {
+                        let wb = x as f32 / extent as f32;
+                        *o = a.data[src + x] * (1.0 - wb) + *o * wb;
+                    }
                 }
+                _ => {}
             }
-            _ => {}
-        }
-    });
+        });
     out
 }
 
 /// `_split_tiles`: tile start indices, lengths and overlaps along one axis.
-pub fn split_tiles(length: usize, tile: usize, min_overlap: usize, ratio: usize) -> (Vec<usize>, Vec<usize>, Vec<usize>) {
+pub fn split_tiles(
+    length: usize,
+    tile: usize,
+    min_overlap: usize,
+    ratio: usize,
+) -> (Vec<usize>, Vec<usize>, Vec<usize>) {
     if tile >= length {
         return (vec![0], vec![length], vec![]);
     }
@@ -181,10 +198,17 @@ pub fn stitch_tiles(tiles: &[Vec<Volume>], h_overlaps: &[usize], w_overlaps: &[u
     let (nr, nc) = (tiles.len(), tiles[0].len());
     let (c, t) = (tiles[0][0].c, tiles[0][0].t);
     assert!(tiles.iter().all(|r| r.len() == nc), "ragged tile grid");
-    assert!(h_overlaps.len() + 1 >= nr && w_overlaps.len() + 1 >= nc, "missing overlaps");
+    assert!(
+        h_overlaps.len() + 1 >= nr && w_overlaps.len() + 1 >= nc,
+        "missing overlaps"
+    );
     // Kept extent of each tile row / column and its start in the output.
-    let kept_h: Vec<usize> = (0..nr).map(|ri| tiles[ri][0].h - if ri + 1 < nr { h_overlaps[ri] } else { 0 }).collect();
-    let kept_w: Vec<usize> = (0..nc).map(|ci| tiles[0][ci].w - if ci + 1 < nc { w_overlaps[ci] } else { 0 }).collect();
+    let kept_h: Vec<usize> = (0..nr)
+        .map(|ri| tiles[ri][0].h - if ri + 1 < nr { h_overlaps[ri] } else { 0 })
+        .collect();
+    let kept_w: Vec<usize> = (0..nc)
+        .map(|ci| tiles[0][ci].w - if ci + 1 < nc { w_overlaps[ci] } else { 0 })
+        .collect();
     let mut y_start = vec![0; nr + 1];
     for ri in 0..nr {
         y_start[ri + 1] = y_start[ri] + kept_h[ri];
@@ -196,41 +220,58 @@ pub fn stitch_tiles(tiles: &[Vec<Volume>], h_overlaps: &[usize], w_overlaps: &[u
     let (h, w) = (y_start[nr], x_start[nc]);
     for row in tiles {
         for (ci, tile) in row.iter().enumerate() {
-            assert_eq!((tile.c, tile.t, tile.h, tile.w), (c, t, row[0].h, tiles[0][ci].w), "tile shapes disagree");
+            assert_eq!(
+                (tile.c, tile.t, tile.h, tile.w),
+                (c, t, row[0].h, tiles[0][ci].w),
+                "tile shapes disagree"
+            );
         }
     }
     let mut o = Volume::zeros(c, t, h, w);
-    o.data.par_chunks_mut(w).enumerate().for_each(|(r, out_row)| {
-        let (y, r) = (r % h, r / h);
-        let (tt, cc) = (r % t, r / t);
-        let ri = y_start[1..].iter().position(|&s| y < s).unwrap();
-        let ly = y - y_start[ri];
-        let hov = if ri > 0 { h_overlaps[ri - 1].min(tiles[ri - 1][0].h).min(tiles[ri][0].h) } else { 0 };
-        let wy = if ly < hov { Some(ly as f32 / hov as f32) } else { None };
-        for ci in 0..nc {
-            let tile = &tiles[ri][ci];
-            let dst = &mut out_row[x_start[ci]..x_start[ci + 1]];
-            let n = dst.len();
-            let src = ((cc * t + tt) * tile.h + ly) * tile.w;
-            dst.copy_from_slice(&tile.data[src..src + n]);
-            if let Some(wy) = wy {
-                let above = &tiles[ri - 1][ci];
-                let asrc = ((cc * t + tt) * above.h + above.h - hov + ly) * above.w;
-                for (o, &av) in dst.iter_mut().zip(&above.data[asrc..asrc + n]) {
-                    *o = av * (1.0 - wy) + *o * wy;
+    o.data
+        .par_chunks_mut(w)
+        .enumerate()
+        .for_each(|(r, out_row)| {
+            let (y, r) = (r % h, r / h);
+            let (tt, cc) = (r % t, r / t);
+            let ri = y_start[1..].iter().position(|&s| y < s).unwrap();
+            let ly = y - y_start[ri];
+            let hov = if ri > 0 {
+                h_overlaps[ri - 1]
+                    .min(tiles[ri - 1][0].h)
+                    .min(tiles[ri][0].h)
+            } else {
+                0
+            };
+            let wy = if ly < hov {
+                Some(ly as f32 / hov as f32)
+            } else {
+                None
+            };
+            for ci in 0..nc {
+                let tile = &tiles[ri][ci];
+                let dst = &mut out_row[x_start[ci]..x_start[ci + 1]];
+                let n = dst.len();
+                let src = ((cc * t + tt) * tile.h + ly) * tile.w;
+                dst.copy_from_slice(&tile.data[src..src + n]);
+                if let Some(wy) = wy {
+                    let above = &tiles[ri - 1][ci];
+                    let asrc = ((cc * t + tt) * above.h + above.h - hov + ly) * above.w;
+                    for (o, &av) in dst.iter_mut().zip(&above.data[asrc..asrc + n]) {
+                        *o = av * (1.0 - wy) + *o * wy;
+                    }
+                }
+                if ci > 0 {
+                    let left = &tiles[ri][ci - 1];
+                    let wov = w_overlaps[ci - 1].min(left.w).min(tile.w).min(n);
+                    let lsrc = ((cc * t + tt) * left.h + ly) * left.w + left.w - wov;
+                    for (x, o) in dst.iter_mut().enumerate().take(wov) {
+                        let wx = x as f32 / wov as f32;
+                        *o = left.data[lsrc + x] * (1.0 - wx) + *o * wx;
+                    }
                 }
             }
-            if ci > 0 {
-                let left = &tiles[ri][ci - 1];
-                let wov = w_overlaps[ci - 1].min(left.w).min(tile.w).min(n);
-                let lsrc = ((cc * t + tt) * left.h + ly) * left.w + left.w - wov;
-                for (x, o) in dst.iter_mut().enumerate().take(wov) {
-                    let wx = x as f32 / wov as f32;
-                    *o = left.data[lsrc + x] * (1.0 - wx) + *o * wx;
-                }
-            }
-        }
-    });
+        });
     o
 }
 
@@ -243,7 +284,10 @@ pub struct Tiling {
 }
 
 impl Tiling {
-    pub const DEFAULT: Tiling = Tiling { tile: 256, overlap: 64 };
+    pub const DEFAULT: Tiling = Tiling {
+        tile: 256,
+        overlap: 64,
+    };
 }
 
 /// The encoder's diagonal Gaussian: `[latent, …]` mean and log-variance
@@ -258,7 +302,16 @@ impl Posterior {
         let l = m.c / 2;
         let inner = m.t * m.h * m.w;
         let mean = Volume::from_data(l, m.t, m.h, m.w, m.data[..l * inner].to_vec());
-        let logvar = Volume::from_data(l, m.t, m.h, m.w, m.data[l * inner..].iter().map(|v| v.clamp(-30.0, 20.0)).collect());
+        let logvar = Volume::from_data(
+            l,
+            m.t,
+            m.h,
+            m.w,
+            m.data[l * inner..]
+                .iter()
+                .map(|v| v.clamp(-30.0, 20.0))
+                .collect(),
+        );
         Self { mean, logvar }
     }
     pub fn mode(&self) -> Volume {
@@ -283,9 +336,22 @@ struct Conv<B: Backend> {
     k: usize,
 }
 
-fn load_conv<B: Backend>(be: &B, src: &dyn WeightSource, key: &str, cout: usize, cin: usize, k: usize) -> Result<Conv<B>> {
+fn load_conv<B: Backend>(
+    be: &B,
+    src: &dyn WeightSource,
+    key: &str,
+    cout: usize,
+    cin: usize,
+    k: usize,
+) -> Result<Conv<B>> {
     let w = src.get(&format!("{key}.weight"), &[cout, cin, k, k, k])?;
-    Ok(Conv { w: be.weight(&w, cout, cin * k * k * k), b: be.upload(&src.get(&format!("{key}.bias"), &[cout])?), cin, cout, k })
+    Ok(Conv {
+        w: be.weight(&w, cout, cin * k * k * k),
+        b: be.upload(&src.get(&format!("{key}.bias"), &[cout])?),
+        cin,
+        cout,
+        k,
+    })
 }
 
 struct Norm<B: Backend> {
@@ -294,7 +360,10 @@ struct Norm<B: Backend> {
 }
 
 fn load_norm<B: Backend>(be: &B, src: &dyn WeightSource, key: &str, c: usize) -> Result<Norm<B>> {
-    Ok(Norm { w: be.upload(&src.get(&format!("{key}.weight"), &[c])?), b: be.upload(&src.get(&format!("{key}.bias"), &[c])?) })
+    Ok(Norm {
+        w: be.upload(&src.get(&format!("{key}.weight"), &[c])?),
+        b: be.upload(&src.get(&format!("{key}.bias"), &[c])?),
+    })
 }
 
 struct Resnet<B: Backend> {
@@ -350,7 +419,13 @@ struct Dev<'a, B: Backend> {
 }
 
 impl<'a, B: Backend> Dev<'a, B> {
-    fn conv(&self, x: &B::Buf, shape: &Conv3dShape, c: &Conv<B>, ep: ConvEpilogue<'_, B::Buf>) -> B::Buf {
+    fn conv(
+        &self,
+        x: &B::Buf,
+        shape: &Conv3dShape,
+        c: &Conv<B>,
+        ep: ConvEpilogue<'_, B::Buf>,
+    ) -> B::Buf {
         assert_eq!((shape.cin, shape.cout, shape.k.0), (c.cin, c.cout, c.k));
         let out = self.be.alloc(shape.out_len());
         self.be.conv3d(x, shape, &c.w, Some(&c.b), ep, &out);
@@ -359,17 +434,42 @@ impl<'a, B: Backend> Dev<'a, B> {
 }
 
 impl<B: Backend> VideoVae<B> {
-    pub fn load(be: &B, cfg: VideoVaeConfig, src: &dyn WeightSource, encoder: bool, decoder: bool) -> Result<Self> {
+    pub fn load(
+        be: &B,
+        cfg: VideoVaeConfig,
+        src: &dyn WeightSource,
+        encoder: bool,
+        decoder: bool,
+    ) -> Result<Self> {
         Self::load_with(be, cfg, src, encoder, decoder, WeightQuant::Native)
     }
 
     /// [`Self::load`] with the decoder's block linears (fused QKV, out, FFN
     /// in / out of every ViT block) in `quant` (`Mxfp8` or `Int8`; the
     /// projections, norms and convolutions stay native).
-    pub fn load_with(be: &B, cfg: VideoVaeConfig, src: &dyn WeightSource, encoder: bool, decoder: bool, quant: WeightQuant) -> Result<Self> {
-        let enc = if encoder { Some(Self::load_encoder(be, &cfg, src)?) } else { None };
-        let dec = if decoder { Some(Self::load_decoder(be, &cfg, src, quant)?) } else { None };
-        Ok(Self { cfg, encoder: enc, decoder: dec })
+    pub fn load_with(
+        be: &B,
+        cfg: VideoVaeConfig,
+        src: &dyn WeightSource,
+        encoder: bool,
+        decoder: bool,
+        quant: WeightQuant,
+    ) -> Result<Self> {
+        let enc = if encoder {
+            Some(Self::load_encoder(be, &cfg, src)?)
+        } else {
+            None
+        };
+        let dec = if decoder {
+            Some(Self::load_decoder(be, &cfg, src, quant)?)
+        } else {
+            None
+        };
+        Ok(Self {
+            cfg,
+            encoder: enc,
+            decoder: dec,
+        })
     }
 
     fn load_encoder(be: &B, cfg: &VideoVaeConfig, src: &dyn WeightSource) -> Result<Encoder<B>> {
@@ -386,12 +486,30 @@ impl<B: Backend> VideoVae<B> {
                     conv1: load_conv(be, src, &format!("{p}.conv1"), cout, ci, 3)?,
                     norm2: load_norm(be, src, &format!("{p}.norm2"), cout)?,
                     conv2: load_conv(be, src, &format!("{p}.conv2"), cout, cout, 3)?,
-                    shortcut: if ci != cout { Some(load_conv(be, src, &format!("{p}.conv_shortcut"), cout, ci, 1)?) } else { None },
+                    shortcut: if ci != cout {
+                        Some(load_conv(
+                            be,
+                            src,
+                            &format!("{p}.conv_shortcut"),
+                            cout,
+                            ci,
+                            1,
+                        )?)
+                    } else {
+                        None
+                    },
                 });
             }
             let down = if cfg.spatial_down[i] > 1 || cfg.temporal_down[i] > 1 {
                 Some((
-                    load_conv(be, src, &format!("encoder.down_blocks.{i}.downsamplers.0.conv"), cout, cout, 3)?,
+                    load_conv(
+                        be,
+                        src,
+                        &format!("encoder.down_blocks.{i}.downsamplers.0.conv"),
+                        cout,
+                        cout,
+                        3,
+                    )?,
                     cfg.temporal_down[i],
                     cfg.spatial_down[i],
                 ))
@@ -411,7 +529,12 @@ impl<B: Backend> VideoVae<B> {
         })
     }
 
-    fn load_decoder(be: &B, cfg: &VideoVaeConfig, src: &dyn WeightSource, quant: WeightQuant) -> Result<Decoder<B>> {
+    fn load_decoder(
+        be: &B,
+        cfg: &VideoVaeConfig,
+        src: &dyn WeightSource,
+        quant: WeightQuant,
+    ) -> Result<Decoder<B>> {
         let dd = cfg.decoder_dim();
         let ff = cfg.decoder_ffn_mult * dd;
         let lz = cfg.latent_channels;
@@ -419,14 +542,27 @@ impl<B: Backend> VideoVae<B> {
         // trees are not stored quantized).
         let block_linear = |w: Vec<f32>, b: Vec<f32>, rows: usize, cols: usize| -> Linear<B> {
             let w = match quant {
-                WeightQuant::Mxfp8 if cols.is_multiple_of(32) => be.weight_mxfp8(&Mxfp8::quantize(&w, rows, cols)),
+                WeightQuant::Mxfp8 if cols.is_multiple_of(32) => {
+                    be.weight_mxfp8(&Mxfp8::quantize(&w, rows, cols))
+                }
                 WeightQuant::Int8 => be.weight_q8(&Q8::quantize(&w, rows, cols)),
                 _ => be.weight(&w, rows, cols),
             };
-            Linear { w, b: Some(be.upload(&b)), rows, cols, lora: None }
+            Linear {
+                w,
+                b: Some(be.upload(&b)),
+                rows,
+                cols,
+                lora: None,
+            }
         };
         let lin = |key: &str, rows: usize, cols: usize| -> Result<Linear<B>> {
-            Ok(block_linear(src.get(&format!("{key}.weight"), &[rows, cols])?, src.get(&format!("{key}.bias"), &[rows])?, rows, cols))
+            Ok(block_linear(
+                src.get(&format!("{key}.weight"), &[rows, cols])?,
+                src.get(&format!("{key}.bias"), &[rows])?,
+                rows,
+                cols,
+            ))
         };
         let mut blocks = Vec::new();
         for l in 0..cfg.decoder_layers {
@@ -443,7 +579,10 @@ impl<B: Backend> VideoVae<B> {
                 }
                 (qkv_w, qkv_b)
             } else {
-                (src.get(&format!("{p}.attn.to_qkv.weight"), &[3 * dd, dd])?, src.get(&format!("{p}.attn.to_qkv.bias"), &[3 * dd])?)
+                (
+                    src.get(&format!("{p}.attn.to_qkv.weight"), &[3 * dd, dd])?,
+                    src.get(&format!("{p}.attn.to_qkv.bias"), &[3 * dd])?,
+                )
             };
             blocks.push(DecBlock {
                 norm1: be.upload(&src.get(&format!("{p}.norm1.weight"), &[dd])?),
@@ -456,11 +595,15 @@ impl<B: Backend> VideoVae<B> {
                 scale2: be.upload(&src.get(&format!("{p}.scale2"), &[dd])?),
             });
         }
-        let out_dim = cfg.in_channels * cfg.temporal_ratio() * cfg.spatial_ratio() * cfg.spatial_ratio();
+        let out_dim =
+            cfg.in_channels * cfg.temporal_ratio() * cfg.spatial_ratio() * cfg.spatial_ratio();
         Ok(Decoder {
             post_quant_conv: load_conv(be, src, "post_quant_conv", lz, lz, 1)?,
             proj_in: load_plain(be, src, "decoder.proj_in", dd, lz, true)?,
-            register_tokens: src.get("decoder.register_tokens", &[1, cfg.decoder_register_tokens, dd])?,
+            register_tokens: src.get(
+                "decoder.register_tokens",
+                &[1, cfg.decoder_register_tokens, dd],
+            )?,
             blocks,
             norm_out: load_norm(be, src, "decoder.norm_out", dd)?,
             proj_out: load_plain(be, src, "decoder.proj_out", out_dim, dd, true)?,
@@ -474,7 +617,13 @@ impl<B: Backend> VideoVae<B> {
     /// Latents `(z − mean) / std`.
     pub fn normalize_latents(&self, z: &mut Volume) {
         let scale: Vec<f32> = self.cfg.latents_std.iter().map(|s| 1.0 / s).collect();
-        let shift: Vec<f32> = self.cfg.latents_mean.iter().zip(&self.cfg.latents_std).map(|(m, s)| -m / s).collect();
+        let shift: Vec<f32> = self
+            .cfg
+            .latents_mean
+            .iter()
+            .zip(&self.cfg.latents_std)
+            .map(|(m, s)| -m / s)
+            .collect();
         z.channel_affine(&scale, &shift);
     }
     pub fn denormalize_latents(&self, z: &mut Volume) {
@@ -484,30 +633,77 @@ impl<B: Backend> VideoVae<B> {
     /// Encoder moments `[2·latent, t, h, w]` of one ImageNet-normalised clip
     /// `[3, T, H, W]` (T ≤ 17, or 1 for a keyframe), one spatial tile.
     pub fn encode_clip_tile(&self, be: &B, x: &Volume) -> Result<Volume> {
-        let enc = self.encoder.as_ref().ok_or_else(|| Error::Msg("the video VAE encoder is not loaded".into()))?;
+        let enc = self
+            .encoder
+            .as_ref()
+            .ok_or_else(|| Error::Msg("the video VAE encoder is not loaded".into()))?;
         let cfg = &self.cfg;
         let dev = Dev { be };
         let (mut t, mut h, mut w) = (x.t, x.h, x.w);
         let gx = be.upload(&x.data);
-        let mut cur = dev.conv(&gx, &Conv3dShape::causal(enc.conv_in.cin, enc.conv_in.cout, t, h, w, 3), &enc.conv_in, ConvEpilogue::None);
+        let mut cur = dev.conv(
+            &gx,
+            &Conv3dShape::causal(enc.conv_in.cin, enc.conv_in.cout, t, h, w, 3),
+            &enc.conv_in,
+            ConvEpilogue::None,
+        );
         let mut c = enc.conv_in.cout;
         for blk in &enc.blocks {
             for r in &blk.resnets {
                 let hw = h * w;
                 let n = be.alloc(c * t * hw);
-                be.group_norm(&cur, c, t, hw, cfg.norm_groups, true, &r.norm1.w, &r.norm1.b, cfg.norm_eps, Act::Silu, &n);
-                let y = dev.conv(&n, &Conv3dShape::causal(c, r.conv1.cout, t, h, w, 3), &r.conv1, ConvEpilogue::None);
+                be.group_norm(
+                    &cur,
+                    c,
+                    t,
+                    hw,
+                    cfg.norm_groups,
+                    true,
+                    &r.norm1.w,
+                    &r.norm1.b,
+                    cfg.norm_eps,
+                    Act::Silu,
+                    &n,
+                );
+                let y = dev.conv(
+                    &n,
+                    &Conv3dShape::causal(c, r.conv1.cout, t, h, w, 3),
+                    &r.conv1,
+                    ConvEpilogue::None,
+                );
                 let co = r.conv1.cout;
                 let n2 = be.alloc(co * t * hw);
-                be.group_norm(&y, co, t, hw, cfg.norm_groups, true, &r.norm2.w, &r.norm2.b, cfg.norm_eps, Act::Silu, &n2);
+                be.group_norm(
+                    &y,
+                    co,
+                    t,
+                    hw,
+                    cfg.norm_groups,
+                    true,
+                    &r.norm2.w,
+                    &r.norm2.b,
+                    cfg.norm_eps,
+                    Act::Silu,
+                    &n2,
+                );
                 let res = match &r.shortcut {
                     Some(sc) => {
-                        let shape = Conv3dShape { pad_t: (0, 0), pad_h: (0, 0), pad_w: (0, 0), ..Conv3dShape::causal(c, co, t, h, w, 1) };
+                        let shape = Conv3dShape {
+                            pad_t: (0, 0),
+                            pad_h: (0, 0),
+                            pad_w: (0, 0),
+                            ..Conv3dShape::causal(c, co, t, h, w, 1)
+                        };
                         dev.conv(&cur, &shape, sc, ConvEpilogue::None)
                     }
                     None => cur,
                 };
-                cur = dev.conv(&n2, &Conv3dShape::causal(co, co, t, h, w, 3), &r.conv2, ConvEpilogue::Add(&res));
+                cur = dev.conv(
+                    &n2,
+                    &Conv3dShape::causal(co, co, t, h, w, 3),
+                    &r.conv2,
+                    ConvEpilogue::Add(&res),
+                );
                 c = co;
             }
             if let Some((conv, ts, ss)) = &blk.down {
@@ -526,7 +722,9 @@ impl<B: Backend> VideoVae<B> {
                     spatial_pad: Pad::Reflect,
                 };
                 if *ss == 2 && (h < 2 || w < 2) {
-                    return Err(Error::Geometry(format!("a {h}x{w} map cannot be downsampled")));
+                    return Err(Error::Geometry(format!(
+                        "a {h}x{w} map cannot be downsampled"
+                    )));
                 }
                 let (t2, h2, w2) = shape.out_dims();
                 cur = dev.conv(&cur, &shape, conv, ConvEpilogue::None);
@@ -535,11 +733,33 @@ impl<B: Backend> VideoVae<B> {
         }
         let hw = h * w;
         let n = be.alloc(c * t * hw);
-        be.group_norm(&cur, c, t, hw, cfg.norm_groups, true, &enc.norm_out.w, &enc.norm_out.b, cfg.norm_eps, Act::Silu, &n);
-        let m = dev.conv(&n, &Conv3dShape::causal(c, enc.conv_out.cout, t, h, w, 3), &enc.conv_out, ConvEpilogue::None);
+        be.group_norm(
+            &cur,
+            c,
+            t,
+            hw,
+            cfg.norm_groups,
+            true,
+            &enc.norm_out.w,
+            &enc.norm_out.b,
+            cfg.norm_eps,
+            Act::Silu,
+            &n,
+        );
+        let m = dev.conv(
+            &n,
+            &Conv3dShape::causal(c, enc.conv_out.cout, t, h, w, 3),
+            &enc.conv_out,
+            ConvEpilogue::None,
+        );
         let q = {
             let lz2 = enc.conv_out.cout;
-            let shape = Conv3dShape { pad_t: (0, 0), pad_h: (0, 0), pad_w: (0, 0), ..Conv3dShape::causal(lz2, lz2, t, h, w, 1) };
+            let shape = Conv3dShape {
+                pad_t: (0, 0),
+                pad_h: (0, 0),
+                pad_w: (0, 0),
+                ..Conv3dShape::causal(lz2, lz2, t, h, w, 1)
+            };
             dev.conv(&m, &shape, &enc.quant_conv, ConvEpilogue::None)
         };
         let mut data = be.download(&q);
@@ -549,7 +769,9 @@ impl<B: Backend> VideoVae<B> {
 
     /// Moments of one clip with optional spatial tiling (`_encode_clip`).
     pub fn encode_clip(&self, be: &B, x: &Volume, tiling: Option<Tiling>) -> Result<Volume> {
-        let Some(tl) = tiling else { return self.encode_clip_tile(be, x) };
+        let Some(tl) = tiling else {
+            return self.encode_clip_tile(be, x);
+        };
         let r = self.spatial_ratio();
         let (ys, yl, yo) = split_tiles(x.h, tl.tile, tl.overlap, r);
         let (xs, xl, xo) = split_tiles(x.w, tl.tile, tl.overlap, r);
@@ -576,7 +798,9 @@ impl<B: Backend> VideoVae<B> {
         let mut f0 = 0;
         while f0 < pixels.t {
             let n = cl.min(pixels.t - f0);
-            let mut clip = pixels.crop(f0, n, 0, pixels.h, 0, pixels.w).pad_last_frame(cl - n);
+            let mut clip = pixels
+                .crop(f0, n, 0, pixels.h, 0, pixels.w)
+                .pad_last_frame(cl - n);
             normalize_pixels(&mut clip);
             moments.push(self.encode_clip(be, &clip, tiling)?);
             f0 += n;
@@ -588,7 +812,12 @@ impl<B: Backend> VideoVae<B> {
 
     /// Moments of one keyframe `[3, 1, H, W]` in `[0, 1]` (`encode_keyframe`:
     /// no clip padding, one latent frame).
-    pub fn encode_keyframe(&self, be: &B, pixels: &Volume, tiling: Option<Tiling>) -> Result<Volume> {
+    pub fn encode_keyframe(
+        &self,
+        be: &B,
+        pixels: &Volume,
+        tiling: Option<Tiling>,
+    ) -> Result<Volume> {
         if pixels.t != 1 {
             return Err(Error::Geometry("a keyframe has exactly one frame".into()));
         }
@@ -606,13 +835,25 @@ impl<B: Backend> VideoVae<B> {
 
     /// `decode_clip_tile` up to the device buffer: the caller downloads, so a
     /// tiled decode can queue the next tile's kernels before reading this one.
-    fn decode_clip_tile_dev(&self, be: &B, z: &Volume) -> Result<(B::Buf, (usize, usize, usize, usize))> {
-        let dec = self.decoder.as_ref().ok_or_else(|| Error::Msg("the video VAE decoder is not loaded".into()))?;
+    fn decode_clip_tile_dev(
+        &self,
+        be: &B,
+        z: &Volume,
+    ) -> Result<(B::Buf, (usize, usize, usize, usize))> {
+        let dec = self
+            .decoder
+            .as_ref()
+            .ok_or_else(|| Error::Msg("the video VAE decoder is not loaded".into()))?;
         let cfg = &self.cfg;
         let dev = Dev { be };
         let (lz, t, h, w) = (z.c, z.t, z.h, z.w);
         let gz = be.upload(&z.data);
-        let shape = Conv3dShape { pad_t: (0, 0), pad_h: (0, 0), pad_w: (0, 0), ..Conv3dShape::causal(lz, lz, t, h, w, 1) };
+        let shape = Conv3dShape {
+            pad_t: (0, 0),
+            pad_h: (0, 0),
+            pad_w: (0, 0),
+            ..Conv3dShape::causal(lz, lz, t, h, w, 1)
+        };
         let pq = dev.conv(&gz, &shape, &dec.post_quant_conv, ConvEpilogue::None);
         let n = t * h * w;
         let dd = cfg.decoder_dim();
@@ -621,43 +862,149 @@ impl<B: Backend> VideoVae<B> {
         let tokens = be.alloc(n * lz);
         be.patchify(&pq, lz, t, h, w, (1, 1, 1), &tokens, 0);
         let hbuf = be.alloc(rows * dd);
-        be.linear(&tokens, 0, n, &dec.proj_in.w, dec.proj_in.b.as_ref(), Act::None, &hbuf, 0);
+        be.linear(
+            &tokens,
+            0,
+            n,
+            &dec.proj_in.w,
+            dec.proj_in.b.as_ref(),
+            Act::None,
+            &hbuf,
+            0,
+        );
         let regs = be.upload(&dec.register_tokens);
         be.copy(&regs, 0, &hbuf, n * dd, reg * dd);
         // The cls row stays zero (alloc zero-fills).
-        let rope = vae_decoder_rope((t, h, w), cfg.decoder_rotary_dim(), cfg.decoder_rope_theta, reg + 1);
+        let rope = vae_decoder_rope(
+            (t, h, w),
+            cfg.decoder_rotary_dim(),
+            cfg.decoder_rope_theta,
+            reg + 1,
+        );
         let (rc, rs) = (be.upload_table(&rope.cos), be.upload_table(&rope.sin));
-        let rp = Some(Rope { cos: &rc, sin: &rs, rot: cfg.decoder_rotary_dim() });
+        let rp = Some(Rope {
+            cos: &rc,
+            sin: &rs,
+            rot: cfg.decoder_rotary_dim(),
+        });
         let (heads, hd) = (cfg.decoder_heads, cfg.decoder_head_dim);
         let normed = be.alloc(rows * dd);
         let qkv = be.alloc(rows * 3 * dd);
-        let (q, k, v, attn, tmp) = (be.alloc(rows * dd), be.alloc(rows * dd), be.alloc(rows * dd), be.alloc(rows * dd), be.alloc(rows * dd));
+        let (q, k, v, attn, tmp) = (
+            be.alloc(rows * dd),
+            be.alloc(rows * dd),
+            be.alloc(rows * dd),
+            be.alloc(rows * dd),
+            be.alloc(rows * dd),
+        );
         let ff = cfg.decoder_ffn_mult * dd;
         let (hid, hid2) = (be.alloc(rows * 2 * ff), be.alloc(rows * ff));
         let eps = cfg.decoder_norm_eps;
         for bl in &dec.blocks {
-            be.rms_norm(&hbuf, rows, dd, Some(&bl.norm1), Modulation::None, eps, &normed);
-            be.linear(&normed, 0, rows, &bl.qkv.w, bl.qkv.b.as_ref(), Act::None, &qkv, 0);
+            be.rms_norm(
+                &hbuf,
+                rows,
+                dd,
+                Some(&bl.norm1),
+                Modulation::None,
+                eps,
+                &normed,
+            );
+            be.linear(
+                &normed,
+                0,
+                rows,
+                &bl.qkv.w,
+                bl.qkv.b.as_ref(),
+                Act::None,
+                &qkv,
+                0,
+            );
             let hn = Some(HeadNorm { w: None, eps });
             be.head_split(&qkv, rows, 3 * dd, 0, heads, hd, hn, rp, &q);
             be.head_split(&qkv, rows, 3 * dd, dd, heads, hd, hn, rp, &k);
             be.head_split(&qkv, rows, 3 * dd, 2 * dd, heads, hd, None, None, &v);
             be.attention(&q, &k, &v, heads, heads, rows, rows, hd, false, &attn);
-            be.linear(&attn, 0, rows, &bl.out.w, bl.out.b.as_ref(), Act::None, &tmp, 0);
-            be.residual_rms_norm(&hbuf, &tmp, rows, dd, Gate::Vector(&bl.scale1), Some(&bl.norm2), Modulation::None, eps, &normed);
-            be.linear(&normed, 0, rows, &bl.ff_in.w, bl.ff_in.b.as_ref(), Act::None, &hid, 0);
+            be.linear(
+                &attn,
+                0,
+                rows,
+                &bl.out.w,
+                bl.out.b.as_ref(),
+                Act::None,
+                &tmp,
+                0,
+            );
+            be.residual_rms_norm(
+                &hbuf,
+                &tmp,
+                rows,
+                dd,
+                Gate::Vector(&bl.scale1),
+                Some(&bl.norm2),
+                Modulation::None,
+                eps,
+                &normed,
+            );
+            be.linear(
+                &normed,
+                0,
+                rows,
+                &bl.ff_in.w,
+                bl.ff_in.b.as_ref(),
+                Act::None,
+                &hid,
+                0,
+            );
             be.swiglu(&hid, rows, ff, &hid2);
-            be.linear(&hid2, 0, rows, &bl.ff_out.w, bl.ff_out.b.as_ref(), Act::None, &tmp, 0);
+            be.linear(
+                &hid2,
+                0,
+                rows,
+                &bl.ff_out.w,
+                bl.ff_out.b.as_ref(),
+                Act::None,
+                &tmp,
+                0,
+            );
             be.gate_residual(&hbuf, &tmp, rows, dd, Gate::Vector(&bl.scale2));
         }
-        be.layer_norm(&hbuf, n, dd, Some(&dec.norm_out.w), Some(&dec.norm_out.b), eps, &normed);
+        be.layer_norm(
+            &hbuf,
+            n,
+            dd,
+            Some(&dec.norm_out.w),
+            Some(&dec.norm_out.b),
+            eps,
+            &normed,
+        );
         let out_dim = dec.proj_out.rows;
         let proj = be.alloc(n * out_dim);
-        be.linear(&normed, 0, n, &dec.proj_out.w, dec.proj_out.b.as_ref(), Act::None, &proj, 0);
+        be.linear(
+            &normed,
+            0,
+            n,
+            &dec.proj_out.w,
+            dec.proj_out.b.as_ref(),
+            Act::None,
+            &proj,
+            0,
+        );
         let (pt, ps) = (cfg.temporal_ratio(), cfg.spatial_ratio());
         let (ot, oh, ow) = (t * pt, h * ps, w * ps);
         let pix = be.alloc(cfg.in_channels * ot * oh * ow);
-        be.unpatchify(&proj, 0, out_dim, 0, cfg.in_channels, ot, oh, ow, (pt, ps, ps), &pix);
+        be.unpatchify(
+            &proj,
+            0,
+            out_dim,
+            0,
+            cfg.in_channels,
+            ot,
+            oh,
+            ow,
+            (pt, ps, ps),
+            &pix,
+        );
         Ok((pix, (cfg.in_channels, ot, oh, ow)))
     }
 
@@ -668,7 +1015,11 @@ impl<B: Backend> VideoVae<B> {
     /// tile `i`; the stitch is one parallel pass at the end.
     pub fn decode_clip(&self, be: &B, z: &Volume, tiling: Option<Tiling>) -> Result<Volume> {
         let (rows, yo, xo) = self.decode_tiles(be, z, tiling)?;
-        Ok(if rows.len() == 1 && rows[0].len() == 1 { rows.into_iter().next().unwrap().pop().unwrap() } else { stitch_tiles(&rows, &yo, &xo) })
+        Ok(if rows.len() == 1 && rows[0].len() == 1 {
+            rows.into_iter().next().unwrap().pop().unwrap()
+        } else {
+            stitch_tiles(&rows, &yo, &xo)
+        })
     }
 
     /// The tiles of one clip, downloaded (one GPU tile ahead of each
@@ -676,24 +1027,40 @@ impl<B: Backend> VideoVae<B> {
     /// untiled. The stitch itself is host work the caller may overlap with
     /// the next clip's kernels.
     #[allow(clippy::type_complexity)]
-    fn decode_tiles(&self, be: &B, z: &Volume, tiling: Option<Tiling>) -> Result<(Vec<Vec<Volume>>, Vec<usize>, Vec<usize>)> {
-        let Some(tl) = tiling else { return Ok((vec![vec![self.decode_clip_tile(be, z)?]], Vec::new(), Vec::new())) };
+    fn decode_tiles(
+        &self,
+        be: &B,
+        z: &Volume,
+        tiling: Option<Tiling>,
+    ) -> Result<(Vec<Vec<Volume>>, Vec<usize>, Vec<usize>)> {
+        let Some(tl) = tiling else {
+            return Ok((
+                vec![vec![self.decode_clip_tile(be, z)?]],
+                Vec::new(),
+                Vec::new(),
+            ));
+        };
         let r = self.spatial_ratio();
         let (ys, yl, yo) = split_tiles(z.h * r, tl.tile, tl.overlap, r);
         let (xs, xl, xo) = split_tiles(z.w * r, tl.tile, tl.overlap, r);
         let mut tiles: Vec<Volume> = Vec::with_capacity(ys.len() * xs.len());
         let mut pending: Option<(B::Buf, (usize, usize, usize, usize))> = None;
-        let download = |(pix, (c, t, h, w)): (B::Buf, (usize, usize, usize, usize))| Volume::from_data(c, t, h, w, be.download(&pix));
+        let download = |(pix, (c, t, h, w)): (B::Buf, (usize, usize, usize, usize))| {
+            Volume::from_data(c, t, h, w, be.download(&pix))
+        };
         for (y0, ny) in ys.iter().zip(&yl) {
             for (x0, nx) in xs.iter().zip(&xl) {
-                let dev = self.decode_clip_tile_dev(be, &z.crop(0, z.t, y0 / r, ny / r, x0 / r, nx / r))?;
+                let dev =
+                    self.decode_clip_tile_dev(be, &z.crop(0, z.t, y0 / r, ny / r, x0 / r, nx / r))?;
                 tiles.extend(pending.take().map(download));
                 pending = Some(dev);
             }
         }
         tiles.extend(pending.map(download));
         let mut it = tiles.into_iter();
-        let rows: Vec<Vec<Volume>> = (0..ys.len()).map(|_| it.by_ref().take(xs.len()).collect()).collect();
+        let rows: Vec<Vec<Volume>> = (0..ys.len())
+            .map(|_| it.by_ref().take(xs.len()).collect())
+            .collect();
         Ok((rows, yo, xo))
     }
 
@@ -719,12 +1086,20 @@ impl<B: Backend> VideoVae<B> {
             let intra_tail = cfg.clip_length % tr;
             let mut pad_frames = 0;
             for off in 0..pad {
-                pad_frames += if intra_tail != 0 && (latent_frames + off) % chunk == 0 { intra_tail } else { tr };
+                pad_frames += if intra_tail != 0 && (latent_frames + off) % chunk == 0 {
+                    intra_tail
+                } else {
+                    tr
+                };
             }
-            frames = frames.checked_sub(pad_frames).ok_or_else(|| Error::Geometry("decode plan underflow".into()))?;
+            frames = frames
+                .checked_sub(pad_frames)
+                .ok_or_else(|| Error::Geometry("decode plan underflow".into()))?;
         }
         if frames == 0 {
-            return Err(Error::Geometry(format!("the decode plan yields no frames for {latent_frames} latent frames")));
+            return Err(Error::Geometry(format!(
+                "the decode plan yields no frames for {latent_frames} latent frames"
+            )));
         }
         Ok((pad, chunks, frames))
     }
@@ -732,7 +1107,13 @@ impl<B: Backend> VideoVae<B> {
     /// Decode denormalised latents `[latent, T, h, w]` into pixels `[3, F, H, W]`
     /// in `[0, 1]` (`_decode_chunks` + ImageNet denormalisation + clamp),
     /// calling `on_chunk` with every finished chunk in order.
-    pub fn decode(&self, be: &B, z: &Volume, tiling: Option<Tiling>, on_chunk: &mut dyn FnMut(&Volume)) -> Result<usize> {
+    pub fn decode(
+        &self,
+        be: &B,
+        z: &Volume,
+        tiling: Option<Tiling>,
+        on_chunk: &mut dyn FnMut(&Volume),
+    ) -> Result<usize> {
         let cfg = &self.cfg;
         let (pad, chunks, total) = self.temporal_plan(z.t)?;
         let z = z.pad_last_frame(pad);
@@ -749,7 +1130,9 @@ impl<B: Backend> VideoVae<B> {
             let mut written = 0;
             let mut overlap: Option<Volume> = None;
             let mut pending: Option<std::thread::ScopedJoinHandle<'_, Finished>> = None;
-            let mut join = |pending: &mut Option<std::thread::ScopedJoinHandle<'_, Finished>>, overlap: &mut Option<Volume>, written: &mut usize| {
+            let mut join = |pending: &mut Option<std::thread::ScopedJoinHandle<'_, Finished>>,
+                            overlap: &mut Option<Volume>,
+                            written: &mut usize| {
                 if let Some(h) = pending.take() {
                     let (px, next_overlap, keep) = h.join().expect("decode chunk thread");
                     if keep > 0 {
@@ -762,20 +1145,36 @@ impl<B: Backend> VideoVae<B> {
             for ci in 0..chunks {
                 let start = ci * chunk_tok;
                 let n = (chunk_tok + cfg.token_overlap()).min(z.t - start);
-                let (rows, yo, xo) = self.decode_tiles(be, &z.crop(start, n, 0, z.h, 0, z.w), tiling)?;
+                let (rows, yo, xo) =
+                    self.decode_tiles(be, &z.crop(start, n, 0, z.h, 0, z.w), tiling)?;
                 join(&mut pending, &mut overlap, &mut written);
                 let clip_t = rows[0][0].t;
                 let chunk_t = chunk_frames.min(clip_t) - pre;
                 let keep = chunk_t.min(total - written);
                 let ov_in = overlap.take();
                 pending = Some(sc.spawn(move || {
-                    let clip = if rows.len() == 1 && rows[0].len() == 1 { rows.into_iter().next().unwrap().pop().unwrap() } else { stitch_tiles(&rows, &yo, &xo) };
+                    let clip = if rows.len() == 1 && rows[0].len() == 1 {
+                        rows.into_iter().next().unwrap().pop().unwrap()
+                    } else {
+                        stitch_tiles(&rows, &yo, &xo)
+                    };
                     let next_overlap = if token_drop > 0 && clip.t > chunk_frames + pre {
-                        Some(clip.crop(chunk_frames + pre, clip.t - chunk_frames - pre, 0, clip.h, 0, clip.w))
+                        Some(clip.crop(
+                            chunk_frames + pre,
+                            clip.t - chunk_frames - pre,
+                            0,
+                            clip.h,
+                            0,
+                            clip.w,
+                        ))
                     } else {
                         None
                     };
-                    let px = if keep > 0 { finish_chunk(&clip, pre, chunk_t, keep, ov_in.as_ref(), frame_overlap) } else { Volume::zeros(clip.c, 0, clip.h, clip.w) };
+                    let px = if keep > 0 {
+                        finish_chunk(&clip, pre, chunk_t, keep, ov_in.as_ref(), frame_overlap)
+                    } else {
+                        Volume::zeros(clip.c, 0, clip.h, clip.w)
+                    };
                     (px, next_overlap, keep)
                 }));
             }
@@ -792,7 +1191,9 @@ impl<B: Backend> VideoVae<B> {
         })
         .and_then(|written| {
             if written != total {
-                return Err(Error::Geometry(format!("decoded {written} frames, the plan expected {total}")));
+                return Err(Error::Geometry(format!(
+                    "decoded {written} frames, the plan expected {total}"
+                )));
             }
             Ok(total)
         })
@@ -802,7 +1203,11 @@ impl<B: Backend> VideoVae<B> {
 /// `(p − mean) / std` per channel, in place.
 pub fn normalize_pixels(x: &mut Volume) {
     let scale: Vec<f32> = PIXEL_STD.iter().map(|s| 1.0 / s).collect();
-    let shift: Vec<f32> = PIXEL_MEAN.iter().zip(PIXEL_STD).map(|(m, s)| -m / s).collect();
+    let shift: Vec<f32> = PIXEL_MEAN
+        .iter()
+        .zip(PIXEL_STD)
+        .map(|(m, s)| -m / s)
+        .collect();
     x.channel_affine(&scale[..x.c], &shift[..x.c]);
 }
 
@@ -811,7 +1216,14 @@ pub fn normalize_pixels(x: &mut Volume) {
 /// crossfaded with the last `extent` frames of `overlap` (as `blend` along
 /// T over the `chunk_t`-frame chunk), then ImageNet-denormalised and clamped
 /// (`denormalize_pixels`). Equal to `crop` → `blend` → `crop` → `denormalize_pixels`.
-fn finish_chunk(clip: &Volume, pre: usize, chunk_t: usize, keep: usize, overlap: Option<&Volume>, extent: usize) -> Volume {
+fn finish_chunk(
+    clip: &Volume,
+    pre: usize,
+    chunk_t: usize,
+    keep: usize,
+    overlap: Option<&Volume>,
+    extent: usize,
+) -> Volume {
     assert!(pre + chunk_t <= clip.t && keep <= chunk_t);
     let (c, h, w) = (clip.c, clip.h, clip.w);
     let extent = overlap.map_or(0, |ov| extent.min(ov.t).min(chunk_t));
@@ -841,13 +1253,16 @@ fn finish_chunk(clip: &Volume, pre: usize, chunk_t: usize, keep: usize, overlap:
 pub fn denormalize_pixels(x: &mut Volume) {
     let inner = x.t * x.h * x.w;
     let plane = (x.h * x.w).max(1);
-    x.data.par_chunks_mut(plane).enumerate().for_each(|(i, chunk)| {
-        let c = (i * plane / inner.max(1)).min(2);
-        let (m, s) = (PIXEL_MEAN[c], PIXEL_STD[c]);
-        for v in chunk {
-            *v = (*v * s + m).clamp(0.0, 1.0);
-        }
-    });
+    x.data
+        .par_chunks_mut(plane)
+        .enumerate()
+        .for_each(|(i, chunk)| {
+            let c = (i * plane / inner.max(1)).min(2);
+            let (m, s) = (PIXEL_MEAN[c], PIXEL_STD[c]);
+            for v in chunk {
+                *v = (*v * s + m).clamp(0.0, 1.0);
+            }
+        });
 }
 
 #[cfg(test)]
@@ -872,7 +1287,11 @@ mod tests {
 
     /// The sequential `_stitch_tiles` (blend H with the tile above, blend W
     /// with the tile to the left, crop the trailing overlaps, concatenate).
-    fn stitch_tiles_reference(tiles: &[Vec<Volume>], h_overlaps: &[usize], w_overlaps: &[usize]) -> Volume {
+    fn stitch_tiles_reference(
+        tiles: &[Vec<Volume>],
+        h_overlaps: &[usize],
+        w_overlaps: &[usize],
+    ) -> Volume {
         let mut rows_out = Vec::new();
         for (ri, row) in tiles.iter().enumerate() {
             let mut row_out: Vec<Volume> = Vec::new();
@@ -900,7 +1319,8 @@ mod tests {
                 for cc in 0..c {
                     for tt in 0..t {
                         for y in 0..h {
-                            o.data[((cc * t + tt) * h + y) * w + x0..][..p.w].copy_from_slice(&p.data[((cc * t + tt) * h + y) * p.w..][..p.w]);
+                            o.data[((cc * t + tt) * h + y) * w + x0..][..p.w]
+                                .copy_from_slice(&p.data[((cc * t + tt) * h + y) * p.w..][..p.w]);
                         }
                     }
                 }
@@ -915,7 +1335,8 @@ mod tests {
         for p in &rows_out {
             for cc in 0..c {
                 for tt in 0..t {
-                    o.data[((cc * t + tt) * h + y0) * w..][..p.h * w].copy_from_slice(&p.data[(cc * t + tt) * p.h * w..][..p.h * w]);
+                    o.data[((cc * t + tt) * h + y0) * w..][..p.h * w]
+                        .copy_from_slice(&p.data[(cc * t + tt) * p.h * w..][..p.h * w]);
                 }
             }
             y0 += p.h;
@@ -928,20 +1349,35 @@ mod tests {
         let mut r = Rng::new(11);
         // Ragged grid: row heights 7 / 9 / 6, column widths 5 / 8 / 4 / 6; overlaps 3 / 2 and 2 / 3 / 1.
         let (hs, ws) = ([7usize, 9, 6], [5usize, 8, 4, 6]);
-        let tiles: Vec<Vec<Volume>> =
-            hs.iter().map(|&h| ws.iter().map(|&w| Volume::from_data(3, 2, h, w, r.uniform(3 * 2 * h * w, 1.0))).collect()).collect();
+        let tiles: Vec<Vec<Volume>> = hs
+            .iter()
+            .map(|&h| {
+                ws.iter()
+                    .map(|&w| Volume::from_data(3, 2, h, w, r.uniform(3 * 2 * h * w, 1.0)))
+                    .collect()
+            })
+            .collect();
         let (ho, wo) = ([3usize, 2], [2usize, 3, 1]);
         let got = stitch_tiles(&tiles, &ho, &wo);
         let want = stitch_tiles_reference(&tiles, &ho, &wo);
-        assert_eq!((got.c, got.t, got.h, got.w), (3, 2, 7 + 9 + 6 - 5, 5 + 8 + 4 + 6 - 6));
+        assert_eq!(
+            (got.c, got.t, got.h, got.w),
+            (3, 2, 7 + 9 + 6 - 5, 5 + 8 + 4 + 6 - 6)
+        );
         assert_eq!(got, want);
         // One tile is the identity; one row and one column exercise each axis alone.
         let one = vec![vec![tiles[0][0].clone()]];
         assert_eq!(stitch_tiles(&one, &[], &[]), tiles[0][0]);
         let row = vec![tiles[1].clone()];
-        assert_eq!(stitch_tiles(&row, &[], &wo), stitch_tiles_reference(&row, &[], &wo));
+        assert_eq!(
+            stitch_tiles(&row, &[], &wo),
+            stitch_tiles_reference(&row, &[], &wo)
+        );
         let col: Vec<Vec<Volume>> = tiles.iter().map(|r| vec![r[2].clone()]).collect();
-        assert_eq!(stitch_tiles(&col, &ho, &[]), stitch_tiles_reference(&col, &ho, &[]));
+        assert_eq!(
+            stitch_tiles(&col, &ho, &[]),
+            stitch_tiles_reference(&col, &ho, &[])
+        );
         // Blend along T against the scalar definition, and a crop / denormalise round trip.
         let a = Volume::from_data(2, 4, 3, 5, r.uniform(2 * 4 * 3 * 5, 1.0));
         let b = Volume::from_data(2, 3, 3, 5, r.uniform(2 * 3 * 3 * 5, 1.0));
@@ -950,7 +1386,12 @@ mod tests {
             for t in 0..3 {
                 for y in 0..3 {
                     for x in 0..5 {
-                        let want = if t < 2 { a.at(c, 2 + t, y, x) * (1.0 - t as f32 / 2.0) + b.at(c, t, y, x) * (t as f32 / 2.0) } else { b.at(c, t, y, x) };
+                        let want = if t < 2 {
+                            a.at(c, 2 + t, y, x) * (1.0 - t as f32 / 2.0)
+                                + b.at(c, t, y, x) * (t as f32 / 2.0)
+                        } else {
+                            b.at(c, t, y, x)
+                        };
                         assert_eq!(bl.at(c, t, y, x), want);
                     }
                 }
@@ -973,7 +1414,10 @@ mod tests {
         denormalize_pixels(&mut px);
         for c in 0..3 {
             for i in 0..2 * 3 * 5 {
-                assert_eq!(px.data[c * 30 + i], (src.data[c * 30 + i] * PIXEL_STD[c] + PIXEL_MEAN[c]).clamp(0.0, 1.0));
+                assert_eq!(
+                    px.data[c * 30 + i],
+                    (src.data[c * 30 + i] * PIXEL_STD[c] + PIXEL_MEAN[c]).clamp(0.0, 1.0)
+                );
             }
         }
     }
@@ -986,7 +1430,14 @@ mod tests {
         let (ys, yl, yo) = split_tiles(768, 256, 64, 16);
         let (xs, xl, xo) = split_tiles(1344, 256, 64, 16);
         let mut r = Rng::new(5);
-        let tiles: Vec<Vec<Volume>> = yl.iter().map(|&h| xl.iter().map(|&w| Volume::from_data(3, 20, h, w, r.uniform(3 * 20 * h * w, 1.0))).collect()).collect();
+        let tiles: Vec<Vec<Volume>> = yl
+            .iter()
+            .map(|&h| {
+                xl.iter()
+                    .map(|&w| Volume::from_data(3, 20, h, w, r.uniform(3 * 20 * h * w, 1.0)))
+                    .collect()
+            })
+            .collect();
         let _ = (ys, xs);
         let t0 = std::time::Instant::now();
         let clip = stitch_tiles(&tiles, &yo, &xo);
@@ -999,7 +1450,8 @@ mod tests {
         let n = px.h * px.w;
         let mut rgb = vec![0u8; px.t * n * 3];
         rgb.par_chunks_mut(n * 3).enumerate().for_each(|(f, out)| {
-            let planes: [&[f32]; 3] = std::array::from_fn(|ch| &px.data[(ch * px.t + f) * n..][..n]);
+            let planes: [&[f32]; 3] =
+                std::array::from_fn(|ch| &px.data[(ch * px.t + f) * n..][..n]);
             for (i, o) in out.chunks_exact_mut(3).enumerate() {
                 for ch in 0..3 {
                     o[ch] = (planes[ch][i] * 255.0).clamp(0.0, 255.0) as u8;
@@ -1007,13 +1459,30 @@ mod tests {
             }
         });
         let t_u8 = t0.elapsed();
-        println!("host decode chunk on {} threads: stitch {:?}, crop/blend/denormalise {:?}, u8 {:?} (clip {}x{}x{}, {} bytes)", rayon::current_num_threads(), t_stitch, t_post, t_u8, clip.t, clip.h, clip.w, rgb.len());
+        println!(
+            "host decode chunk on {} threads: stitch {:?}, crop/blend/denormalise {:?}, u8 {:?} (clip {}x{}x{}, {} bytes)",
+            rayon::current_num_threads(),
+            t_stitch,
+            t_post,
+            t_u8,
+            clip.t,
+            clip.h,
+            clip.w,
+            rgb.len()
+        );
     }
 
     #[test]
     fn temporal_plan_matches_reference_counts() {
         let be = Cpu;
-        let vae = VideoVae::<Cpu>::load(&be, VideoVaeConfig::tiny(), &Synthetic { seed: 1 }, false, false).unwrap();
+        let vae = VideoVae::<Cpu>::load(
+            &be,
+            VideoVaeConfig::tiny(),
+            &Synthetic { seed: 1 },
+            false,
+            false,
+        )
+        .unwrap();
         assert_eq!(vae.temporal_plan(37).unwrap(), (0, 7, 124));
         assert_eq!(vae.temporal_plan(2).unwrap(), (5, 1, 5));
         assert_eq!(vae.temporal_plan(7).unwrap(), (0, 1, 22));
@@ -1027,21 +1496,43 @@ mod tests {
         let vae = VideoVae::load(&be, cfg.clone(), &Synthetic { seed: 2 }, true, true).unwrap();
         // 17 frames, 32×48 pixels → moments [8, 5, 2, 3]; keyframe → [8, 1, 2, 3].
         let mut r = Rng::new(3);
-        let px = Volume::from_data(3, 17, 32, 48, r.uniform(3 * 17 * 32 * 48, 0.5).iter().map(|v| v + 0.5).collect());
+        let px = Volume::from_data(
+            3,
+            17,
+            32,
+            48,
+            r.uniform(3 * 17 * 32 * 48, 0.5)
+                .iter()
+                .map(|v| v + 0.5)
+                .collect(),
+        );
         let m = vae.encode_pixels(&be, &px, None).unwrap();
         assert_eq!((m.c, m.t, m.h, m.w), (8, 2, 2, 3));
-        let kf = vae.encode_keyframe(&be, &px.crop(0, 1, 0, 32, 0, 48), None).unwrap();
+        let kf = vae
+            .encode_keyframe(&be, &px.crop(0, 1, 0, 32, 0, 48), None)
+            .unwrap();
         assert_eq!((kf.c, kf.t, kf.h, kf.w), (8, 1, 2, 3));
         // Tiled encode equals untiled when a single tile covers the frame; with
         // two tiles the stitched shape is the same.
-        let tiled = vae.encode_keyframe(&be, &px.crop(0, 1, 0, 32, 0, 48), Some(Tiling { tile: 32, overlap: 16 })).unwrap();
+        let tiled = vae
+            .encode_keyframe(
+                &be,
+                &px.crop(0, 1, 0, 32, 0, 48),
+                Some(Tiling {
+                    tile: 32,
+                    overlap: 16,
+                }),
+            )
+            .unwrap();
         assert_eq!((tiled.c, tiled.t, tiled.h, tiled.w), (8, 1, 2, 3));
         let post = Posterior::from_moments(&m);
         let mut z = post.sample(&mut r);
         vae.normalize_latents(&mut z);
         vae.denormalize_latents(&mut z);
         let mut frames = Vec::new();
-        let total = vae.decode(&be, &z, None, &mut |v| frames.push(v.clone())).unwrap();
+        let total = vae
+            .decode(&be, &z, None, &mut |v| frames.push(v.clone()))
+            .unwrap();
         assert_eq!(total, 5);
         let out = Volume::cat_t(&frames);
         assert_eq!((out.c, out.t, out.h, out.w), (3, 5, 32, 48));
@@ -1053,11 +1544,16 @@ mod tests {
     struct FusedQkv(Synthetic);
     impl h3_core::weights::WeightSource for FusedQkv {
         fn contains(&self, name: &str) -> bool {
-            !name.contains(".attn.to_q.") && !name.contains(".attn.to_k.") && !name.contains(".attn.to_v.") && self.0.contains(name)
+            !name.contains(".attn.to_q.")
+                && !name.contains(".attn.to_k.")
+                && !name.contains(".attn.to_v.")
+                && self.0.contains(name)
         }
         fn get(&self, name: &str, shape: &[usize]) -> h3_core::Result<Vec<f32>> {
             if let Some((p, rest)) = name.split_once(".attn.to_qkv.") {
-                let per: Vec<usize> = std::iter::once(shape[0] / 3).chain(shape[1..].iter().copied()).collect();
+                let per: Vec<usize> = std::iter::once(shape[0] / 3)
+                    .chain(shape[1..].iter().copied())
+                    .collect();
                 let mut v = Vec::new();
                 for m in ["to_q", "to_k", "to_v"] {
                     v.extend(self.0.get(&format!("{p}.attn.{m}.{rest}"), &per)?);
@@ -1073,7 +1569,8 @@ mod tests {
         let be = Cpu;
         let cfg = VideoVaeConfig::tiny();
         let split = VideoVae::load(&be, cfg.clone(), &Synthetic { seed: 2 }, false, true).unwrap();
-        let fused = VideoVae::load(&be, cfg, &FusedQkv(Synthetic { seed: 2 }), false, true).unwrap();
+        let fused =
+            VideoVae::load(&be, cfg, &FusedQkv(Synthetic { seed: 2 }), false, true).unwrap();
         let mut r = Rng::new(5);
         let z = Volume::from_data(4, 2, 2, 3, r.uniform(4 * 2 * 2 * 3, 1.0));
         let a = split.decode_clip(&be, &z, None).unwrap();
