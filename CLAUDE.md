@@ -338,6 +338,18 @@ State and invariants only; the reasoning is in `docs/design.md`.
   16×16×5 attention windows, shifted on odd layers, 5 global rows per block,
   window-local RoPE; ComfyUI `comfy/ldm/minimax/vae.py`) is not implemented
   and paints a 16-pixel grid through the full-attention decoder.
+- LightX2V's MiniMax-H3 Turbo LoRAs (`h3-turbo4` / `-ref`, `h3-turbo8` /
+  `-ref`, `lightx2v/Minimax-h3-Turbo`) and LongLive-Plug's CFG LoRA
+  (`h3-cfg`, not combined with the few-step one, as its card advises) are
+  presets over the base DiT with LightX2V's recipes (Euler on
+  linspace(1, 0, n + 1), shifts 6 / 3 for 4-step v1.0, 12 / 3 otherwise).
+  An adapter's pair scale follows LightX2V: a per-layer `<module>.alpha`
+  tensor, else the file's `alpha` metadata, both over the pair's own rank,
+  else the config's alpha / rank; times `--adapter-strength`. Turbo 8 v1.2
+  also carries rank-16 pairs on every `adaln_proj.linear` and on
+  `norm_out.linear`: the AdaLN tables run them as a branch, and a `--tables`
+  file computed for another variant is refused when an adapter touches the
+  modulation.
 - AdaLN: the 13 B modulation weights are never resident. Tables are computed
   per generation by streaming each block's weight through the backend once,
   or loaded from an `h3 adaln-tables` file; `h3 quantize --skip-adaln` then
