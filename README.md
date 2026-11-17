@@ -235,7 +235,11 @@ the ×4 output; `h3 regen2k` takes a draft of any aspect (a 9:16 draft becomes
 1440×2560). On a
 600 W RTX PRO 6000 Server Edition a 480p draft takes 8.6 s after load and
 Regen-2K 446 s; the 2K clip keeps the draft's composition
-(`docs/runs/2026-11-17-vast-pro6000-turbo-cfg-draft`).
+(`docs/runs/2026-11-17-vast-pro6000-turbo-cfg-draft`). A 272p draft takes
+4.0 s and its ×4 upscale to 1920×1088 1.7 s, but 272p is below H3's
+trained tiers and can ghost; a Ref2VA draft (`--task ref2va --ref
+image:a.png`, tables from `h3 adaln-tables --task ref2va`) takes 19.4 s of
+denoise at 480p (`docs/runs/2026-11-17-vast-pro6000-ref2va-upscale`).
 
 ### Regenerate at 2K
 

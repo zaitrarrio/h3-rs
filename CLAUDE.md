@@ -372,7 +372,15 @@ State and invariants only; the reasoning is in `docs/design.md`.
   768p draft canvas and a 1440-short-edge output; 2560×1440 / 1440×2560).
   AdaLN tables record their transformer (`h3.transformer`): Ref2VA's
   `transformer_ref` has its own modulation, and a table from the other DiT
-  is refused.
+  is refused. Server Edition, fast recipe, `--tables`
+  (`docs/runs/2026-11-17-vast-pro6000-ref2va-upscale`, 180 / 180 checks):
+  a 272p draft 4.0 s + ×4 upscale to 1920×1088 1.7 s (TAEH3: 2.8 s), 480p
+  10.6 + 4.4 s to 3328×1920, 768p 34.7 + 18.5 s to 2688×1536 (×2: the
+  host Lanczos of the ×4 frames is most of it). 272p is below H3's
+  trained tiers: the landscape fox ghosted, the portrait did not; 480p is
+  the smallest reliably clean tier. Ref2VA: draft 480p 19.4 s denoise
+  (4.8 s per forward, 2.5× T2VA's), `h3-turbo4-ref` 46.4 s, `-turbo8-ref`
+  92.7 s at 768p, all keeping the reference's subject.
 - AdaLN: the 13 B modulation weights are never resident. Tables are computed
   per generation by streaming each block's weight through the backend once,
   or loaded from an `h3 adaln-tables` file; `h3 quantize --skip-adaln` then
