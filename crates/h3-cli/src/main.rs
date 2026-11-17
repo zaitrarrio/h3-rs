@@ -161,9 +161,11 @@ struct Shape {
     /// `W:H`, used when no width/height is given (the canvas follows the variant's rules).
     #[arg(long, default_value = "16:9")]
     aspect: String,
-    /// Pika H3 Flex only: 480p or 768p.
-    #[arg(long, default_value = "768p")]
-    tier: String,
+    /// Resolution tier when no width/height is given: 768p (default; the
+    /// model's 1344×768 at 16:9) or 480p (832×480, the draft tier's fast
+    /// setting). Pika H3 Flex samples its own 480p / 768p buckets.
+    #[arg(long)]
+    tier: Option<String>,
     /// Frames at 24 fps, aligned up to 17n + 5 (124 = 5.17 s).
     #[arg(long, default_value_t = 124)]
     frames: usize,
@@ -173,18 +175,23 @@ impl Shape {
     fn geometry(&self, v: &Variant) -> Result<Geometry> {
         let (aw, ah) = packing::pika::parse_aspect(&self.aspect)?;
         let (height, width, frames) = if v.pika_buckets {
-            let tier = packing::pika::tier(&self.tier)?;
+            let tier = packing::pika::tier(self.tier.as_deref().unwrap_or("768p"))?;
             let (h, w, _) = packing::pika::resolve_canvas(self.height, self.width, (aw, ah), tier)?;
             (h, w, packing::pika::resolve_frames(self.frames)?)
         } else {
             let (h, w) = match (self.height, self.width) {
+                (Some(_), _) | (_, Some(_)) if self.tier.is_some() => {
+                    bail!("--tier sets the canvas: give it or --width / --height, not both")
+                }
                 (Some(h), Some(w)) => (h, w),
-                (None, None) => packing::canvas_size(
-                    aw as f64,
-                    ah as f64,
-                    packing::SHORT_EDGE,
-                    packing::MAX_PIXELS,
-                )?,
+                (None, None) => {
+                    let (short, max) = match self.tier.as_deref().unwrap_or("768p") {
+                        "768p" | "p768" | "768" => (packing::SHORT_EDGE, packing::MAX_PIXELS),
+                        "480p" | "p480" | "480" => (480, 832 * 480),
+                        t => bail!("unknown tier `{t}` (480p | 768p)"),
+                    };
+                    packing::canvas_size(aw as f64, ah as f64, short, max)?
+                }
                 _ => bail!("give --width and --height together, or neither"),
             };
             (h, w, packing::resolve_num_frames(self.frames)?)

@@ -351,7 +351,10 @@ impl Variant {
         let n = name.trim().to_ascii_lowercase().replace('_', "-");
         let alias = match n.as_str() {
             "base" | "minimax-h3" => "h3",
-            "plug4" | "plug" | "longlive-plug" | "h3-4step" => "h3-plug4",
+            // The draft tier: LongLive-Plug's 4-step distillation (with
+            // `--tier 480p` for the fast setting), refined by `h3 regen2k` or
+            // re-rendered by a full variant once a draft is picked.
+            "plug4" | "plug" | "longlive-plug" | "h3-4step" | "draft" => "h3-plug4",
             "turbo" | "turbo4" | "lightx2v" => "h3-turbo4",
             "turbo8" => "h3-turbo8",
             "plug-cfg" | "cfg" => "h3-cfg",
