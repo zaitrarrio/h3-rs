@@ -41,6 +41,12 @@ mod worker;
 struct Cli {
     #[command(subcommand)]
     cmd: Cmd,
+    /// With `--backend auto`: if this build's preferred backend (CUDA, else
+    /// WebGPU) is unusable, fall back to the next one (WebGPU, then the CPU)
+    /// instead of failing. Also `H3_ALLOW_FALLBACK=1`. Off by default: a run
+    /// that meant to use the GPU must not quietly run 100× slower.
+    #[arg(long, global = true, default_value_t = false)]
+    allow_fallback: bool,
 }
 
 #[derive(Clone, Copy, ValueEnum, PartialEq, Debug)]
@@ -455,7 +461,7 @@ enum Cmd {
 /// Run `f` with the selected backend.
 macro_rules! with_backend {
     ($kind:expr, |$be:ident| $body:expr) => {{
-        let kind = resolve($kind);
+        let kind = resolve($kind)?;
         match kind {
             BackendKind::Auto => unreachable!(),
             BackendKind::Cpu => {
@@ -465,7 +471,9 @@ macro_rules! with_backend {
             BackendKind::Wgpu => {
                 #[cfg(feature = "wgpu")]
                 {
-                    let $be = h3_wgpu::Wgpu::new().map_err(|e| anyhow!("{e}"))?;
+                    let $be = h3_wgpu::Wgpu::new().map_err(|e| {
+                        anyhow!("{e} (choose another --backend, or --allow-fallback to let auto pick one)")
+                    })?;
                     if $be.is_software() && !allow_software() {
                         bail!(
                             "WebGPU found only a software rasterizer ({}): the GPU's Vulkan/DX12/Metal driver did not load. \
@@ -483,7 +491,9 @@ macro_rules! with_backend {
             BackendKind::Cuda => {
                 #[cfg(feature = "cuda")]
                 {
-                    let $be = h3_cuda::Cuda::new(0).map_err(|e| anyhow!("{e}"))?;
+                    let $be = h3_cuda::Cuda::new(0).map_err(|e| {
+                        anyhow!("{e} (choose another --backend, or --allow-fallback to let auto pick one)")
+                    })?;
                     $body
                 }
                 #[cfg(not(feature = "cuda"))]
@@ -502,20 +512,59 @@ fn allow_software() -> bool {
 }
 static ALLOW_SW: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-fn resolve(kind: BackendKind) -> BackendKind {
+static ALLOW_FALLBACK: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn allow_fallback() -> bool {
+    std::env::var("H3_ALLOW_FALLBACK").is_ok_and(|v| v == "1")
+        || ALLOW_FALLBACK.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// `--backend auto`: this build's preferred backend (CUDA, else WebGPU, else
+/// the CPU). Only with `--allow-fallback` does an unusable preferred backend
+/// give way to the next one; otherwise its own error stops the run.
+fn resolve(kind: BackendKind) -> Result<BackendKind> {
     if kind != BackendKind::Auto {
-        return kind;
+        return Ok(kind);
     }
+    let fallback = allow_fallback();
+    let mut skipped: Vec<String> = Vec::new();
     #[cfg(feature = "cuda")]
-    if h3_cuda::Cuda::new(0).is_ok() {
-        return BackendKind::Cuda;
+    {
+        if !fallback {
+            return Ok(BackendKind::Cuda);
+        }
+        match h3_cuda::Cuda::available() {
+            Ok(()) => return Ok(BackendKind::Cuda),
+            Err(e) => skipped.push(format!("CUDA: {e}")),
+        }
     }
     #[cfg(feature = "wgpu")]
     {
-        return BackendKind::Wgpu;
+        if !fallback && skipped.is_empty() {
+            return Ok(BackendKind::Wgpu);
+        }
+        match h3_wgpu::Wgpu::new() {
+            Ok(w) if !w.is_software() || allow_software() => {
+                eprintln!(
+                    "h3: {}; falling back to WebGPU (--allow-fallback)",
+                    skipped.join("; ")
+                );
+                return Ok(BackendKind::Wgpu);
+            }
+            Ok(w) => skipped.push(format!(
+                "WebGPU: only a software adapter ({})",
+                w.adapter_info().name
+            )),
+            Err(e) => skipped.push(format!("WebGPU: {e}")),
+        }
     }
-    #[allow(unreachable_code)]
-    BackendKind::Cpu
+    if !skipped.is_empty() {
+        eprintln!(
+            "h3: {}; falling back to the CPU (--allow-fallback)",
+            skipped.join("; ")
+        );
+    }
+    Ok(BackendKind::Cpu)
 }
 
 /// Everything the model arguments resolve to.
@@ -689,6 +738,7 @@ fn sampler_plan(v: &Variant) -> Result<SamplerPlan> {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
+    ALLOW_FALLBACK.store(cli.allow_fallback, std::sync::atomic::Ordering::Relaxed);
     if matches!(cli.cmd, Cmd::Check { .. } | Cmd::Plan { .. }) {
         ALLOW_SW.store(true, std::sync::atomic::Ordering::Relaxed);
     }
@@ -741,12 +791,8 @@ fn main() -> Result<()> {
             ops_only,
             report,
         } => {
-            with_backend!(backend, |be| check(
-                &be,
-                resolve(backend),
-                ops_only,
-                report.as_deref()
-            )?)
+            let kind = resolve(backend)?;
+            with_backend!(kind, |be| check(&be, kind, ops_only, report.as_deref())?)
         }
         Cmd::Bench {
             model,

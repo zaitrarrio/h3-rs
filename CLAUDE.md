@@ -424,6 +424,39 @@ State and invariants only; the reasoning is in `docs/design.md`.
   largest whose output fits 2560×1440; `generate`'s is ×4 up to 480p.
   Checked on the synthetic engine in Chromium (CPU backend); not yet timed
   on a GPU.
+- Backend choice: `--backend auto` (the default) takes this build's
+  preferred backend (CUDA if built in, else WebGPU) and fails with its
+  error when it is unusable; only `--allow-fallback` (global flag, or
+  `H3_ALLOW_FALLBACK=1`) lets it fall back to WebGPU, then the CPU, with a
+  note on stderr. Never fall back silently: a GPU run on the CPU is ~100×
+  slower. `Cuda::new` returns an error when libcuda is missing (cudarc
+  itself panics), `Cuda::available` probes without compiling kernels.
+- Container (`Dockerfile`, `.github/workflows/container.yml` →
+  `ghcr.io/zaitrarrio/h3-rs:{sha-…,branch,latest}`): `h3` built with
+  `--no-default-features --features cuda` on debian:bookworm-slim plus only
+  libcublas / libcublasLt / libnvrtc 12.8 (675 MB compressed, cuBLASLt is
+  most of it); the driver comes from the host (R570+ for CUDA 12.8).
+  Entrypoint `h3`: `serve --addr 0.0.0.0:7860 …` as a service, any
+  subcommand as a CLI, `worker` on RunPod serverless. CI smoke-tests it on
+  the GPU-less runner (CPU op checks, strict `auto` failing and
+  `--allow-fallback` passing, a worker job, the synthetic service over a
+  mapped port) before pushing. A local `docker build` inside the agent
+  sandbox needs its proxy CA in the build stages (a scratch copy of the
+  Dockerfile; never commit that).
+- `h3 worker` (`worker.rs`) speaks RunPod's serverless protocol itself
+  (runpod-python's `rp_job` / `rp_http` / `rp_ping`: job-take with
+  `job_in_progress`, job-done with `isStream=false`, pings with `job_id`,
+  `Authorization: $RUNPOD_AI_API_KEY`), so the image has no Python. A job
+  is `{"args": [...], "uploads": {"name": "PUT URL"}, "timeout_s"}`: `h3
+  <args>` runs in a fresh per-job directory, uploads only name files inside
+  it (no absolute paths or `..`), and the output carries the exit code,
+  time, stdout / stderr tails and the files left. `serve` / `worker` are
+  refused as jobs. `--test-input job.json` runs one job locally.
+  `scripts/runpod/container.py` starts the image on a pod (service) or a
+  serverless endpoint (CLI) through RunPod's GraphQL API (rest.runpod.io
+  is unreachable from the agent sandbox). RunPod resource tags are
+  dashboard-only and for organization accounts; the scripts name every
+  resource `h3-rs-…` instead.
 - Site: https://h3-video.gialabs.sh (also https://h3-rs.pages.dev; classic
   Cloudflare Pages project `h3-rs`, a proxied CNAME in the `gialabs.sh`
   zone), built by `web/build.py` into `web/site/` and deployed with

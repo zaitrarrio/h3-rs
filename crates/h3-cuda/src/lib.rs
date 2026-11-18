@@ -665,6 +665,15 @@ fn env1(name: &str) -> bool {
 }
 
 impl Cuda {
+    /// Whether a CUDA device can be opened, without compiling the kernels.
+    pub fn available() -> Result<(), CudaError> {
+        // SAFETY: only probes whether the driver library loads.
+        if !unsafe { cudarc::driver::sys::is_culib_present() } {
+            return Err(CudaError("no CUDA driver (libcuda.so.1 not found)".into()));
+        }
+        CudaContext::new(0).map(|_| ()).map_err(err)
+    }
+
     pub fn new(ordinal: usize) -> Result<Self, CudaError> {
         // cudarc panics on the first driver call when libcuda is missing (a
         // container started without the NVIDIA runtime): an error instead,

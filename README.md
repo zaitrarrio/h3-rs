@@ -276,6 +276,28 @@ Real-ESRGAN runs on the engine and the page switches to the upscaled frames
 flips back to the original size). The size menu also offers 480×272 and
 272×480, rendered at 480×288 / 288×480 and centre-cropped.
 
+## Container
+
+`ghcr.io/zaitrarrio/h3-rs` (built by `.github/workflows/container.yml` on
+every push: `sha-<commit>`, the branch name, `latest` on main) holds the
+`h3` binary with the CUDA and CPU backends and the three CUDA libraries it
+loads; the NVIDIA driver comes from the host (R570 or newer).
+
+```bash
+# a service: the demo page and API on port 7860
+docker run --gpus all -p 7860:7860 -v /data/h3:/w ghcr.io/zaitrarrio/h3-rs \
+    serve --addr 0.0.0.0:7860 --variant draft --model-dir /w/h3 --variant-dir /w/plug4 --tables /w/plug4.tables
+# a CLI
+docker run --gpus all -v /data/h3:/w ghcr.io/zaitrarrio/h3-rs check --backend cuda
+# a RunPod serverless worker (jobs: {"input": {"args": [...], "uploads": {"clip.y4m": "<presigned PUT URL>"}}})
+docker run --gpus all ghcr.io/zaitrarrio/h3-rs worker
+```
+
+`--backend auto` uses CUDA here and stops with an error when there is no
+GPU; `--allow-fallback` (or `H3_ALLOW_FALLBACK=1`) lets it run on the CPU
+instead. `scripts/runpod/container.py` starts the image on a RunPod pod or
+serverless endpoint.
+
 ## Layout
 
 ```

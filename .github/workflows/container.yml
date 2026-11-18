@@ -53,8 +53,12 @@ jobs:
           set -euo pipefail
           docker image ls h3:ci
           docker run --rm h3:ci --help
-          # every op against the CPU reference; auto must fall back without a driver
-          docker run --rm h3:ci check --ops-only
+          # every op against the CPU reference
+          docker run --rm h3:ci check --backend cpu --ops-only
+          # auto does not fall back by default: no driver here, so it must fail ...
+          if docker run --rm h3:ci check --ops-only; then echo "auto fell back without --allow-fallback"; exit 1; fi
+          # ... and with the opt-in it runs on the CPU
+          docker run --rm h3:ci --allow-fallback check --ops-only
           # the RunPod worker on one local job, its report written in the job directory
           echo '{"input": {"args": ["check", "--backend", "cpu", "--ops-only", "--report", "r.json"]}}' > job.json
           docker run --rm -v "$PWD/job.json:/job.json:ro" h3:ci worker --test-input /job.json > result.json

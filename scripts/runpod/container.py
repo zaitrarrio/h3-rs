@@ -4,7 +4,8 @@ on RunPod: as a service on a pod, and as a CLI on a serverless endpoint.
 Talks to RunPod's GraphQL API (api.runpod.io) and its serverless API
 (api.runpod.ai) with $RUNPOD_API_KEY; the image is private, so RunPod pulls it
 with a registry credential (`--auth NAME`, added on RunPod: Settings, Container
-Registry Auth, a GitHub token with read:packages only).
+Registry Auth, a GitHub token with read:packages only); pass `-` as AUTH for a
+public image.
 
     container.py auths                                  registry credential names
     container.py pod IMAGE AUTH GPU DC VOLUME -- ARGS…  a pod running `h3 ARGS…`, port 7860 over RunPod's proxy
@@ -52,10 +53,17 @@ def s(v):
 
 
 def auth_id(name):
+    if name == "-":
+        return None
     for c in gql("{ myself { containerRegistryCreds { id name } } }")["myself"]["containerRegistryCreds"]:
         if c["name"] == name:
             return c["id"]
     sys.exit(f"no registry credential named {name!r} (container.py auths)")
+
+
+def auth_field(name):
+    i = auth_id(name)
+    return f"containerRegistryAuthId: {s(i)}," if i else ""
 
 
 op, a = sys.argv[1], sys.argv[2:]
@@ -67,7 +75,7 @@ elif op == "pod":
     args = a[a.index("--") + 1:]
     q = f"""mutation {{ podFindAndDeployOnDemand(input: {{
         cloudType: SECURE, gpuCount: 1, gpuTypeId: {s(gpu)}, dataCenterId: {s(dc)},
-        name: "h3-rs-container-service", imageName: {s(image)}, containerRegistryAuthId: {s(auth_id(auth))},
+        name: "h3-rs-container-service", imageName: {s(image)}, {auth_field(auth)}
         dockerArgs: {s(" ".join(args))}, ports: "7860/http", containerDiskInGb: 20, volumeInGb: 0,
         networkVolumeId: {s(volume)}, volumeMountPath: "/workspace", env: [{{key: "RUST_BACKTRACE", value: "1"}}]
     }}) {{ id imageName machine {{ gpuDisplayName }} }} }}"""
@@ -85,7 +93,7 @@ elif op == "endpoint":
     image, auth, pool, volume, dc = a[:5]
     name = f"h3-rs-cli-{int(time.time())}"
     t = gql(f"""mutation {{ saveTemplate(input: {{ name: {s(name)}, imageName: {s(image)}, isServerless: true,
-        containerRegistryAuthId: {s(auth_id(auth))}, dockerArgs: "worker", containerDiskInGb: 20, volumeInGb: 0,
+        {auth_field(auth)} dockerArgs: "worker", containerDiskInGb: 20, volumeInGb: 0,
         env: [{{key: "RUST_BACKTRACE", value: "1"}}] }}) {{ id }} }}""")["saveTemplate"]
     e = gql(f"""mutation {{ saveEndpoint(input: {{ name: {s(name)}, templateId: {s(t['id'])}, gpuIds: {s(pool)},
         networkVolumeId: {s(volume)}, locations: {s(dc)}, workersMin: 0, workersMax: 1, idleTimeout: 5,
