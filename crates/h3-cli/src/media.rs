@@ -10,12 +10,37 @@ use std::path::Path;
 
 pub fn read_image(path: &Path) -> Result<Image> {
     let bytes = std::fs::read(path).with_context(|| format!("read {}", path.display()))?;
-    if let Some(im) = Image::from_ppm(&bytes) {
+    decode_image(&bytes, None).with_context(|| format!("decode {}", path.display()))
+}
+
+/// Pixels per image a decoder accepts from an untrusted source (`h3 serve`):
+/// 8192×4096, far above any canvas or reference contract.
+pub const MAX_DECODED_PIXELS: u64 = 8192 * 4096;
+
+/// Decode PNG / JPEG / PPM bytes; `format` pins the decoder (a request's
+/// MIME type) instead of sniffing, and the dimensions are checked against
+/// [`MAX_DECODED_PIXELS`] before any pixel is decoded.
+pub fn decode_image(bytes: &[u8], format: Option<image::ImageFormat>) -> Result<Image> {
+    if format.is_none()
+        && let Some(im) = Image::from_ppm(bytes)
+    {
         return Ok(im);
     }
-    let im = image::load_from_memory(&bytes)
-        .with_context(|| format!("decode {}", path.display()))?
-        .to_rgb8();
+    let reader = || {
+        let mut r = image::ImageReader::new(std::io::Cursor::new(bytes));
+        match format {
+            Some(f) => {
+                r.set_format(f);
+                Ok(r)
+            }
+            None => r.with_guessed_format().context("image format"),
+        }
+    };
+    let (w, h) = reader()?.into_dimensions().context("image header")?;
+    if w == 0 || h == 0 || w as u64 * h as u64 > MAX_DECODED_PIXELS {
+        bail!("{w}x{h} image: the limit is {MAX_DECODED_PIXELS} pixels");
+    }
+    let im = reader()?.decode().context("decode image")?.to_rgb8();
     Ok(Image::new(
         im.width() as usize,
         im.height() as usize,
@@ -61,14 +86,18 @@ pub fn read_frames(path: &Path) -> Result<(Vec<Image>, Option<f64>)> {
 
 fn read_y4m(path: &Path) -> Result<(Vec<Image>, Option<f64>)> {
     let data = std::fs::read(path).with_context(|| format!("read {}", path.display()))?;
-    let nl = data
+    decode_y4m(&data).with_context(|| format!("{}", path.display()))
+}
+
+/// The frames of a YUV4MPEG2 stream (4:2:0 / 4:2:2 / 4:4:4, limited or
+/// full range) as RGB, and its frame rate when the header states one.
+pub fn decode_y4m(data: &[u8]) -> Result<(Vec<Image>, Option<f64>)> {
+    let header = data
         .iter()
         .position(|&b| b == b'\n')
-        .context("y4m header")?;
-    let header = std::str::from_utf8(&data[..nl]).context("y4m header")?;
-    if !header.starts_with("YUV4MPEG2") {
-        bail!("{} is not a YUV4MPEG2 file", path.display());
-    }
+        .and_then(|nl| std::str::from_utf8(&data[..nl]).ok())
+        .filter(|h| h.starts_with("YUV4MPEG2"))
+        .context("not a YUV4MPEG2 stream")?;
     let (mut w, mut h, mut fps, mut chroma) = (0usize, 0usize, None, "420jpeg".to_string());
     for tag in header.split_whitespace().skip(1) {
         match tag.as_bytes()[0] {
@@ -94,7 +123,7 @@ fn read_y4m(path: &Path) -> Result<(Vec<Image>, Option<f64>)> {
     };
     let full = chroma.contains("XCOLORRANGE=FULL") || header.contains("XCOLORRANGE=FULL");
     let frame_bytes = w * h + 2 * cw * ch;
-    let mut pos = nl + 1;
+    let mut pos = header.len() + 1;
     let mut frames = Vec::new();
     while pos + 6 <= data.len() {
         let line_end = data[pos..]
@@ -156,6 +185,18 @@ pub fn write_y4m(
     fps: u32,
 ) -> Result<()> {
     let mut f = std::io::BufWriter::new(std::fs::File::create(path)?);
+    write_y4m_to(&mut f, frames, width, height, rgb, fps)
+}
+
+/// [`write_y4m`] into any writer.
+pub fn write_y4m_to(
+    f: &mut impl Write,
+    frames: usize,
+    width: usize,
+    height: usize,
+    rgb: &[u8],
+    fps: u32,
+) -> Result<()> {
     writeln!(
         f,
         "YUV4MPEG2 W{width} H{height} F{fps}:1 Ip A1:1 C444 XCOLORRANGE=FULL"
@@ -184,9 +225,14 @@ pub fn write_y4m(
 
 /// 16-bit PCM stereo WAV.
 pub fn write_wav(path: &Path, stereo: &[Vec<f32>; 2], rate: u32) -> Result<()> {
+    let mut f = std::io::BufWriter::new(std::fs::File::create(path)?);
+    write_wav_to(&mut f, stereo, rate)
+}
+
+/// [`write_wav`] into any writer.
+pub fn write_wav_to(f: &mut impl Write, stereo: &[Vec<f32>; 2], rate: u32) -> Result<()> {
     let n = stereo[0].len().min(stereo[1].len());
     let data_len = (n * 4) as u32;
-    let mut f = std::io::BufWriter::new(std::fs::File::create(path)?);
     f.write_all(b"RIFF")?;
     f.write_all(&(36 + data_len).to_le_bytes())?;
     f.write_all(b"WAVEfmt ")?;
@@ -215,8 +261,13 @@ pub fn read_wav(path: &Path, target_rate: usize) -> Result<[Vec<f32>; 2]> {
     std::fs::File::open(path)
         .with_context(|| format!("open {}", path.display()))?
         .read_to_end(&mut data)?;
+    decode_wav(&data, target_rate).with_context(|| format!("{}", path.display()))
+}
+
+/// [`read_wav`] on bytes.
+pub fn decode_wav(data: &[u8], target_rate: usize) -> Result<[Vec<f32>; 2]> {
     if data.len() < 12 || &data[..4] != b"RIFF" || &data[8..12] != b"WAVE" {
-        bail!("{} is not a WAV file", path.display());
+        bail!("not a WAV file");
     }
     let (mut pos, mut fmt, mut pcm) = (12usize, None, None);
     while pos + 8 <= data.len() {
@@ -224,6 +275,9 @@ pub fn read_wav(path: &Path, target_rate: usize) -> Result<[Vec<f32>; 2]> {
         let len = u32::from_le_bytes(data[pos + 4..pos + 8].try_into().unwrap()) as usize;
         let body = &data[pos + 8..(pos + 8 + len).min(data.len())];
         if id == b"fmt " {
+            if body.len() < 16 {
+                bail!("WAV fmt chunk is truncated");
+            }
             let tag = u16::from_le_bytes([body[0], body[1]]);
             let channels = u16::from_le_bytes([body[2], body[3]]) as usize;
             let rate = u32::from_le_bytes(body[4..8].try_into().unwrap()) as usize;
@@ -237,6 +291,9 @@ pub fn read_wav(path: &Path, target_rate: usize) -> Result<[Vec<f32>; 2]> {
     let (tag, channels, rate, bits) = fmt.context("WAV without fmt chunk")?;
     let pcm = pcm.context("WAV without data chunk")?;
     let bytes = bits / 8;
+    if bytes == 0 || channels == 0 || rate == 0 {
+        bail!("WAV with {bits}-bit samples, {channels} channels at {rate} Hz");
+    }
     let frames = pcm.len() / (bytes * channels);
     let sample = |i: usize, c: usize| -> f32 {
         let o = (i * channels + c) * bytes;
