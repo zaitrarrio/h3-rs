@@ -1,0 +1,110 @@
+# CI for h3-rs: the test contract of CLAUDE.md on hardware GitHub has (no GPU).
+#
+#   check   cargo check of every target, plus the `cuda` feature build of the
+#           `h3` binary (cudarc loads the driver at run time, so it compiles
+#           without a CUDA toolkit; this is the build the RunPod image makes).
+#   test    cargo test --workspace on lavapipe (mesa's CPU Vulkan driver):
+#           the CPU reference, the PyTorch-parity fixtures, the tiny pipeline
+#           through `h3 serve --synthetic`, and the WebGPU conformance suite
+#           including the forced-64-KiB-binding pass. `CI=1` makes the wgpu
+#           tests accept the software adapter instead of skipping.
+#   cuda    cargo test -p h3-cuda with libnvrtc from the pip wheel: the CUDA
+#           kernels are NVRTC-compiled for sm_80 / 89 / 100 / 120. The job
+#           fails if the test skipped (NVRTC not loadable) rather than passing
+#           vacuously.
+#   site    web/build.py assembles the Pages tree from the two pages.
+#
+# No speed numbers come from here: CLAUDE.md's rule is a named card, and
+# lavapipe is only a conformance oracle.
+
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  RUST_BACKTRACE: "1"
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: check
+      - name: cargo check (every target, default features)
+        run: cargo check --workspace --all-targets --locked
+      - name: cargo check (the CUDA build of the h3 binary)
+        run: cargo check -p h3-cli --no-default-features --features cuda --locked
+
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: test
+      - name: lavapipe (mesa's CPU Vulkan driver)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends mesa-vulkan-drivers vulkan-tools
+          VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json vulkaninfo --summary | grep -iE 'deviceName|llvmpipe' || true
+      - name: cargo test --workspace (CPU reference, parity, synthetic serve, WebGPU on lavapipe)
+        env:
+          CI: "1"
+          H3_ALLOW_SOFTWARE: "1"
+          VK_ICD_FILENAMES: /usr/share/vulkan/icd.d/lvp_icd.json
+        run: cargo test --workspace --locked --no-fail-fast 2>&1 | tee test.log
+      - name: the WebGPU suite ran on lavapipe, not skipped
+        run: |
+          if grep -q '^skipping:' test.log; then
+            echo 'a WebGPU test skipped: no usable Vulkan adapter'; grep '^skipping:' test.log; exit 1
+          fi
+          grep -E '^test result' test.log
+
+  cuda:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: cuda
+      - name: libnvrtc from the pip wheel (no toolkit, no GPU)
+        run: |
+          python3 -m venv .nvrtc
+          .nvrtc/bin/pip install -q "nvidia-cuda-nvrtc-cu12==12.8.*"
+          echo "LD_LIBRARY_PATH=$(echo "$PWD"/.nvrtc/lib/python3.*/site-packages/nvidia/cuda_nvrtc/lib)" >> "$GITHUB_ENV"
+      - name: cargo test -p h3-cuda (kernels NVRTC-compile for sm_80 / 89 / 100 / 120)
+        run: cargo test -p h3-cuda --locked -- --nocapture 2>&1 | tee cuda.log
+      - name: the kernels compiled, the test did not skip
+        run: |
+          if grep -q 'skipping: libnvrtc not loadable' cuda.log; then
+            echo 'libnvrtc was not loadable: the compile test skipped'; exit 1
+          fi
+          grep -E 'kernels_compile_for_ampere_ada_and_blackwell .* ok' cuda.log
+
+  site:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: build the Pages tree
+        run: |
+          python3 web/build.py
+          test -s web/site/index.html && test -s web/site/demo/index.html

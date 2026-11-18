@@ -428,7 +428,27 @@ State and invariants only; the reasoning is in `docs/design.md`.
   around the playhead. Its default factor (`finish::serve_factor`) is the
   largest whose output fits 2560×1440; `generate`'s is ×4 up to 480p.
   Checked on the synthetic engine in Chromium (CPU backend); not yet timed
-  on a GPU.
+  on a GPU. One request carries a task's inputs (no per-job `h3 generate`
+  for a hosted worker): `task` (`t2va | fl2va | ref2va`, default inferred
+  from the media, else t2va / the start task), `first_image` / `last_image`
+  `{b64, mime: image/png | image/jpeg}`, `refs` `[{kind: image | video |
+  audio, b64, mime?, audio_b64?}]` (video = Y4M, audio = WAV, a reference
+  video ≥ 22 frames), `continue` `{b64: y4m, audio_b64?}`; decoded on the
+  HTTP thread (400 with the reason; WAVs resampled to the resident audio
+  VAE's rate, 32 kHz, the tiny model's 320 Hz: at 32 kHz a 0.3 s clip was
+  ~1900 reference rows and 22 s per tiny step), sized and VAE /
+  vision-encoded on the engine thread (`inputs.rs` is shared with
+  `generate`, which now refuses a reference video under 22 frames instead
+  of panicking in `trim_reference_frames`'s slice). Body cap 64 MiB
+  with a media field, 64 KiB without, 413 above. `/api/info` has `tasks`
+  (what the resident DiT takes: `--task ref2va` loads `transformer_ref` so
+  that engine serves Ref2VA only; Pika's per-task adapter pins the start
+  task; a gallery engine has no vision tower, T2VA only; the synthetic
+  engine all three on the tiny pipeline) and `inputs.max_body_bytes`; a
+  job's status has `task` and `ref_count`; the page sends a First / Last
+  frame pair when `tasks` lists fl2va. The encoders load only for the
+  served tasks. `cargo test -p h3-cli` runs an FL2VA and a Ref2VA job
+  through the synthetic CPU engine over HTTP.
 - Backends: `--backend cuda | wgpu | cpu` never falls back (the chosen
   one works or the run stops with its error); `--backend auto` (the
   default) takes the first that works of CUDA (if built in), WebGPU (if

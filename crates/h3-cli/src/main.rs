@@ -18,7 +18,7 @@ use h3_model::{
     Attention,
     audio_vae::AudioVae,
     dit::{AdalnTables, H3Dit, LoadOptions},
-    pipeline::{Continuation, Event, Pipeline, Prompt, Reference, Request, SamplerPlan},
+    pipeline::{Event, Pipeline, Prompt, Request, SamplerPlan},
     regen::{Regen, RegenRequest, SharpCurve},
     taeh3::TaeH3,
     upscaler::Upscaler,
@@ -30,6 +30,7 @@ use std::path::{Path, PathBuf};
 mod encoder;
 mod finish;
 mod gallery;
+mod inputs;
 mod media;
 mod serve;
 mod worker;
@@ -1319,13 +1320,6 @@ fn parse_media_spec(spec: &str) -> Result<(String, PathBuf, Option<PathBuf>)> {
     Ok((kind.to_string(), path, audio))
 }
 
-fn frames_at_canvas(frames: &[Image], width: usize, height: usize) -> Vec<Image> {
-    frames
-        .iter()
-        .map(|f| f.fit_canvas(width, height, false))
-        .collect()
-}
-
 #[allow(clippy::too_many_arguments)]
 /// The DiT a run loads, by its directory or file name (`transformer`,
 /// `transformer_ref`, a quantized file's name).
@@ -1499,101 +1493,59 @@ fn generate<B: Backend>(
     println!("load {:.1}s", t0.elapsed().as_secs_f64());
     let tiling = (tile > 0).then_some(Tiling { tile, overlap: 64 });
 
-    // Conditioning.
+    // Conditioning: read the files, then size them like `h3 serve` does.
     let pika = r.variant.pika_buckets;
-    let mut keyframes = Vec::new();
-    let mut kf_images = Vec::new();
-    for (anchor, path, stretch) in [
-        (Anchor::First, first_image, !pika),
-        (Anchor::Last, last_image, false),
-    ] {
+    let mut inputs = inputs::Inputs::default();
+    for (anchor, path) in [(Anchor::First, first_image), (Anchor::Last, last_image)] {
         if let Some(p) = path {
-            let im = media::read_image(&p)?.fit_canvas(g.width, g.height, stretch);
-            keyframes.push((anchor, im.to_volume()));
-            kf_images.push(im);
+            inputs.keyframes.push((anchor, media::read_image(&p)?));
         }
     }
-    let mut references = Vec::new();
-    let mut presented = Vec::new();
+    for spec in refs {
+        let (kind, path, audio) = parse_media_spec(spec)?;
+        inputs.refs.push(match kind.as_str() {
+            "image" => inputs::RefInput::Image(media::read_image(&path)?),
+            "video" => {
+                let (frames, fps) = media::read_frames(&path)?;
+                inputs::RefInput::Video {
+                    frames,
+                    fps,
+                    audio: audio
+                        .as_deref()
+                        .map(|p| media::read_wav(p, 32000))
+                        .transpose()?,
+                }
+            }
+            "audio" => inputs::RefInput::Audio(media::read_wav(&path, 32000)?),
+            other => bail!("unknown reference kind `{other}` (image | video | audio)"),
+        });
+    }
+    if let Some(spec) = continuation {
+        let (path, audio) = match spec.split_once(",audio=") {
+            Some((p, a)) => (PathBuf::from(p), Some(PathBuf::from(a))),
+            None => (PathBuf::from(&spec), None),
+        };
+        let (frames, _) = media::read_frames(&path)?;
+        inputs.continuation = Some((
+            frames,
+            audio
+                .as_deref()
+                .map(|p| media::read_wav(p, 32000))
+                .transpose()?,
+        ));
+    }
     let ref_short_edge = if pika {
         packing::pika::tier("768p")?.reference_short_edge
     } else {
         packing::REFERENCE_IMAGE_SHORT_EDGE
     };
-    for spec in refs {
-        let (kind, path, audio) = parse_media_spec(spec)?;
-        match kind.as_str() {
-            "image" => {
-                let im = media::read_image(&path)?;
-                let (h, w) = packing::reference_image_size(im.width, im.height, ref_short_edge)?;
-                let im = im.resize(w, h, h3_text::image::Filter::Lanczos);
-                references.push(Reference::Image(im.to_volume()));
-                presented.push(h3_text::PresentedRef::Image(im));
-            }
-            "video" => {
-                let (frames, fps) = media::read_frames(&path)?;
-                if fps.is_some_and(|f| (f - 24.0).abs() > 1e-6) {
-                    eprintln!(
-                        "warning: {} is {:.2} fps; H3 treats reference frames as 24 fps (resample with ffmpeg -r 24)",
-                        path.display(),
-                        fps.unwrap()
-                    );
-                }
-                let n = packing::trim_reference_frames(frames.len().min(g.frames));
-                let (h, w) = packing::canvas_size(
-                    frames[0].width as f64,
-                    frames[0].height as f64,
-                    packing::SHORT_EDGE,
-                    packing::MAX_PIXELS,
-                )?;
-                let fr: Vec<Image> = frames[..n]
-                    .iter()
-                    .map(|f| f.resize(w, h, h3_text::image::Filter::Lanczos))
-                    .collect();
-                let a = audio
-                    .as_deref()
-                    .map(|p| media::read_wav(p, 32000))
-                    .transpose()?;
-                references.push(Reference::Video {
-                    pixels: Image::frames_to_volume(&fr),
-                    audio: a.clone(),
-                });
-                presented.push(h3_text::PresentedRef::Video {
-                    frames: fr,
-                    has_audio: a.is_some(),
-                });
-            }
-            "audio" => {
-                let a = media::read_wav(&path, 32000)?;
-                references.push(Reference::Audio(a));
-                presented.push(h3_text::PresentedRef::Audio);
-            }
-            other => bail!("unknown reference kind `{other}` (image | video | audio)"),
-        }
-    }
-    let cont = match continuation {
-        Some(spec) => {
-            let (path, audio) = match spec.split_once(",audio=") {
-                Some((p, a)) => (PathBuf::from(p), Some(PathBuf::from(a))),
-                None => (PathBuf::from(&spec), None),
-            };
-            let (frames, _) = media::read_frames(&path)?;
-            if !packing::CONTINUATION_FRAMES.contains(&frames.len()) {
-                bail!(
-                    "a continuation clip has 5, 22 or 39 frames, got {}",
-                    frames.len()
-                );
-            }
-            Some(Continuation {
-                pixels: Image::frames_to_volume(&frames_at_canvas(&frames, g.width, g.height)),
-                audio: audio
-                    .as_deref()
-                    .map(|p| media::read_wav(p, 32000))
-                    .transpose()?,
-            })
-        }
-        None => None,
-    };
+    let inputs::Prepared {
+        keyframes,
+        kf_images,
+        references,
+        presented,
+        continuation: cont,
+    } = inputs::prepare(inputs, g, pika, inputs::Sizing::Release { ref_short_edge })?;
     be.profile_reset();
     let tp = std::time::Instant::now();
     let prompt_rows: Prompt = match (&prompt, &embeds) {
