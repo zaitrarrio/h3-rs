@@ -31,6 +31,7 @@ mod finish;
 mod gallery;
 mod media;
 mod serve;
+mod worker;
 
 #[derive(Parser)]
 #[command(
@@ -260,6 +261,9 @@ enum Cmd {
         /// Only the op checks.
         #[arg(long, default_value_t = false)]
         ops_only: bool,
+        /// Also write the results as JSON (backend, tolerance, every case).
+        #[arg(long)]
+        report: Option<PathBuf>,
     },
     /// Time denoising steps with synthetic weights at a real geometry.
     Bench {
@@ -402,6 +406,16 @@ enum Cmd {
         tile: usize,
         #[arg(long, default_value = "out-2k.y4m")]
         out: PathBuf,
+    },
+    /// RunPod serverless worker: take jobs (`{"args": [...], "uploads": {...}}`),
+    /// run `h3 <args>` for each, PUT the named outputs, post the result.
+    Worker {
+        /// Run this one job (a JSON file: the job's input) without RunPod.
+        #[arg(long)]
+        test_input: Option<PathBuf>,
+        /// Where each job gets its own working directory.
+        #[arg(long, default_value = "/tmp/h3-jobs")]
+        work_dir: PathBuf,
     },
     /// Run the local engine and the prompt-to-clip demo page.
     Serve {
@@ -722,8 +736,17 @@ fn main() -> Result<()> {
             );
             print!("{p}");
         }
-        Cmd::Check { backend, ops_only } => {
-            with_backend!(backend, |be| check(&be, resolve(backend), ops_only)?)
+        Cmd::Check {
+            backend,
+            ops_only,
+            report,
+        } => {
+            with_backend!(backend, |be| check(
+                &be,
+                resolve(backend),
+                ops_only,
+                report.as_deref()
+            )?)
         }
         Cmd::Bench {
             model,
@@ -977,6 +1000,10 @@ fn main() -> Result<()> {
                 &out
             )?)
         }
+        Cmd::Worker {
+            test_input,
+            work_dir,
+        } => worker::run(test_input, work_dir)?,
         Cmd::Serve {
             model,
             attn,
@@ -1017,7 +1044,12 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn check<B: Backend>(be: &B, kind: BackendKind, ops_only: bool) -> Result<()> {
+fn check<B: Backend>(
+    be: &B,
+    kind: BackendKind,
+    ops_only: bool,
+    report: Option<&Path>,
+) -> Result<()> {
     println!("{}", be.name());
     // bf16 activations on CUDA: ~3 significant digits per op; f16 weight
     // storage on WebGPU: ~3 digits in the partial sums.
@@ -1040,6 +1072,18 @@ fn check<B: Backend>(be: &B, kind: BackendKind, ops_only: bool) -> Result<()> {
             if r.ok { "ok" } else { "FAIL" }
         );
         bad += (!r.ok) as usize;
+    }
+    if let Some(p) = report {
+        let cases: Vec<_> = res
+            .iter()
+            .map(|r| serde_json::json!({"name": r.name, "rel_err": r.rel_err, "ok": r.ok}))
+            .collect();
+        let v = serde_json::json!({
+            "backend": be.name(), "tolerance": tol, "passed": res.len() - bad,
+            "total": res.len(), "cases": cases,
+        });
+        std::fs::write(p, serde_json::to_vec_pretty(&v)?)
+            .with_context(|| format!("write {}", p.display()))?;
     }
     if bad > 0 {
         bail!("{bad} of {} checks failed (tolerance {tol:e})", res.len());
