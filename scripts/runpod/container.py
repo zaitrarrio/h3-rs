@@ -10,7 +10,8 @@ public image.
     container.py auths                                  registry credential names
     container.py pod IMAGE AUTH GPU DC VOLUME -- ARGS…  a pod running `h3 ARGS…`, port 7860 over RunPod's proxy
     container.py pod-status POD_ID | pod-terminate POD_ID
-    container.py endpoint IMAGE AUTH GPU_POOL VOLUME DC  a serverless endpoint running `h3 worker` (0..1 workers)
+    container.py endpoint IMAGE AUTH GPU_POOLS VOLUME DC a serverless endpoint running `h3 worker` (0..1 workers);
+                                                        GPU_POOLS like "BLACKWELL_96,ADA_24", tried in order
     container.py run ENDPOINT_ID job.json                submit a job ({"input": {"args": […], "uploads": {…}}}), wait, print the result
     container.py endpoint-delete ENDPOINT_ID
 
@@ -96,7 +97,7 @@ elif op == "endpoint":
         {auth_field(auth)} dockerArgs: "worker", containerDiskInGb: 20, volumeInGb: 0,
         env: [{{key: "RUST_BACKTRACE", value: "1"}}] }}) {{ id }} }}""")["saveTemplate"]
     e = gql(f"""mutation {{ saveEndpoint(input: {{ name: {s(name)}, templateId: {s(t['id'])}, gpuIds: {s(pool)},
-        networkVolumeId: {s(volume)}, locations: {s(dc)}, workersMin: 0, workersMax: 1, idleTimeout: 5,
+        networkVolumeId: {s(volume)}, locations: {s(dc)}, workersMin: 0, workersMax: 1, idleTimeout: 5, executionTimeoutMs: 2400000,
         scalerType: "QUEUE_DELAY", scalerValue: 4 }}) {{ id }} }}""")["saveEndpoint"]
     print(e["id"], "template", t["id"], name)
 elif op == "run":
@@ -116,10 +117,19 @@ elif op == "run":
             break
         time.sleep(5)
 elif op == "endpoint-delete":
-    e = a[0]
-    gql(f'mutation {{ updateEndpointWorkersMinMax(input: {{endpointId: {s(e)}, workersMin: 0, workersMax: 0}}) {{ id }} }}')
-    time.sleep(5)
-    gql(f"mutation {{ deleteEndpoint(id: {s(e)}) }}")
-    print("deleted", e)
+    eid = a[0]
+    eps = gql("""{ myself { endpoints { id name templateId gpuIds locations networkVolumeId idleTimeout
+        scalerType scalerValue } } }""")["myself"]["endpoints"]
+    e = next((x for x in eps if x["id"] == eid), None)
+    if not e:
+        sys.exit(f"no endpoint {eid}")
+    # scale to zero first (an endpoint with workers cannot be deleted), then delete it
+    vol = f"networkVolumeId: {s(e['networkVolumeId'])}," if e.get("networkVolumeId") else ""
+    gql(f"""mutation {{ saveEndpoint(input: {{ id: {s(eid)}, name: {s(e['name'])}, templateId: {s(e['templateId'])},
+        gpuIds: {s(e['gpuIds'])}, locations: {s(e['locations'])}, {vol} idleTimeout: {e['idleTimeout']},
+        scalerType: {s(e['scalerType'])}, scalerValue: {e['scalerValue']}, workersMin: 0, workersMax: 0 }}) {{ id }} }}""")
+    time.sleep(10)
+    gql(f"mutation {{ deleteEndpoint(id: {s(eid)}) }}")
+    print("deleted", eid, e["name"])
 else:
     sys.exit(__doc__)
