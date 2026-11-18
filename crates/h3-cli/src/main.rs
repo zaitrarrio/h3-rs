@@ -165,9 +165,9 @@ struct Shape {
     aspect: String,
     /// Resolution tier when no width/height is given: 768p (default; the
     /// model's 1344×768 at 16:9), 480p (832×480, the draft tier's fast
-    /// setting) or 272p (480×272: rendered at 480×288, the model's 32-pixel
-    /// grid, and centre-cropped). Pika H3 Flex samples its own 480p / 768p
-    /// buckets.
+    /// setting) or 288p (480×288, H3's smallest canvas on its 32-pixel
+    /// grid; below its trained sizes, it can ghost). Pika H3 Flex samples
+    /// its own 480p / 768p buckets.
     #[arg(long)]
     tier: Option<String>,
     /// Frames at 24 fps, aligned up to 17n + 5 (124 = 5.17 s).
@@ -181,8 +181,8 @@ impl Shape {
     }
 
     /// The render canvas (a multiple of 32 on both edges) and the output
-    /// size: equal, unless the request is not on the 32-pixel grid (`--tier
-    /// 272p`, or `--width` / `--height` off the grid), in which case the
+    /// size: equal, unless `--width` / `--height` are off the 32-pixel grid
+    /// (e.g. 480×272), in which case the
     /// canvas rounds each edge up and the decoded frames are centre-cropped.
     fn resolve(&self, v: &Variant) -> Result<(Geometry, (usize, usize))> {
         let (aw, ah) = packing::pika::parse_aspect(&self.aspect)?;
@@ -206,17 +206,10 @@ impl Shape {
                     "480p" | "p480" | "480" => {
                         packing::canvas_size(aw as f64, ah as f64, 480, 832 * 480)?
                     }
-                    "272p" | "p272" | "272" => {
-                        // fastwan-rs's smallest size: 272 on the short edge,
-                        // the long one to the aspect on a 16-pixel grid.
-                        let snap = |v: f64| ((v / 16.0).round() * 16.0).max(16.0) as usize;
-                        if aw >= ah {
-                            (272, snap(272.0 * aw as f64 / ah as f64))
-                        } else {
-                            (snap(272.0 * ah as f64 / aw as f64), 272)
-                        }
+                    "288p" | "p288" | "288" => {
+                        packing::canvas_size(aw as f64, ah as f64, 288, 480 * 288)?
                     }
-                    t => bail!("unknown tier `{t}` (272p | 480p | 768p)"),
+                    t => bail!("unknown tier `{t}` (288p | 480p | 768p)"),
                 },
                 _ => bail!("give --width and --height together, or neither"),
             };
@@ -1238,7 +1231,7 @@ fn transformer_name(p: &Path) -> String {
 
 /// What happens to a clip's decoded frames before they are written: the
 /// centre crop to the requested size (canvases off the 32-pixel grid, e.g.
-/// 480×272) and the optional Real-ESRGAN upscale.
+/// `--width 480 --height 272`) and the optional Real-ESRGAN upscale.
 struct Finish {
     out_size: (usize, usize),
     /// Weights and the requested factor (2 / 3 / 4; `None` picks).
@@ -1698,7 +1691,7 @@ fn regen2k<B: Backend>(
         );
     }
     // The draft's own aspect decides both canvases (2560×1440 at 16:9,
-    // 1440×2560 at 9:16, …); a 480p or 480×272 draft is fitted to the 768p one.
+    // 1440×2560 at 9:16, …); a 480p or 288p draft is fitted to the 768p one.
     let (dw, dh) = (frames[0].width, frames[0].height);
     let ((h, w), output) = h3_model::regen::regen_canvases(dw, dh)?;
     println!(
@@ -1753,4 +1746,31 @@ fn regen2k<B: Backend>(
         out.display()
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tier_288p_is_on_the_grid() {
+        let v = Variant::by_name("draft").unwrap();
+        for (aspect, want) in [
+            ("16:9", (480, 288)),
+            ("9:16", (288, 480)),
+            ("1:1", (288, 288)),
+        ] {
+            let cli = Cli::parse_from(["h3", "plan", "--tier", "288p", "--aspect", aspect]);
+            let Cmd::Plan { shape, .. } = cli.cmd else {
+                unreachable!()
+            };
+            let (g, out) = shape.resolve(&v).unwrap();
+            assert_eq!(((g.width, g.height), out), (want, want), "{aspect}");
+        }
+        let cli = Cli::parse_from(["h3", "plan", "--tier", "272p"]);
+        let Cmd::Plan { shape, .. } = cli.cmd else {
+            unreachable!()
+        };
+        assert!(shape.resolve(&v).is_err());
+    }
 }

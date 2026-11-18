@@ -359,10 +359,12 @@ State and invariants only; the reasoning is in `docs/design.md`.
   480p draft in 8.6 s after load (TAEH3), 768p 30–35 s, Regen-2K 446 s
   (`docs/runs/2026-11-17-vast-pro6000-turbo-cfg-draft`). Without
   `--tables` every run spends ~46 s on the AdaLN tables.
-- Sizes off the 32-pixel grid (`--tier 272p` = 480×272 at 16:9, 272×480
-  at 9:16, or any `--width` / `--height`): the canvas rounds each edge up
-  to 32 (480×288) and `generate` centre-crops the decoded frames
-  (`Finish`). `--upscale realesr-animevideov3.safetensors` runs Real-ESRGAN
+- `--tier 288p` is H3's 480×288 (288×480 at 9:16, 288×288 at 1:1:
+  `canvas_size` with short edge 288 and a 480×288 budget), on the 32-pixel
+  grid like every tier; it replaced a 272p tier (480×272 cropped from
+  480×288) on 2026-11-18. A `--width` / `--height` off the grid still
+  renders the canvas rounded up to 32 and `generate` / `serve` centre-crop
+  the decoded frames (`finish.rs`). `--upscale realesr-animevideov3.safetensors` runs Real-ESRGAN
   ×4 (`esrgan.rs`, fastwan-rs's network: convs with
   `ConvEpilogue::Prelu` on all three backends, `pixel_shuffle`, the 8-bit
   residual on the host; byte-identical to fastwan-rs's on the real
@@ -374,14 +376,16 @@ State and invariants only; the reasoning is in `docs/design.md`.
   `transformer_ref` has its own modulation, and a table from the other DiT
   is refused. Server Edition, fast recipe, `--tables`
   (`docs/runs/2026-11-17-vast-pro6000-ref2va-upscale`, 180 / 180 checks):
-  a 272p draft 4.0 s + ×4 upscale to 1920×1088 1.7 s (TAEH3: 2.8 s), 480p
+  a 480×288 draft 4.0 s (measured as 272p, the same canvas cropped) + ×4
+  upscale 1.7 s (TAEH3: 2.8 s), 480p
   10.6 + 4.4 s to 3328×1920, 768p 34.7 + 18.5 s to 2688×1536 (×2: the
-  host Lanczos of the ×4 frames is most of it). 272p is below H3's
-  trained tiers: the landscape fox ghosted, the portrait did not; 480p is
-  the smallest reliably clean tier. Ref2VA: draft 480p 19.4 s denoise
+  host Lanczos of the ×4 frames is most of it). 288p is below H3's
+  trained tiers: the landscape fox ghosted at that canvas (twice, also
+  through `serve` on RunPod), the portrait did not; 480p is the smallest
+  reliably clean tier. Ref2VA: draft 480p 19.4 s denoise
   (4.8 s per forward, 2.5× T2VA's), `h3-turbo4-ref` 46.4 s, `-turbo8-ref`
   92.7 s at 768p, all keeping the reference's subject.
-  Regen-2K from 272p drafts: 9:16 → 1440×2560 in 446.5 s, 16:9 →
+  Regen-2K from 272p (480×288-canvas) drafts: 9:16 → 1440×2560 in 446.5 s, 16:9 →
   2560×1440 in 450.1 s (the 2K canvas sets the cost, whatever the draft).
 - AdaLN: the 13 B modulation weights are never resident. Tables are computed
   per generation by streaming each block's weight through the backend once,

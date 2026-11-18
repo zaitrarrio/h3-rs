@@ -174,7 +174,7 @@ const EXAMPLES = [
   ["Koi pond", "Top-down view of orange and white koi gliding beneath lily pads in a clear pond, ripples spreading, soft daylight."],
 ];
 const SIZES = [[1344, 768, "1344×768 · 16:9 (release)"], [768, 1344, "768×1344 · 9:16"], [768, 768, "768×768 · 1:1"], [832, 480, "832×480 · 480p"], [480, 832, "480×832 · 480p portrait"],
-  [480, 272, "480×272 · 272p (may ghost)", true], [272, 480, "272×480 · 272p portrait", true]];
+  [480, 288, "480×288 · 288p (may ghost)", true], [288, 480, "288×480 · 288p portrait", true]];
 const LENGTHS = [[124, "5.2 s · 124 frames"], [158, "6.6 s · 158 frames"], [192, "8 s · 192 frames"], [243, "10.1 s · 243 frames"], [294, "12.3 s · 294 frames"], [362, "15.1 s · 362 frames"]];
 
 let info = null, job = null, poll = null;
@@ -242,7 +242,7 @@ function applyGallery(list) {
 function setEngine(kind, text) { $("eng-dot").className = "dot " + kind; $("eng-text").textContent = text; }
 function fillOptions() {
   const keep = [$("size").value, $("length").value];
-  $("size").innerHTML = SIZES.filter(([w, h, , crop]) => w * h <= info.max_pixels && !(crop && info.pika)).map(([w, h, l]) => `<option value="${w}x${h}">${l}</option>`).join("");
+  $("size").innerHTML = SIZES.filter(([w, h, , small]) => w * h <= info.max_pixels && !(small && info.pika)).map(([w, h, l]) => `<option value="${w}x${h}">${l}</option>`).join("");
   $("length").innerHTML = LENGTHS.filter(([f]) => f <= info.max_frames).map(([f, l]) => `<option value="${f}">${l}</option>`).join("");
   if (keep[0]) $("size").value = keep[0];
   if (keep[1]) $("length").value = keep[1];

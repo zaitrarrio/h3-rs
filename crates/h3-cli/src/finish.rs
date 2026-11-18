@@ -1,6 +1,6 @@
 //! What happens to a clip's decoded frames before they leave the engine,
 //! shared by `h3 generate` and `h3 serve`: the centre crop to the requested
-//! size (canvases off the 32-pixel grid, e.g. 480×272 rendered at 480×288)
+//! size (sizes off the 32-pixel grid, e.g. 480×272 rendered at 480×288)
 //! and the Real-ESRGAN upscale (×4, or ×2 / ×3 by resampling the ×4 frames
 //! like Real-ESRGAN's `--outscale`).
 
@@ -42,7 +42,7 @@ pub fn cli_factor(w: usize, h: usize) -> usize {
 pub const SERVE_MAX_OUT_PIXELS: usize = 2560 * 1440;
 
 /// `h3 serve`'s default: the largest factor ≤ the network's whose output
-/// fits [`SERVE_MAX_OUT_PIXELS`], at least 2 (480×272 → ×4 1920×1088,
+/// fits [`SERVE_MAX_OUT_PIXELS`], at least 2 (480×288 → ×4 1920×1152,
 /// 832×480 → ×3 2496×1440, 1344×768 → ×2 2688×1536).
 pub fn serve_factor(w: usize, h: usize, scale: usize) -> usize {
     (2..=scale)
@@ -118,14 +118,14 @@ mod tests {
     fn canvases_and_factors() {
         assert_eq!((canvas_edge(480), canvas_edge(272)), (480, 288));
         assert_eq!(canvas_edge(768), 768);
-        assert_eq!(serve_factor(480, 272, 4), 4);
-        assert_eq!(serve_factor(272, 480, 4), 4);
+        assert_eq!(serve_factor(480, 288, 4), 4);
+        assert_eq!(serve_factor(288, 480, 4), 4);
         assert_eq!(serve_factor(832, 480, 4), 3);
         assert_eq!(serve_factor(1344, 768, 4), 2);
-        assert_eq!(serve_factor(480, 272, 2), 2);
+        assert_eq!(serve_factor(480, 288, 2), 2);
         assert_eq!(
             (
-                cli_factor(480, 272),
+                cli_factor(480, 288),
                 cli_factor(832, 480),
                 cli_factor(1344, 768)
             ),

@@ -226,8 +226,10 @@ h3 regen2k --regen-dir regen --model-dir h3 --draft draft.y4m --prompt "..." \
     --adaln-table adaln_t_table.bin --out final-2k.y4m
 ```
 
-`--tier 272p` (480×272, rendered at 480×288 and centre-cropped), `480p`
-(832×480) or `768p` (1344×768) works for every variant, at any `--aspect`.
+`--tier 288p` (480×288, H3's smallest canvas on its 32-pixel grid), `480p`
+(832×480) or `768p` (1344×768) works for every variant, at any `--aspect`;
+a `--width` / `--height` off the grid (480×272) renders the next canvas up
+and is centre-cropped.
 `--upscale realesr-animevideov3.safetensors` (Real-ESRGAN ×4, fastwan-rs's
 network, `https://weights.fastwan.dev/v1/realesr-animevideov3.safetensors`)
 upscales the finished frames at any size, `--upscale-factor 2 | 3` resampling
@@ -235,9 +237,10 @@ the ×4 output; `h3 regen2k` takes a draft of any aspect (a 9:16 draft becomes
 1440×2560). On a
 600 W RTX PRO 6000 Server Edition a 480p draft takes 8.6 s after load and
 Regen-2K 446 s; the 2K clip keeps the draft's composition
-(`docs/runs/2026-11-17-vast-pro6000-turbo-cfg-draft`). A 272p draft takes
-4.0 s and its ×4 upscale to 1920×1088 1.7 s, but 272p is below H3's
-trained tiers and can ghost; a Ref2VA draft (`--task ref2va --ref
+(`docs/runs/2026-11-17-vast-pro6000-turbo-cfg-draft`). A 480×288 draft takes
+4.0 s and its ×4 upscale 1.7 s (measured as the old 272p tier, the same
+canvas cropped to 480×272), but 288p is below H3's trained tiers and can
+ghost; a Ref2VA draft (`--task ref2va --ref
 image:a.png`, tables from `h3 adaln-tables --task ref2va`) takes 19.4 s of
 denoise at 480p (`docs/runs/2026-11-17-vast-pro6000-ref2va-upscale`).
 
@@ -272,9 +275,10 @@ random model for trying the page without weights. The engine listens on
 `--upscale realesr-animevideov3.safetensors` adds an "Upscale after
 decoding" box: the clip plays at its own size as soon as it decodes, then
 Real-ESRGAN runs on the engine and the page switches to the upscaled frames
-(×4 for 480×272 → 1920×1088, ×3 for 480p → 2496×1440, ×2 above; a button
-flips back to the original size). The size menu also offers 480×272 and
-272×480, rendered at 480×288 / 288×480 and centre-cropped.
+(×4 for 480×288 → 1920×1152, ×3 for 480p → 2496×1440, ×2 above; a button
+flips back to the original size). The size menu also offers 480×288 and
+288×480 (288p); a request off the 32-pixel grid (480×272) renders the next
+canvas up and is centre-cropped.
 
 ## Container
 
