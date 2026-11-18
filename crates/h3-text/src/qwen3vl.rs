@@ -133,18 +133,23 @@ struct TextLayer<B: Backend> {
     down: Linear<B>,
 }
 
-/// bf16 bits from little-endian bytes, in parallel (parallel page faults on
-/// an mmapped checkpoint are parallel reads).
-fn bf16_bits(b: &[u8]) -> Vec<u16> {
-    let mut out = vec![0u16; b.len() / 2];
-    out.par_chunks_mut(1 << 19)
-        .zip(b.par_chunks(1 << 20))
-        .for_each(|(o, c)| {
-            for (x, p) in o.iter_mut().zip(c.chunks_exact(2)) {
-                *x = u16::from_le_bytes([p[0], p[1]]);
-            }
-        });
-    out
+/// Read bf16 tensors' bits straight into one buffer, back to back (a fused
+/// linear's parts), with parallel reads ([`SafetensorsDir::read_into`]).
+/// Little-endian hosts only: the bytes are the `u16`s.
+fn read_bf16(src: &SafetensorsDir, names: &[(String, usize)]) -> Result<Vec<u16>> {
+    let total: usize = names.iter().map(|n| n.1).sum();
+    // A large zeroed allocation is fresh zero pages (calloc), not a memset.
+    let mut out = vec![0u16; total];
+    let mut at = 0;
+    for (name, n) in names {
+        // SAFETY: the u16 slice viewed as its bytes (little-endian, as stored).
+        let bytes = unsafe {
+            std::slice::from_raw_parts_mut(out[at..at + n].as_mut_ptr() as *mut u8, n * 2)
+        };
+        src.read_into(name, bytes)?;
+        at += n;
+    }
+    Ok(out)
 }
 
 /// A plain weight's values as stored: bf16 bits kept, anything else f32.
@@ -174,11 +179,13 @@ fn raw_weight(src: &SafetensorsDir, key: &str, rows: usize, cols: usize) -> Resu
                 "`{name}` is {shape:?}, expected [{rows}, {cols}]"
             )));
         }
-        return Ok(if dt == safetensors::Dtype::BF16 {
-            Raw::Bf16(bf16_bits(data))
-        } else {
-            Raw::F32(bytes_to_f32(dt, data, &name)?)
-        });
+        return Ok(
+            if dt == safetensors::Dtype::BF16 && cfg!(target_endian = "little") {
+                Raw::Bf16(read_bf16(src, &[(name.clone(), rows * cols)])?)
+            } else {
+                Raw::F32(bytes_to_f32(dt, data, &name)?)
+            },
+        );
     }
     if src.contains_raw(&format!("{key}.weight_packed")) {
         return Ok(Raw::F32(nvfp4_of(src, key, rows, cols)?.dequantize()));
@@ -260,6 +267,24 @@ fn host_fused(
     {
         return Ok(HostLinear {
             w: HostWeight::Q8(q),
+            b: None,
+            rows,
+            cols,
+            lora: None,
+        });
+    }
+    let all_bf16 = cfg!(target_endian = "little")
+        && keys.iter().all(|(k, r)| {
+            src.raw(&format!("{k}.weight"))
+                .is_ok_and(|(dt, shape, _)| dt == safetensors::Dtype::BF16 && shape == [*r, cols])
+        });
+    if all_bf16 {
+        let names: Vec<(String, usize)> = keys
+            .iter()
+            .map(|(k, r)| (format!("{k}.weight"), r * cols))
+            .collect();
+        return Ok(HostLinear {
+            w: finish(Raw::Bf16(read_bf16(src, &names)?), rows, cols, w),
             b: None,
             rows,
             cols,
