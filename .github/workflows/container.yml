@@ -72,7 +72,7 @@ jobs:
           for i in $(seq 1 30); do curl -sf http://127.0.0.1:7860/api/info > info.json && break; sleep 1; done
           docker logs svc
           python3 -c 'import json; i = json.load(open("info.json")); assert i["ready"], i; print("service ok:", i["model"])'
-          curl -sf http://127.0.0.1:7860/ | grep -q "H3 Prompt Studio"
+          curl -sf -o page.html http://127.0.0.1:7860/ && grep -q "H3 Prompt Studio" page.html
           docker rm -f svc
 
       - name: Log in to ghcr.io
