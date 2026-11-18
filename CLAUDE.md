@@ -424,6 +424,11 @@ State and invariants only; the reasoning is in `docs/design.md`.
   largest whose output fits 2560×1440; `generate`'s is ×4 up to 480p.
   Checked on the synthetic engine in Chromium (CPU backend); not yet timed
   on a GPU.
+- Site: https://h3-video.gialabs.sh (also https://h3-rs.pages.dev; classic
+  Cloudflare Pages project `h3-rs`, a proxied CNAME in the `gialabs.sh`
+  zone), built by `web/build.py` into `web/site/` and deployed with
+  `scripts/deploy-pages.sh`. The project was created with wrangler's
+  `--force` (classic Pages, not Workers); later deploys need no flag.
 - Diagnostic switches (`H3_PROFILE`, `H3_STALL`, `H3_TRACE`,
   `H3_STREAM_STRESS`, `H3_CUDA_LT_NTH`, …) must leave a clip's bytes alone
   apart from a pinned candidate: the plain-FP8 timing probe (first call per
