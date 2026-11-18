@@ -442,6 +442,15 @@ State and invariants only; the reasoning is in `docs/design.md`.
   mapped port) before pushing. A local `docker build` inside the agent
   sandbox needs its proxy CA in the build stages (a scratch copy of the
   Dockerfile; never commit that).
+  Validated on RunPod (`docs/runs/2026-11-18-runpod-container`, image
+  `sha-3030e53`, public): `serve` on an RTX PRO 6000 pod (ready 255 s
+  after create, a 480p draft through the proxy URL and from the hosted
+  page) and `worker` on a serverless endpoint that got an RTX 4090
+  (`check --backend cuda` 180 / 180, a streamed 480p `generate` uploaded
+  to R2). A pod's start command is the image's CMD (after the `h3`
+  entrypoint). Serverless `BLACKWELL_96` stayed throttled; pools are a
+  comma list tried in order (`BLACKWELL_96,ADA_24`). Cold starts are the
+  volume reads (load ~5 min, prompt ~5 min on serverless).
 - `h3 worker` (`worker.rs`) speaks RunPod's serverless protocol itself
   (runpod-python's `rp_job` / `rp_http` / `rp_ping`: job-take with
   `job_in_progress`, job-done with `isStream=false`, pings with `job_id`,
