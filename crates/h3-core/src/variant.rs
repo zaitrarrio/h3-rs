@@ -324,6 +324,26 @@ impl Variant {
                 reference_regions: false,
             },
             Variant {
+                name: "pika-plug4".into(),
+                repo: "Pika-Labs/Pika-H3-Flex".into(),
+                summary: "Pika H3 Flex with LongLive-Plug's few-step LoRA (the release's transfer): Pika's rank-128 task LoRA plus the plug's, 4 forwards on the plug's fresh-noise linspace(1, 0, 5) shifted 12 / 3, Pika's 480p / 768p buckets; --variant-dir holds Pika's fl2va/ ref2va/ and generator_lora.safetensors".into(),
+                transformer_dir: "transformer".into(),
+                base_repo: BASE.into(),
+                config: H3Config::h3(),
+                sampler: Sampler::Renoise(schedule::PLUG4_KNOTS.to_vec()),
+                shifts: Shifts::H3,
+                vsa: None,
+                adapters: vec![
+                    AdapterSpec { path: "fl2va/adapter.safetensors".into(), alpha: Some(128.0), rank: Some(128), task: Some(Task::Fl2va), strength: 1.0 },
+                    AdapterSpec { path: "ref2va/adapter.safetensors".into(), alpha: Some(128.0), rank: Some(128), task: Some(Task::Ref2va), strength: 1.0 },
+                    AdapterSpec { path: PLUG4_ADAPTER.into(), alpha: Some(128.0), rank: Some(128), task: None, strength: 1.0 },
+                ],
+                tasks: vec![Task::Fl2va, Task::Ref2va],
+                nvfp4: false,
+                pika_buckets: true,
+                reference_regions: false,
+            },
+            Variant {
                 name: "regen-2k".into(),
                 repo: "Efficient-Large-Model/Open-H3-Regenerate-2K".into(),
                 summary: "Open-H3-Regenerate-2K: 768p draft → 2560×1440 through a 3-D latent upscaler, rank-576 LoRA and Sharp curve branches, 3 Euler forwards".into(),
@@ -363,6 +383,7 @@ impl Variant {
             "trim" | "nvfp4" => "fasth3-trim",
             "omni" | "pdd" => "fasth3-omni",
             "pika" | "pika-h3-flex" | "flex" => "pika-flex",
+            "pika-plug" | "pika-4step" | "pika-draft" => "pika-plug4",
             "regen" | "regenerate-2k" | "2k" => "regen-2k",
             o => o,
         };
@@ -514,6 +535,27 @@ mod tests {
         assert_eq!(Variant::by_name("pika").unwrap().forwards(), 6);
         assert_eq!(Variant::by_name("h3").unwrap().forwards(), 49);
         assert_eq!(Variant::by_name("regen").unwrap().forwards(), 3);
+        // The transfer: Pika's task LoRA and the plug's on the same linears,
+        // the plug's four forwards and Pika's buckets.
+        let pp = Variant::by_name("pika-plug").unwrap();
+        assert_eq!((pp.name.as_str(), pp.forwards()), ("pika-plug4", 4));
+        assert_eq!(pp.schedules().unwrap().0.rule, StepRule::Renoise);
+        assert!(pp.pika_buckets);
+        let for_task = |t: Task| {
+            pp.adapters
+                .iter()
+                .filter(|a| a.task.is_none_or(|x| x == t))
+                .map(|a| a.path.as_str())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            for_task(Task::Fl2va),
+            ["fl2va/adapter.safetensors", PLUG4_ADAPTER]
+        );
+        assert_eq!(
+            for_task(Task::Ref2va),
+            ["ref2va/adapter.safetensors", PLUG4_ADAPTER]
+        );
         let plug = Variant::by_name("longlive-plug").unwrap();
         assert_eq!((plug.name.as_str(), plug.forwards()), ("h3-plug4", 4));
         assert_eq!(plug.schedules().unwrap().0.rule, StepRule::Renoise);

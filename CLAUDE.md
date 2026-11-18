@@ -315,7 +315,12 @@ State and invariants only; the reasoning is in `docs/design.md`.
   linspace(1, 0, 5) shifted 12 / 3, no CFG; a variant's missing adapter is
   an error: on the Server Edition with `--weights mxfp8 --decoder-weights
   mxfp8 --pv8` it makes a photographic clip in 34.7 s after load (4 × 7.0 s
-  dense forwards, decode 6.1 s; V2's best 43.3 s), FL2VA 42.3 s. Run with real weights on the
+  dense forwards, decode 6.1 s; V2's best 43.3 s), FL2VA 42.3 s.
+  `pika-plug4` is LongLive-Plug's transfer to Pika Flex: Pika's task LoRA
+  and the plug's stacked as one branch of rank 256 (the checker holds two
+  stacked branches to their merge on the CPU and to the CPU on each
+  backend), the plug's four forwards, Pika's buckets; not yet run on real
+  weights. Run with real weights on the
   600 W Server Edition (`docs/runs/2026-11-08-vast-pro6000-server-variants`):
   base T2VA (49 × 10.7 s), FL2VA (49 × 12.7 s), Ref2VA (49 × 18.3 s: the
   reference image is 7176 Qwen3-VL tokens at the contract's 2048 short
@@ -443,7 +448,8 @@ State and invariants only; the reasoning is in `docs/design.md`.
   with a media field, 64 KiB without, 413 above. `/api/info` has `tasks`
   (what the resident DiT takes: `--task ref2va` loads `transformer_ref` so
   that engine serves Ref2VA only; Pika's per-task adapter pins the start
-  task; a gallery engine has no vision tower, T2VA only; the synthetic
+  task; a gallery engine without `--encoder` has no vision tower, T2VA
+  only, and with one it serves FL2VA / Ref2VA too; the synthetic
   engine all three on the tiny pipeline) and `inputs.max_body_bytes`; a
   job's status has `task` and `ref_count`; the page sends a First / Last
   frame pair when `tasks` lists fl2va. The encoders load only for the

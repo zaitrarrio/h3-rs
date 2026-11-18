@@ -640,7 +640,7 @@ impl ModelArgs {
                     variant.name,
                     spec.path,
                     if spec.path == h3_core::variant::PLUG4_ADAPTER {
-                        " (convert the release's generator_lora.pt with scripts/reference/convert_longlive_plug.py)"
+                        " (convert the release's generator_lora.pt with scripts/reference/convert_longlive_plug.py; for pika-plug4, link it beside Pika's fl2va/ and ref2va/)"
                     } else {
                         ""
                     }
