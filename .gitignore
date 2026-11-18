@@ -2,3 +2,4 @@
 *.y4m
 *.wav
 /web/site
+/.wrangler
