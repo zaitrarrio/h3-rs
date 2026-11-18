@@ -1,0 +1,908 @@
+{
+  "backend": "cuda NVIDIA GeForce RTX 4090 (sm_89)",
+  "cases": [
+    {
+      "name": "linear 1x8x4 None",
+      "ok": true,
+      "rel_err": 0.0016738439444452524
+    },
+    {
+      "name": "linear 37x70x33 GeluTanh",
+      "ok": true,
+      "rel_err": 0.00429927371442318
+    },
+    {
+      "name": "linear int8/70 37x70x33",
+      "ok": true,
+      "rel_err": 0.004712093621492386
+    },
+    {
+      "name": "linear int4/70 37x70x33",
+      "ok": true,
+      "rel_err": 0.003945128992199898
+    },
+    {
+      "name": "linear 130x96x200 GeluErf",
+      "ok": true,
+      "rel_err": 0.0052606104873120785
+    },
+    {
+      "name": "linear int8/96 130x96x200",
+      "ok": true,
+      "rel_err": 0.005050794221460819
+    },
+    {
+      "name": "linear int4/96 130x96x200",
+      "ok": true,
+      "rel_err": 0.005637084133923054
+    },
+    {
+      "name": "linear nvfp4 130x96x200",
+      "ok": true,
+      "rel_err": 0.004010382574051619
+    },
+    {
+      "name": "linear nvfp4 first-high 130x96x200",
+      "ok": true,
+      "rel_err": 0.004010382574051619
+    },
+    {
+      "name": "linear mxfp8 130x96x200 GeluErf",
+      "ok": true,
+      "rel_err": 0.005331844091415405
+    },
+    {
+      "name": "linear mxfp8 no-bias 130x96x200",
+      "ok": true,
+      "rel_err": 0.0034644606057554483
+    },
+    {
+      "name": "linear 65x256x64 Silu",
+      "ok": true,
+      "rel_err": 0.005805270746350288
+    },
+    {
+      "name": "linear int8/128 65x256x64",
+      "ok": true,
+      "rel_err": 0.004813060630112886
+    },
+    {
+      "name": "linear int4/64 65x256x64",
+      "ok": true,
+      "rel_err": 0.006588108837604523
+    },
+    {
+      "name": "linear nvfp4 65x256x64",
+      "ok": true,
+      "rel_err": 0.005257689859718084
+    },
+    {
+      "name": "linear nvfp4 first-high 65x256x64",
+      "ok": true,
+      "rel_err": 0.005257689859718084
+    },
+    {
+      "name": "linear mxfp8 65x256x64 Silu",
+      "ok": true,
+      "rel_err": 0.00509032653644681
+    },
+    {
+      "name": "linear mxfp8 no-bias 65x256x64",
+      "ok": true,
+      "rel_err": 0.003404575167223811
+    },
+    {
+      "name": "linear 300x96x260 None",
+      "ok": true,
+      "rel_err": 0.003639973234385252
+    },
+    {
+      "name": "linear int8/96 300x96x260",
+      "ok": true,
+      "rel_err": 0.003499307669699192
+    },
+    {
+      "name": "linear int4/96 300x96x260",
+      "ok": true,
+      "rel_err": 0.003314228029921651
+    },
+    {
+      "name": "linear nvfp4 300x96x260",
+      "ok": true,
+      "rel_err": 0.0032289698719978333
+    },
+    {
+      "name": "linear nvfp4 first-high 300x96x260",
+      "ok": true,
+      "rel_err": 0.0032289698719978333
+    },
+    {
+      "name": "linear mxfp8 300x96x260 None",
+      "ok": true,
+      "rel_err": 0.002897251397371292
+    },
+    {
+      "name": "linear mxfp8 no-bias 300x96x260",
+      "ok": true,
+      "rel_err": 0.0027550500817596912
+    },
+    {
+      "name": "linear 129x1536x130 None",
+      "ok": true,
+      "rel_err": 0.004812934435904026
+    },
+    {
+      "name": "linear int8/128 129x1536x130",
+      "ok": true,
+      "rel_err": 0.004974266514182091
+    },
+    {
+      "name": "linear int4/64 129x1536x130",
+      "ok": true,
+      "rel_err": 0.005281435325741768
+    },
+    {
+      "name": "linear nvfp4 129x1536x130",
+      "ok": true,
+      "rel_err": 0.0033523631282150745
+    },
+    {
+      "name": "linear nvfp4 first-high 129x1536x130",
+      "ok": true,
+      "rel_err": 0.0033523631282150745
+    },
+    {
+      "name": "linear mxfp8 129x1536x130 None",
+      "ok": true,
+      "rel_err": 0.004265422932803631
+    },
+    {
+      "name": "linear mxfp8 no-bias 129x1536x130",
+      "ok": true,
+      "rel_err": 0.003088452620431781
+    },
+    {
+      "name": "linear 1100x1536x200 GeluTanh",
+      "ok": true,
+      "rel_err": 0.0037294847425073385
+    },
+    {
+      "name": "linear int8/128 1100x1536x200",
+      "ok": true,
+      "rel_err": 0.0034567394759505987
+    },
+    {
+      "name": "linear int4/64 1100x1536x200",
+      "ok": true,
+      "rel_err": 0.0030134604312479496
+    },
+    {
+      "name": "linear nvfp4 1100x1536x200",
+      "ok": true,
+      "rel_err": 0.004355910699814558
+    },
+    {
+      "name": "linear nvfp4 first-high 1100x1536x200",
+      "ok": true,
+      "rel_err": 0.004355910699814558
+    },
+    {
+      "name": "linear mxfp8 1100x1536x200 GeluTanh",
+      "ok": true,
+      "rel_err": 0.0029296388383954763
+    },
+    {
+      "name": "linear mxfp8 no-bias 1100x1536x200",
+      "ok": true,
+      "rel_err": 0.0038203420117497444
+    },
+    {
+      "name": "linear mxfp8 130x64x512 GeluTanh (split-able)",
+      "ok": true,
+      "rel_err": 0.0035868780687451363
+    },
+    {
+      "name": "linear mxfp8 no-bias 130x64x512 (split-able)",
+      "ok": true,
+      "rel_err": 0.004386369604617357
+    },
+    {
+      "name": "linear mxfp8 1024x64x16384 first call (split-decided)",
+      "ok": true,
+      "rel_err": 0.00320294382981956
+    },
+    {
+      "name": "linear mxfp8 1024x64x16384 second call == first",
+      "ok": true,
+      "rel_err": 0.0
+    },
+    {
+      "name": "linear_add 37x24x40",
+      "ok": true,
+      "rel_err": 0.0037451544776558876
+    },
+    {
+      "name": "swiglu 19x48",
+      "ok": true,
+      "rel_err": 0.005028895568102598
+    },
+    {
+      "name": "rms_norm plain",
+      "ok": true,
+      "rel_err": 0.00506543880328536
+    },
+    {
+      "name": "rms_norm mod",
+      "ok": true,
+      "rel_err": 0.003871507477015257
+    },
+    {
+      "name": "residual_rms_norm table-gate",
+      "ok": true,
+      "rel_err": 0.004414829425513744
+    },
+    {
+      "name": "residual_rms_norm vector-gate",
+      "ok": true,
+      "rel_err": 0.0038687896449118853
+    },
+    {
+      "name": "residual_rms_norm plain",
+      "ok": true,
+      "rel_err": 0.0037486767396330833
+    },
+    {
+      "name": "gate_residual table",
+      "ok": true,
+      "rel_err": 0.00425697211176157
+    },
+    {
+      "name": "gate_residual vector",
+      "ok": true,
+      "rel_err": 0.004118140786886215
+    },
+    {
+      "name": "layer_norm",
+      "ok": true,
+      "rel_err": 0.007642013020813465
+    },
+    {
+      "name": "layer_norm no-affine",
+      "ok": true,
+      "rel_err": 0.0041249413043260574
+    },
+    {
+      "name": "head_split norm+rope",
+      "ok": true,
+      "rel_err": 0.004669642075896263
+    },
+    {
+      "name": "head_split no-affine norm full rope",
+      "ok": true,
+      "rel_err": 0.0031987675465643406
+    },
+    {
+      "name": "head_split plain",
+      "ok": true,
+      "rel_err": 0.00228452798910439
+    },
+    {
+      "name": "attention h3 kv3 37x37 d16 causal=false",
+      "ok": true,
+      "rel_err": 0.0043857828713953495
+    },
+    {
+      "name": "attention qk8 h3 kv3 37x37 d16 causal=false",
+      "ok": true,
+      "rel_err": 0.010474099777638912
+    },
+    {
+      "name": "attention qk8+pv8 h3 kv3 37x37 d16 causal=false",
+      "ok": true,
+      "rel_err": 0.002915402175858617
+    },
+    {
+      "name": "attention h4 kv2 70x70 d32 causal=true",
+      "ok": true,
+      "rel_err": 0.002544164890423417
+    },
+    {
+      "name": "attention qk8 h4 kv2 70x70 d32 causal=true",
+      "ok": true,
+      "rel_err": 0.007020184770226479
+    },
+    {
+      "name": "attention qk8+pv8 h4 kv2 70x102 d32 causal=true",
+      "ok": true,
+      "rel_err": 0.0032522401306778193
+    },
+    {
+      "name": "attention h2 kv2 130x65 d64 causal=false",
+      "ok": true,
+      "rel_err": 0.0031024618074297905
+    },
+    {
+      "name": "attention qk8 h2 kv2 130x65 d64 causal=false",
+      "ok": true,
+      "rel_err": 0.009342461824417114
+    },
+    {
+      "name": "attention qk8+pv8 h2 kv2 130x65 d64 causal=false",
+      "ok": true,
+      "rel_err": 0.003202668856829405
+    },
+    {
+      "name": "attention h2 kv1 33x33 d128 causal=true",
+      "ok": true,
+      "rel_err": 0.002673402428627014
+    },
+    {
+      "name": "attention qk8 h2 kv1 33x33 d128 causal=true",
+      "ok": true,
+      "rel_err": 0.007629069034010172
+    },
+    {
+      "name": "attention qk8+pv8 h2 kv1 33x65 d128 causal=true",
+      "ok": true,
+      "rel_err": 0.001843052334152162
+    },
+    {
+      "name": "vsa tile64 d32 gate",
+      "ok": true,
+      "rel_err": 0.004150081891566515
+    },
+    {
+      "name": "vsa tile64 d32 no-gate",
+      "ok": true,
+      "rel_err": 0.003933775704354048
+    },
+    {
+      "name": "vsa tile64 d32 qk8 gate",
+      "ok": true,
+      "rel_err": 0.01709439791738987
+    },
+    {
+      "name": "vsa tile64 d32 qk8 no-gate",
+      "ok": true,
+      "rel_err": 0.01646026037633419
+    },
+    {
+      "name": "vsa tile64 d32 qk8+pv8 gate",
+      "ok": true,
+      "rel_err": 0.002165005775168538
+    },
+    {
+      "name": "vsa tile64 d32 qk8+pv8 no-gate",
+      "ok": true,
+      "rel_err": 0.0031936292070895433
+    },
+    {
+      "name": "vsa tile64 d32 dense-plan gate",
+      "ok": true,
+      "rel_err": 0.004684959538280964
+    },
+    {
+      "name": "vsa tile64 d32 dense-plan no-gate",
+      "ok": true,
+      "rel_err": 0.004751990083605051
+    },
+    {
+      "name": "vsa tile64 d32 dense-plan qk8 gate",
+      "ok": true,
+      "rel_err": 0.010487684980034828
+    },
+    {
+      "name": "vsa tile64 d32 dense-plan qk8+pv8 gate",
+      "ok": true,
+      "rel_err": 0.0021493774838745594
+    },
+    {
+      "name": "vsa tile64 d32 dense-plan qk8+pv8 no-gate",
+      "ok": true,
+      "rel_err": 0.0032651969231665134
+    },
+    {
+      "name": "vsa tile128 d64 gate",
+      "ok": true,
+      "rel_err": 0.005216158926486969
+    },
+    {
+      "name": "vsa tile128 d64 no-gate",
+      "ok": true,
+      "rel_err": 0.0042678555473685265
+    },
+    {
+      "name": "vsa tile128 d64 qk8 gate",
+      "ok": true,
+      "rel_err": 0.004772623535245657
+    },
+    {
+      "name": "vsa tile128 d64 qk8 no-gate",
+      "ok": true,
+      "rel_err": 0.011724039912223816
+    },
+    {
+      "name": "vsa tile128 d64 qk8+pv8 gate",
+      "ok": true,
+      "rel_err": 0.001827707514166832
+    },
+    {
+      "name": "vsa tile128 d64 qk8+pv8 no-gate",
+      "ok": true,
+      "rel_err": 0.0029928165022283792
+    },
+    {
+      "name": "vsa tile128 d64 dense-plan gate",
+      "ok": true,
+      "rel_err": 0.00294989044778049
+    },
+    {
+      "name": "vsa tile128 d64 dense-plan no-gate",
+      "ok": true,
+      "rel_err": 0.0046420590952038765
+    },
+    {
+      "name": "vsa tile128 d64 dense-plan qk8 gate",
+      "ok": true,
+      "rel_err": 0.003970510791987181
+    },
+    {
+      "name": "vsa tile128 d64 dense-plan qk8+pv8 gate",
+      "ok": true,
+      "rel_err": 0.0027335472404956818
+    },
+    {
+      "name": "vsa tile128 d64 dense-plan qk8+pv8 no-gate",
+      "ok": true,
+      "rel_err": 0.003252803348004818
+    },
+    {
+      "name": "vsa tile64 d128 gate",
+      "ok": true,
+      "rel_err": 0.0046634795144200325
+    },
+    {
+      "name": "vsa tile64 d128 no-gate",
+      "ok": true,
+      "rel_err": 0.00589958718046546
+    },
+    {
+      "name": "vsa tile64 d128 qk8 gate",
+      "ok": true,
+      "rel_err": 0.011256036348640919
+    },
+    {
+      "name": "vsa tile64 d128 qk8 no-gate",
+      "ok": true,
+      "rel_err": 0.015273941680788994
+    },
+    {
+      "name": "vsa tile64 d128 qk8+pv8 gate",
+      "ok": true,
+      "rel_err": 0.003485136665403843
+    },
+    {
+      "name": "vsa tile64 d128 qk8+pv8 no-gate",
+      "ok": true,
+      "rel_err": 0.003121462184935808
+    },
+    {
+      "name": "vsa tile64 d128 dense-plan gate",
+      "ok": true,
+      "rel_err": 0.00481929536908865
+    },
+    {
+      "name": "vsa tile64 d128 dense-plan no-gate",
+      "ok": true,
+      "rel_err": 0.004108985885977745
+    },
+    {
+      "name": "vsa tile64 d128 dense-plan qk8 gate",
+      "ok": true,
+      "rel_err": 0.008661679923534393
+    },
+    {
+      "name": "vsa tile64 d128 dense-plan qk8+pv8 gate",
+      "ok": true,
+      "rel_err": 0.003562614321708679
+    },
+    {
+      "name": "vsa tile64 d128 dense-plan qk8+pv8 no-gate",
+      "ok": true,
+      "rel_err": 0.0032986532896757126
+    },
+    {
+      "name": "patchify 1x2x2",
+      "ok": true,
+      "rel_err": 0.002308390336111188
+    },
+    {
+      "name": "patchify 1x1x1",
+      "ok": true,
+      "rel_err": 0.002308390336111188
+    },
+    {
+      "name": "unpatchify",
+      "ok": true,
+      "rel_err": 0.002653604606166482
+    },
+    {
+      "name": "unpatchify 4x16x16",
+      "ok": true,
+      "rel_err": 0.00351123814471066
+    },
+    {
+      "name": "flow euler",
+      "ok": true,
+      "rel_err": 0.00396689074113965
+    },
+    {
+      "name": "flow renoise",
+      "ok": true,
+      "rel_err": 0.004093904513865709
+    },
+    {
+      "name": "flow terminal",
+      "ok": true,
+      "rel_err": 0.003906921949237585
+    },
+    {
+      "name": "axpby",
+      "ok": true,
+      "rel_err": 0.004197301343083382
+    },
+    {
+      "name": "channel_affine",
+      "ok": true,
+      "rel_err": 0.005675945896655321
+    },
+    {
+      "name": "conv2d 2x5+5->7 6x9 up=false k3 ep1",
+      "ok": true,
+      "rel_err": 0.0034550009295344353
+    },
+    {
+      "name": "conv2d 3x6+0->8 5x7 up=true k3 ep0",
+      "ok": true,
+      "rel_err": 0.0042418851517140865
+    },
+    {
+      "name": "conv2d 2x4+0->12 6x6 up=false k1 ep0",
+      "ok": true,
+      "rel_err": 0.004067471716552973
+    },
+    {
+      "name": "conv2d 1x3+0->3 17x33 up=false k3 ep2",
+      "ok": true,
+      "rel_err": 0.002809758996590972
+    },
+    {
+      "name": "conv2d 2x3+0->64 9x13 up=false k3 ep3",
+      "ok": true,
+      "rel_err": 0.003846557345241308
+    },
+    {
+      "name": "conv2d 1x64+0->48 10x12 up=false k3 ep3",
+      "ok": true,
+      "rel_err": 0.0036665319930762053
+    },
+    {
+      "name": "conv3d causal reflect",
+      "ok": true,
+      "rel_err": 0.0037457647267729044
+    },
+    {
+      "name": "conv3d same add",
+      "ok": true,
+      "rel_err": 0.004047823138535023
+    },
+    {
+      "name": "conv3d strided downsampler",
+      "ok": true,
+      "rel_err": 0.0033939192071557045
+    },
+    {
+      "name": "conv3d depthwise temporal",
+      "ok": true,
+      "rel_err": 0.0035816661547869444
+    },
+    {
+      "name": "conv3d 1x1x1",
+      "ok": true,
+      "rel_err": 0.0045404150150716305
+    },
+    {
+      "name": "conv3d causal zero relu",
+      "ok": true,
+      "rel_err": 0.0030397335067391396
+    },
+    {
+      "name": "conv1d dilated",
+      "ok": true,
+      "rel_err": 0.003272048430517316
+    },
+    {
+      "name": "conv1d strided",
+      "ok": true,
+      "rel_err": 0.0029988479800522327
+    },
+    {
+      "name": "conv1d depthwise stride2",
+      "ok": true,
+      "rel_err": 0.003669450059533119
+    },
+    {
+      "name": "conv1d 1x1 add",
+      "ok": true,
+      "rel_err": 0.003861849894747138
+    },
+    {
+      "name": "replicate_pad1d",
+      "ok": true,
+      "rel_err": 0.00248025543987751
+    },
+    {
+      "name": "conv_transpose1d",
+      "ok": true,
+      "rel_err": 0.0028810957446694374
+    },
+    {
+      "name": "conv_transpose1d depthwise",
+      "ok": true,
+      "rel_err": 0.0033208061940968037
+    },
+    {
+      "name": "snake alpha",
+      "ok": true,
+      "rel_err": 0.003509985748678446
+    },
+    {
+      "name": "snake beta",
+      "ok": true,
+      "rel_err": 0.004774856846779585
+    },
+    {
+      "name": "group_norm per-frame silu",
+      "ok": true,
+      "rel_err": 0.0054853553883731365
+    },
+    {
+      "name": "group_norm volume",
+      "ok": true,
+      "rel_err": 0.004578243475407362
+    },
+    {
+      "name": "trilinear up",
+      "ok": true,
+      "rel_err": 0.0032871882431209087
+    },
+    {
+      "name": "trilinear same-t",
+      "ok": true,
+      "rel_err": 0.0032702614553272724
+    },
+    {
+      "name": "pixel_shuffle",
+      "ok": true,
+      "rel_err": 0.0024210826959460974
+    },
+    {
+      "name": "tanh_clamp",
+      "ok": true,
+      "rel_err": 0.0035056734923273325
+    },
+    {
+      "name": "clamp",
+      "ok": true,
+      "rel_err": 0.0019272547215223312
+    },
+    {
+      "name": "dit tiny Dense { qk8: false, pv8: false } native",
+      "ok": true,
+      "rel_err": 0.007152283098548651
+    },
+    {
+      "name": "dit tiny Dense { qk8: false, pv8: false } native streamed",
+      "ok": true,
+      "rel_err": 0.007152283098548651
+    },
+    {
+      "name": "dit tiny Dense { qk8: false, pv8: false } native streamed == resident",
+      "ok": true,
+      "rel_err": 0.0
+    },
+    {
+      "name": "dit tiny Vsa { sparsity: 0.5, tile: 64, ref_sparsity: 0.5, qk8: false, pv8: false } native",
+      "ok": true,
+      "rel_err": 0.006127231288701296
+    },
+    {
+      "name": "dit tiny Vsa { sparsity: 0.5, tile: 64, ref_sparsity: 0.5, qk8: false, pv8: false } native streamed",
+      "ok": true,
+      "rel_err": 0.006127231288701296
+    },
+    {
+      "name": "dit tiny Vsa { sparsity: 0.5, tile: 64, ref_sparsity: 0.5, qk8: false, pv8: false } native streamed == resident",
+      "ok": true,
+      "rel_err": 0.0
+    },
+    {
+      "name": "dit tiny Dense { qk8: false, pv8: false } int8",
+      "ok": true,
+      "rel_err": 0.007134688552469015
+    },
+    {
+      "name": "dit tiny Dense { qk8: false, pv8: false } int8 streamed",
+      "ok": true,
+      "rel_err": 0.007134688552469015
+    },
+    {
+      "name": "dit tiny Dense { qk8: false, pv8: false } int8 streamed == resident",
+      "ok": true,
+      "rel_err": 0.0
+    },
+    {
+      "name": "dit tiny Vsa { sparsity: 0.5, tile: 64, ref_sparsity: 0.5, qk8: false, pv8: false } int8",
+      "ok": true,
+      "rel_err": 0.005952151492238045
+    },
+    {
+      "name": "dit tiny Vsa { sparsity: 0.5, tile: 64, ref_sparsity: 0.5, qk8: false, pv8: false } int8 streamed",
+      "ok": true,
+      "rel_err": 0.005952151492238045
+    },
+    {
+      "name": "dit tiny Vsa { sparsity: 0.5, tile: 64, ref_sparsity: 0.5, qk8: false, pv8: false } int8 streamed == resident",
+      "ok": true,
+      "rel_err": 0.0
+    },
+    {
+      "name": "dit tiny Dense { qk8: false, pv8: false } int4-hqq-g32",
+      "ok": true,
+      "rel_err": 0.007333653047680855
+    },
+    {
+      "name": "dit tiny Dense { qk8: false, pv8: false } int4-hqq-g32 streamed",
+      "ok": true,
+      "rel_err": 0.007333653047680855
+    },
+    {
+      "name": "dit tiny Dense { qk8: false, pv8: false } int4-hqq-g32 streamed == resident",
+      "ok": true,
+      "rel_err": 0.0
+    },
+    {
+      "name": "dit tiny Vsa { sparsity: 0.5, tile: 64, ref_sparsity: 0.5, qk8: false, pv8: false } int4-hqq-g32",
+      "ok": true,
+      "rel_err": 0.005603285972028971
+    },
+    {
+      "name": "dit tiny Vsa { sparsity: 0.5, tile: 64, ref_sparsity: 0.5, qk8: false, pv8: false } int4-hqq-g32 streamed",
+      "ok": true,
+      "rel_err": 0.005603285972028971
+    },
+    {
+      "name": "dit tiny Vsa { sparsity: 0.5, tile: 64, ref_sparsity: 0.5, qk8: false, pv8: false } int4-hqq-g32 streamed == resident",
+      "ok": true,
+      "rel_err": 0.0
+    },
+    {
+      "name": "dit tiny native + LoRA branch",
+      "ok": true,
+      "rel_err": 0.006057457532733679
+    },
+    {
+      "name": "dit tiny native + LoRA branch streamed == resident",
+      "ok": true,
+      "rel_err": 0.0
+    },
+    {
+      "name": "dit tiny mxfp8 + LoRA branch",
+      "ok": true,
+      "rel_err": 0.006057457532733679
+    },
+    {
+      "name": "dit tiny mxfp8 + LoRA branch streamed == resident",
+      "ok": true,
+      "rel_err": 0.0
+    },
+    {
+      "name": "dit tiny LoRA branch == merge (CPU, f32)",
+      "ok": true,
+      "rel_err": 1.7011699071645126e-7
+    },
+    {
+      "name": "dit tiny LoRA changes the forward (CPU)",
+      "ok": true,
+      "rel_err": 0.24646709859371185
+    },
+    {
+      "name": "dit tiny Dense { qk8: true, pv8: false } native",
+      "ok": true,
+      "rel_err": 0.007105333264917135
+    },
+    {
+      "name": "dit tiny Dense { qk8: true, pv8: false } native streamed",
+      "ok": true,
+      "rel_err": 0.007105333264917135
+    },
+    {
+      "name": "dit tiny Dense { qk8: true, pv8: false } native streamed == resident",
+      "ok": true,
+      "rel_err": 0.0
+    },
+    {
+      "name": "dit tiny Dense { qk8: true, pv8: true } native",
+      "ok": true,
+      "rel_err": 0.007244339678436518
+    },
+    {
+      "name": "dit tiny Dense { qk8: true, pv8: true } native streamed",
+      "ok": true,
+      "rel_err": 0.007244339678436518
+    },
+    {
+      "name": "dit tiny Dense { qk8: true, pv8: true } native streamed == resident",
+      "ok": true,
+      "rel_err": 0.0
+    },
+    {
+      "name": "dit tiny Vsa { sparsity: 0.5, tile: 64, ref_sparsity: 0.5, qk8: true, pv8: false } native",
+      "ok": true,
+      "rel_err": 0.007105333264917135
+    },
+    {
+      "name": "dit tiny Vsa { sparsity: 0.5, tile: 64, ref_sparsity: 0.5, qk8: true, pv8: false } native streamed",
+      "ok": true,
+      "rel_err": 0.007105333264917135
+    },
+    {
+      "name": "dit tiny Vsa { sparsity: 0.5, tile: 64, ref_sparsity: 0.5, qk8: true, pv8: false } native streamed == resident",
+      "ok": true,
+      "rel_err": 0.0
+    },
+    {
+      "name": "dit tiny Vsa { sparsity: 0.5, tile: 64, ref_sparsity: 0.5, qk8: true, pv8: true } native",
+      "ok": true,
+      "rel_err": 0.007244339678436518
+    },
+    {
+      "name": "dit tiny Vsa { sparsity: 0.5, tile: 64, ref_sparsity: 0.5, qk8: true, pv8: true } native streamed",
+      "ok": true,
+      "rel_err": 0.007244339678436518
+    },
+    {
+      "name": "dit tiny Vsa { sparsity: 0.5, tile: 64, ref_sparsity: 0.5, qk8: true, pv8: true } native streamed == resident",
+      "ok": true,
+      "rel_err": 0.0
+    },
+    {
+      "name": "video vae tiny encode+decode",
+      "ok": true,
+      "rel_err": 0.008593233302235603
+    },
+    {
+      "name": "audio vae tiny encode+decode",
+      "ok": true,
+      "rel_err": 0.005497361067682505
+    },
+    {
+      "name": "taeh3 tiny",
+      "ok": true,
+      "rel_err": 0.005144583526998758
+    },
+    {
+      "name": "upscaler tiny",
+      "ok": true,
+      "rel_err": 0.009113233536481857
+    },
+    {
+      "name": "esrgan tiny x2 network",
+      "ok": true,
+      "rel_err": 0.00468567805364728
+    }
+  ],
+  "passed": 180,
+  "tolerance": 0.029999999329447746,
+  "total": 180
+}

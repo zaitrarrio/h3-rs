@@ -74,7 +74,7 @@ footer { color: var(--muted); font-size: 0.85rem; }
 huggingface-cli download FastVideo/FastVideo-FastH3-8-Step-V2 --local-dir fasth3-v2
 h3 adaln-tables --variant fasth3-v2 --model-dir h3 --variant-dir fasth3-v2 --out v2-tables.safetensors
 h3 serve --variant fasth3-v2 --model-dir h3 --variant-dir fasth3-v2 --tables v2-tables.safetensors \
-    --weights int4-hqq-g64 --allow-origin <span id="origin">https://h3-rs.pages.dev</span></pre>
+    --weights int4-hqq-g64 --allow-origin <span id="origin">https://h3-video.gialabs.sh</span></pre>
     <p>The engine listens only on 127.0.0.1 and answers this one site. Without <code>--allow-origin</code> it serves the studio itself at <code>http://127.0.0.1:7860/</code>.</p>
   </section>
 

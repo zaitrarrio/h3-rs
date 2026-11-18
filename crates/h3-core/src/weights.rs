@@ -173,6 +173,34 @@ impl SafetensorsDir {
         self.index.contains_key(name)
     }
 
+    /// Copy a tensor's stored bytes into `out` (exactly its length) with
+    /// parallel `pread`s from the file, not through the memory map: one copy
+    /// from the page cache, no page faults, several reads in flight on a
+    /// network or cold disk (what fastvideo-rs's read-ahead pool does).
+    pub fn read_into(&self, name: &str, out: &mut [u8]) -> Result<()> {
+        use rayon::prelude::*;
+        use std::os::unix::fs::FileExt;
+        let i = *self
+            .index
+            .get(name)
+            .ok_or_else(|| Error::Weights(format!("missing tensor `{name}`")))?;
+        let (_, _, data) = self.raw(name)?;
+        if data.len() != out.len() {
+            return Err(Error::Weights(format!(
+                "`{name}` holds {} bytes, the buffer {}",
+                data.len(),
+                out.len()
+            )));
+        }
+        let off = (data.as_ptr() as usize - self.maps[i].as_ptr() as usize) as u64;
+        let file = std::fs::File::open(&self.files[i])?;
+        const CHUNK: usize = 8 << 20;
+        out.par_chunks_mut(CHUNK)
+            .enumerate()
+            .try_for_each(|(k, c)| file.read_exact_at(c, off + (k * CHUNK) as u64))?;
+        Ok(())
+    }
+
     pub fn names(&self) -> impl Iterator<Item = &str> {
         self.index.keys().map(String::as_str)
     }
@@ -296,8 +324,15 @@ impl WeightSource for SafetensorsDir {
             if sshape.len() != 2 || sshape[0] != shape[0] || shape[1] % sshape[1] != 0 {
                 return Err(bad(format!("scale {sshape:?} for codes {shape:?}")));
             }
+            let mut codes = vec![0u8; data.len()];
+            self.read_into(&q8, &mut codes)?;
+            // SAFETY: `u8` and `i8` share size and alignment; the Vec keeps its allocation.
+            let codes: Vec<i8> = unsafe {
+                let mut c = std::mem::ManuallyDrop::new(codes);
+                Vec::from_raw_parts(c.as_mut_ptr() as *mut i8, c.len(), c.capacity())
+            };
             return Ok(Some(Stored::Q8(Q8 {
-                q: data.iter().map(|&b| b as i8).collect(),
+                q: codes,
                 scales,
                 rows: shape[0],
                 cols: shape[1],

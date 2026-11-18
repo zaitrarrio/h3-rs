@@ -208,10 +208,19 @@ runs as an unmerged branch: merged, its delta (2·10⁻⁴ of the weights)
 rounds away in bf16 and MXFP8 and the clips change
 (`docs/runs/2026-11-15-runpod-6000s-longlive-plug`).
 
-The prompt is encoded by
-the native Qwen3-VL port on the chosen backend, streaming its layers from the
-mmapped checkpoint; `h3 encode` stores text-only prompts in a gallery so
-`--embeds` and `serve --gallery` need no text encoder at all.
+The prompt is encoded by the native Qwen3-VL port on the chosen backend.
+`--encoder auto | stream | host | resident` places its 50 language layers:
+read from the checkpoint per prompt, a page-locked RAM copy, or on the
+device. `auto` picks resident when the device's free memory (measured after
+everything else is loaded) holds them plus 16 GB, else host, else stream,
+and stream for one-prompt runs. `--encoder-weights int8` halves them
+(`h3 quantize-encoder` stores a tree that opens in 7 s). `--prompt-cache DIR`
+reuses encoded prompts across runs. `h3 encode` stores prompts in a gallery,
+so `--embeds` and `serve --gallery` work without the encoder; `serve
+--gallery` with `--encoder` serves the gallery first, then the cache, then the
+live encoder. On a Server Edition: bf16 resident 35 s to open and ~0.1 s per
+prompt, int8 resident 7 s / 0.1–0.2 s, bf16 streamed 6.5 s per prompt
+(`docs/runs/2026-11-18-runpod-text-encoder`).
 
 ### Draft tier
 
@@ -226,8 +235,10 @@ h3 regen2k --regen-dir regen --model-dir h3 --draft draft.y4m --prompt "..." \
     --adaln-table adaln_t_table.bin --out final-2k.y4m
 ```
 
-`--tier 272p` (480×272, rendered at 480×288 and centre-cropped), `480p`
-(832×480) or `768p` (1344×768) works for every variant, at any `--aspect`.
+`--tier 288p` (480×288, H3's smallest canvas on its 32-pixel grid), `480p`
+(832×480) or `768p` (1344×768) works for every variant, at any `--aspect`;
+a `--width` / `--height` off the grid (480×272) renders the next canvas up
+and is centre-cropped.
 `--upscale realesr-animevideov3.safetensors` (Real-ESRGAN ×4, fastwan-rs's
 network, `https://weights.fastwan.dev/v1/realesr-animevideov3.safetensors`)
 upscales the finished frames at any size, `--upscale-factor 2 | 3` resampling
@@ -235,9 +246,10 @@ the ×4 output; `h3 regen2k` takes a draft of any aspect (a 9:16 draft becomes
 1440×2560). On a
 600 W RTX PRO 6000 Server Edition a 480p draft takes 8.6 s after load and
 Regen-2K 446 s; the 2K clip keeps the draft's composition
-(`docs/runs/2026-11-17-vast-pro6000-turbo-cfg-draft`). A 272p draft takes
-4.0 s and its ×4 upscale to 1920×1088 1.7 s, but 272p is below H3's
-trained tiers and can ghost; a Ref2VA draft (`--task ref2va --ref
+(`docs/runs/2026-11-17-vast-pro6000-turbo-cfg-draft`). A 480×288 draft takes
+4.0 s and its ×4 upscale 1.7 s (measured as the old 272p tier, the same
+canvas cropped to 480×272), but 288p is below H3's trained tiers and can
+ghost; a Ref2VA draft (`--task ref2va --ref
 image:a.png`, tables from `h3 adaln-tables --task ref2va`) takes 19.4 s of
 denoise at 480p (`docs/runs/2026-11-17-vast-pro6000-ref2va-upscale`).
 
@@ -272,9 +284,32 @@ random model for trying the page without weights. The engine listens on
 `--upscale realesr-animevideov3.safetensors` adds an "Upscale after
 decoding" box: the clip plays at its own size as soon as it decodes, then
 Real-ESRGAN runs on the engine and the page switches to the upscaled frames
-(×4 for 480×272 → 1920×1088, ×3 for 480p → 2496×1440, ×2 above; a button
-flips back to the original size). The size menu also offers 480×272 and
-272×480, rendered at 480×288 / 288×480 and centre-cropped.
+(×4 for 480×288 → 1920×1152, ×3 for 480p → 2496×1440, ×2 above; a button
+flips back to the original size). The size menu also offers 480×288 and
+288×480 (288p); a request off the 32-pixel grid (480×272) renders the next
+canvas up and is centre-cropped.
+
+## Container
+
+`ghcr.io/zaitrarrio/h3-rs` (built by `.github/workflows/container.yml` on
+every push: `sha-<commit>`, the branch name, `latest` on main) holds the
+`h3` binary with the CUDA and CPU backends and the three CUDA libraries it
+loads; the NVIDIA driver comes from the host (R570 or newer).
+
+```bash
+# a service: the demo page and API on port 7860
+docker run --gpus all -p 7860:7860 -v /data/h3:/w ghcr.io/zaitrarrio/h3-rs \
+    serve --addr 0.0.0.0:7860 --variant draft --model-dir /w/h3 --variant-dir /w/plug4 --tables /w/plug4.tables
+# a CLI
+docker run --gpus all -v /data/h3:/w ghcr.io/zaitrarrio/h3-rs check --backend cuda
+# a RunPod serverless worker (jobs: {"input": {"args": [...], "uploads": {"clip.y4m": "<presigned PUT URL>"}}})
+docker run --gpus all ghcr.io/zaitrarrio/h3-rs worker
+```
+
+`--backend cuda` uses the GPU or stops with an error; `--backend auto`
+(the default) takes CUDA when it works and the CPU otherwise.
+`scripts/runpod/container.py` starts the image on a RunPod pod or
+serverless endpoint.
 
 ## Layout
 

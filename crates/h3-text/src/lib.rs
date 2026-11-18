@@ -18,7 +18,7 @@ use present::{Presentation, RefTokens, Tokenizer};
 use std::path::Path;
 use vision::VisionInput;
 
-pub use qwen3vl::Qwen3Vl;
+pub use qwen3vl::{EncoderWeights, Placement, Qwen3Vl, language_bytes, write_int8_tree};
 
 /// A reference as the presentation needs it: pixels already prepared.
 pub enum PresentedRef {
@@ -45,16 +45,24 @@ impl<B: Backend> Conditioner<B> {
         tokenizer: &Path,
         text_encoder: &Path,
         cfg: Qwen3VlConfig,
-        resident: bool,
+        placement: Placement,
+        weights: EncoderWeights,
+        int8_tree: Option<&Path>,
         vision: bool,
     ) -> Result<Self> {
+        let tree = match int8_tree {
+            Some(d) => Some(SafetensorsDir::open(d)?),
+            None => None,
+        };
         Ok(Self {
             tokenizer: Tokenizer::from_file(tokenizer)?,
             model: Qwen3Vl::open(
                 be,
                 cfg,
                 SafetensorsDir::open(text_encoder)?,
-                resident,
+                placement,
+                weights,
+                tree,
                 vision,
             )?,
         })

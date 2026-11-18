@@ -27,10 +27,12 @@ use h3_model::{
 use h3_text::image::Image;
 use std::path::{Path, PathBuf};
 
+mod encoder;
 mod finish;
 mod gallery;
 mod media;
 mod serve;
+mod worker;
 
 #[derive(Parser)]
 #[command(
@@ -164,9 +166,9 @@ struct Shape {
     aspect: String,
     /// Resolution tier when no width/height is given: 768p (default; the
     /// model's 1344×768 at 16:9), 480p (832×480, the draft tier's fast
-    /// setting) or 272p (480×272: rendered at 480×288, the model's 32-pixel
-    /// grid, and centre-cropped). Pika H3 Flex samples its own 480p / 768p
-    /// buckets.
+    /// setting) or 288p (480×288, H3's smallest canvas on its 32-pixel
+    /// grid; below its trained sizes, it can ghost). Pika H3 Flex samples
+    /// its own 480p / 768p buckets.
     #[arg(long)]
     tier: Option<String>,
     /// Frames at 24 fps, aligned up to 17n + 5 (124 = 5.17 s).
@@ -180,8 +182,8 @@ impl Shape {
     }
 
     /// The render canvas (a multiple of 32 on both edges) and the output
-    /// size: equal, unless the request is not on the 32-pixel grid (`--tier
-    /// 272p`, or `--width` / `--height` off the grid), in which case the
+    /// size: equal, unless `--width` / `--height` are off the 32-pixel grid
+    /// (e.g. 480×272), in which case the
     /// canvas rounds each edge up and the decoded frames are centre-cropped.
     fn resolve(&self, v: &Variant) -> Result<(Geometry, (usize, usize))> {
         let (aw, ah) = packing::pika::parse_aspect(&self.aspect)?;
@@ -205,17 +207,10 @@ impl Shape {
                     "480p" | "p480" | "480" => {
                         packing::canvas_size(aw as f64, ah as f64, 480, 832 * 480)?
                     }
-                    "272p" | "p272" | "272" => {
-                        // fastwan-rs's smallest size: 272 on the short edge,
-                        // the long one to the aspect on a 16-pixel grid.
-                        let snap = |v: f64| ((v / 16.0).round() * 16.0).max(16.0) as usize;
-                        if aw >= ah {
-                            (272, snap(272.0 * aw as f64 / ah as f64))
-                        } else {
-                            (snap(272.0 * ah as f64 / aw as f64), 272)
-                        }
+                    "288p" | "p288" | "288" => {
+                        packing::canvas_size(aw as f64, ah as f64, 288, 480 * 288)?
                     }
-                    t => bail!("unknown tier `{t}` (272p | 480p | 768p)"),
+                    t => bail!("unknown tier `{t}` (288p | 480p | 768p)"),
                 },
                 _ => bail!("give --width and --height together, or neither"),
             };
@@ -260,6 +255,9 @@ enum Cmd {
         /// Only the op checks.
         #[arg(long, default_value_t = false)]
         ops_only: bool,
+        /// Also write the results as JSON (backend, tolerance, every case).
+        #[arg(long)]
+        report: Option<PathBuf>,
     },
     /// Time denoising steps with synthetic weights at a real geometry.
     Bench {
@@ -293,9 +291,20 @@ enum Cmd {
         out_dir: PathBuf,
         #[arg(long, value_enum, default_value_t = BackendKind::Auto)]
         backend: BackendKind,
-        /// Keep all 50 language layers on the device (needs ~60 GB; default streams them).
+        /// Same as `--encoder resident`.
         #[arg(long, default_value_t = false)]
         resident: bool,
+        #[command(flatten)]
+        enc: encoder::EncoderArgs,
+    },
+    /// Write the text encoder's language layers as int8 codes (`--encoder-weights
+    /// int8` then reads them instead of quantizing 64 GB of bf16 at every load).
+    QuantizeEncoder {
+        #[arg(long)]
+        model_dir: PathBuf,
+        /// Default `<model-dir>/text_encoder_int8`.
+        #[arg(long)]
+        out: Option<PathBuf>,
     },
     /// Precompute the AdaLN modulation tables for a variant's timestep ladder.
     AdalnTables {
@@ -330,6 +339,8 @@ enum Cmd {
         shape: Shape,
         #[command(flatten)]
         attn: AttnArgs,
+        #[command(flatten)]
+        enc: encoder::EncoderArgs,
         #[arg(long, value_enum, default_value_t = BackendKind::Auto)]
         backend: BackendKind,
         #[arg(long, required_unless_present = "embeds")]
@@ -390,6 +401,8 @@ enum Cmd {
         adaln_table: PathBuf,
         #[command(flatten)]
         attn: AttnArgs,
+        #[command(flatten)]
+        enc: encoder::EncoderArgs,
         #[arg(long, value_enum, default_value_t = BackendKind::Auto)]
         backend: BackendKind,
         #[arg(long, default_value_t = 3)]
@@ -403,6 +416,16 @@ enum Cmd {
         #[arg(long, default_value = "out-2k.y4m")]
         out: PathBuf,
     },
+    /// RunPod serverless worker: take jobs (`{"args": [...], "uploads": {...}}`),
+    /// run `h3 <args>` for each, PUT the named outputs, post the result.
+    Worker {
+        /// Run this one job (a JSON file: the job's input) without RunPod.
+        #[arg(long)]
+        test_input: Option<PathBuf>,
+        /// Where each job gets its own working directory.
+        #[arg(long, default_value = "/tmp/h3-jobs")]
+        work_dir: PathBuf,
+    },
     /// Run the local engine and the prompt-to-clip demo page.
     Serve {
         #[command(flatten)]
@@ -413,7 +436,8 @@ enum Cmd {
         addr: String,
         #[arg(long, value_enum, default_value_t = BackendKind::Auto)]
         backend: BackendKind,
-        /// Run without the text encoder: only these precomputed prompts (`h3 encode`).
+        /// Precomputed prompts (`h3 encode`), used before the text encoder. With no
+        /// `--encoder` given, the engine runs without one: gallery prompts only.
         #[arg(long)]
         gallery: Option<PathBuf>,
         /// Tiny random model: test the engine and page without weights.
@@ -430,6 +454,8 @@ enum Cmd {
         tile: usize,
         #[arg(long, default_value_t = false)]
         preview: bool,
+        #[command(flatten)]
+        enc: encoder::EncoderArgs,
         /// Offer Real-ESRGAN upscaling of finished clips
         /// (`realesr-animevideov3.safetensors`; with `--synthetic`, any value
         /// loads a tiny random ×2 network).
@@ -722,8 +748,17 @@ fn main() -> Result<()> {
             );
             print!("{p}");
         }
-        Cmd::Check { backend, ops_only } => {
-            with_backend!(backend, |be| check(&be, resolve(backend), ops_only)?)
+        Cmd::Check {
+            backend,
+            ops_only,
+            report,
+        } => {
+            with_backend!(backend, |be| check(
+                &be,
+                resolve(backend),
+                ops_only,
+                report.as_deref()
+            )?)
         }
         Cmd::Bench {
             model,
@@ -751,6 +786,7 @@ fn main() -> Result<()> {
             out_dir,
             backend,
             resident,
+            enc,
         } => {
             if let Some(f) = prompt_file {
                 let text =
@@ -767,7 +803,19 @@ fn main() -> Result<()> {
             }
             with_backend!(backend, |be| {
                 let t0 = std::time::Instant::now();
-                let cond = open_conditioner(&be, &model_dir, resident, false)?;
+                let mode = if resident {
+                    encoder::EncoderMode::Resident
+                } else {
+                    enc.encoder.unwrap_or(encoder::EncoderMode::Auto)
+                };
+                let placement = encoder::choose(
+                    &be,
+                    &model_dir,
+                    mode,
+                    enc.encoder_weights,
+                    prompts.len() > 1,
+                )?;
+                let cond = open_conditioner(&be, &model_dir, placement, &enc, false)?;
                 println!(
                     "qwen3-vl opened in {:.1}s on {}",
                     t0.elapsed().as_secs_f64(),
@@ -906,6 +954,7 @@ fn main() -> Result<()> {
             model,
             shape,
             attn,
+            enc,
             backend,
             prompt,
             embeds,
@@ -932,6 +981,7 @@ fn main() -> Result<()> {
                 &r,
                 g,
                 &attn,
+                &enc,
                 prompt,
                 embeds,
                 first_image,
@@ -954,6 +1004,7 @@ fn main() -> Result<()> {
             embeds,
             adaln_table,
             attn,
+            enc,
             backend,
             steps,
             start_sigma,
@@ -970,12 +1021,37 @@ fn main() -> Result<()> {
                 embeds,
                 &adaln_table,
                 &attn,
+                &enc,
                 steps,
                 start_sigma,
                 seed,
                 tile,
                 &out
             )?)
+        }
+        Cmd::Worker {
+            test_input,
+            work_dir,
+        } => worker::run(test_input, work_dir)?,
+        Cmd::QuantizeEncoder { model_dir, out } => {
+            let out = out.unwrap_or_else(|| model_dir.join("text_encoder_int8"));
+            let src = SafetensorsDir::open(&model_dir.join("text_encoder"))?;
+            let t0 = std::time::Instant::now();
+            let mut total = 0usize;
+            h3_text::write_int8_tree(&src, &Qwen3VlConfig::h3(), &out, &mut |l, b| {
+                total += b;
+                eprintln!(
+                    "layer {l}: {:.2} GB ({:.1}s)",
+                    b as f64 / 1e9,
+                    t0.elapsed().as_secs_f64()
+                );
+            })?;
+            println!(
+                "wrote {} ({:.1} GB) in {:.1}s",
+                out.display(),
+                total as f64 / 1e9,
+                t0.elapsed().as_secs_f64()
+            );
         }
         Cmd::Serve {
             model,
@@ -989,6 +1065,7 @@ fn main() -> Result<()> {
             allow_origin,
             tile,
             preview,
+            enc,
             upscale,
         } => {
             let resolved = if synthetic {
@@ -1008,6 +1085,7 @@ fn main() -> Result<()> {
                 tiling: (tile > 0).then_some(Tiling { tile, overlap: 64 }),
                 preview,
                 upscale,
+                encoder: enc,
             };
             serve::serve(settings, move |s, shared, rx| {
                 with_backend!(backend, |be| serve::engine(be, s, shared, rx))
@@ -1017,7 +1095,12 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn check<B: Backend>(be: &B, kind: BackendKind, ops_only: bool) -> Result<()> {
+fn check<B: Backend>(
+    be: &B,
+    kind: BackendKind,
+    ops_only: bool,
+    report: Option<&Path>,
+) -> Result<()> {
     println!("{}", be.name());
     // bf16 activations on CUDA: ~3 significant digits per op; f16 weight
     // storage on WebGPU: ~3 digits in the partial sums.
@@ -1040,6 +1123,18 @@ fn check<B: Backend>(be: &B, kind: BackendKind, ops_only: bool) -> Result<()> {
             if r.ok { "ok" } else { "FAIL" }
         );
         bad += (!r.ok) as usize;
+    }
+    if let Some(p) = report {
+        let cases: Vec<_> = res
+            .iter()
+            .map(|r| serde_json::json!({"name": r.name, "rel_err": r.rel_err, "ok": r.ok}))
+            .collect();
+        let v = serde_json::json!({
+            "backend": be.name(), "tolerance": tol, "passed": res.len() - bad,
+            "total": res.len(), "cases": cases,
+        });
+        std::fs::write(p, serde_json::to_vec_pretty(&v)?)
+            .with_context(|| format!("write {}", p.display()))?;
     }
     if bad > 0 {
         bail!("{bad} of {} checks failed (tolerance {tol:e})", res.len());
@@ -1143,25 +1238,74 @@ fn bench<B: Backend>(
     Ok(())
 }
 
-fn open_conditioner<B: Backend>(
-    be: &B,
-    model_dir: &Path,
-    resident: bool,
-    vision: bool,
-) -> Result<h3_text::Conditioner<B>> {
-    let tok = ["tokenizer/tokenizer.json", "processor/tokenizer.json"]
+fn tokenizer_path(model_dir: &Path) -> Result<PathBuf> {
+    ["tokenizer/tokenizer.json", "processor/tokenizer.json"]
         .iter()
         .map(|p| model_dir.join(p))
         .find(|p| p.is_file())
-        .ok_or_else(|| anyhow!("no tokenizer.json under {}", model_dir.display()))?;
-    Ok(h3_text::Conditioner::open(
+        .ok_or_else(|| anyhow!("no tokenizer.json under {}", model_dir.display()))
+}
+
+fn open_conditioner<B: Backend>(
+    be: &B,
+    model_dir: &Path,
+    placement: h3_text::Placement,
+    enc: &encoder::EncoderArgs,
+    vision: bool,
+) -> Result<h3_text::Conditioner<B>> {
+    let tok = tokenizer_path(model_dir)?;
+    let t0 = std::time::Instant::now();
+    let weights = enc.encoder_weights.weights();
+    let tree = enc.int8_tree(model_dir);
+    let c = h3_text::Conditioner::open(
         be,
         &tok,
         &model_dir.join("text_encoder"),
         Qwen3VlConfig::h3(),
-        resident,
+        placement,
+        weights,
+        tree.as_deref(),
         vision,
-    )?)
+    )?;
+    eprintln!(
+        "text encoder: {placement:?}, {weights:?}{}, opened in {:.1}s",
+        tree.map_or(String::new(), |t| format!(" from {}", t.display())),
+        t0.elapsed().as_secs_f64()
+    );
+    Ok(c)
+}
+
+/// A one-prompt text encode through the prompt cache (when given): a hit
+/// skips the conditioner entirely.
+fn encode_text_cached<B: Backend>(
+    be: &B,
+    model_dir: &Path,
+    enc: &encoder::EncoderArgs,
+    prompt: &str,
+    text_dim: usize,
+) -> Result<Prompt> {
+    let cache = match &enc.prompt_cache {
+        Some(d) => Some(encoder::PromptCache::new(
+            Some(d.clone()),
+            encoder::identity(model_dir, &tokenizer_path(model_dir)?, enc.encoder_weights)?,
+            text_dim,
+        )?),
+        None => None,
+    };
+    if let Some(p) = cache.as_ref().and_then(|c| c.get(prompt)) {
+        eprintln!("prompt: from the cache");
+        return Ok(p);
+    }
+    let mode = enc.encoder.unwrap_or(encoder::EncoderMode::Auto);
+    if mode == encoder::EncoderMode::None {
+        bail!("--encoder none and the prompt is not in the cache");
+    }
+    let placement = encoder::choose(be, model_dir, mode, enc.encoder_weights, false)?;
+    let p = open_conditioner(be, model_dir, placement, enc, false)?.encode_text(be, prompt)?;
+    if let Some(c) = &cache {
+        c.put(prompt, &p)?;
+    }
+    Ok(p)
 }
 
 /// Parse `kind:path[,audio=path]`.
@@ -1194,7 +1338,7 @@ fn transformer_name(p: &Path) -> String {
 
 /// What happens to a clip's decoded frames before they are written: the
 /// centre crop to the requested size (canvases off the 32-pixel grid, e.g.
-/// 480×272) and the optional Real-ESRGAN upscale.
+/// `--width 480 --height 272`) and the optional Real-ESRGAN upscale.
 struct Finish {
     out_size: (usize, usize),
     /// Weights and the requested factor (2 / 3 / 4; `None` picks).
@@ -1241,6 +1385,7 @@ fn generate<B: Backend>(
     r: &Resolved,
     g: Geometry,
     attn: &AttnArgs,
+    enc: &encoder::EncoderArgs,
     prompt: Option<String>,
     embeds: Option<PathBuf>,
     first_image: Option<PathBuf>,
@@ -1453,14 +1598,17 @@ fn generate<B: Backend>(
     let tp = std::time::Instant::now();
     let prompt_rows: Prompt = match (&prompt, &embeds) {
         (_, Some(path)) if !need_encoder => gallery::load_prompt(path, cfg.text_dim)?,
+        (Some(p), _) if presented.is_empty() && kf_images.is_empty() => {
+            encode_text_cached(be, model_dir, enc, p, cfg.text_dim)?
+        }
         (Some(p), _) => {
-            let cond = open_conditioner(be, model_dir, false, need_encoder)?;
+            let mode = enc.encoder.unwrap_or(encoder::EncoderMode::Auto);
+            let placement = encoder::choose(be, model_dir, mode, enc.encoder_weights, false)?;
+            let cond = open_conditioner(be, model_dir, placement, enc, need_encoder)?;
             if !presented.is_empty() {
                 cond.encode_ref2va(be, p, &presented)?
-            } else if !kf_images.is_empty() {
-                cond.encode_fl2va(be, p, &kf_images)?
             } else {
-                cond.encode_text(be, p)?
+                cond.encode_fl2va(be, p, &kf_images)?
             }
         }
         _ => bail!("give --prompt, or --embeds for a text-only clip"),
@@ -1571,6 +1719,7 @@ fn regen2k<B: Backend>(
     embeds: Option<PathBuf>,
     adaln_table: &Path,
     attn: &AttnArgs,
+    enc: &encoder::EncoderArgs,
     steps: usize,
     start_sigma: Option<f64>,
     seed: u64,
@@ -1654,7 +1803,7 @@ fn regen2k<B: Backend>(
         );
     }
     // The draft's own aspect decides both canvases (2560×1440 at 16:9,
-    // 1440×2560 at 9:16, …); a 480p or 480×272 draft is fitted to the 768p one.
+    // 1440×2560 at 9:16, …); a 480p or 288p draft is fitted to the 768p one.
     let (dw, dh) = (frames[0].width, frames[0].height);
     let ((h, w), output) = h3_model::regen::regen_canvases(dw, dh)?;
     println!(
@@ -1673,7 +1822,7 @@ fn regen2k<B: Backend>(
     let draft_vol = Image::frames_to_volume(&fr);
     let prompt_rows = match (&prompt, &embeds) {
         (_, Some(p)) => gallery::load_prompt(p, cfg.text_dim)?,
-        (Some(p), _) => open_conditioner(be, model_dir, false, false)?.encode_text(be, p)?,
+        (Some(p), _) => encode_text_cached(be, model_dir, enc, p, cfg.text_dim)?,
         _ => bail!("give --prompt or --embeds"),
     };
     let req = RegenRequest {
@@ -1709,4 +1858,31 @@ fn regen2k<B: Backend>(
         out.display()
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tier_288p_is_on_the_grid() {
+        let v = Variant::by_name("draft").unwrap();
+        for (aspect, want) in [
+            ("16:9", (480, 288)),
+            ("9:16", (288, 480)),
+            ("1:1", (288, 288)),
+        ] {
+            let cli = Cli::parse_from(["h3", "plan", "--tier", "288p", "--aspect", aspect]);
+            let Cmd::Plan { shape, .. } = cli.cmd else {
+                unreachable!()
+            };
+            let (g, out) = shape.resolve(&v).unwrap();
+            assert_eq!(((g.width, g.height), out), (want, want), "{aspect}");
+        }
+        let cli = Cli::parse_from(["h3", "plan", "--tier", "272p"]);
+        let Cmd::Plan { shape, .. } = cli.cmd else {
+            unreachable!()
+        };
+        assert!(shape.resolve(&v).is_err());
+    }
 }

@@ -1,0 +1,6 @@
+target
+.git
+.wrangler
+docs
+web/site
+**/__pycache__

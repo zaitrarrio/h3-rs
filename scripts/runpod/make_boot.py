@@ -35,7 +35,10 @@ L = ["#!/bin/bash", "set -u", "LOG=/root/boot.log", "exec >>$LOG 2>&1",
      # `set -x`, and an echoed `Authorization: Bearer …` ended up in two committed logs.
      '{ umask 077; printf "Authorization: Bearer %s\\n" "$RUNPOD_API_KEY" > /root/.rp-auth; }',
      'terminate() { [ -n "${OUT_URL:-}" ] && up /root/out.log "$OUT_URL"; up $LOG "$LOGPUT"; '
-     'curl -sS -X DELETE -A h3-rs-pod/1 -H @/root/.rp-auth "https://rest.runpod.io/v1/pods/$RUNPOD_POD_ID"; }',
+     # REST first; GraphQL when it fails (a 2026-11-18 pod could not resolve rest.runpod.io).
+     'curl -sSf -X DELETE -A h3-rs-pod/1 -H @/root/.rp-auth "https://rest.runpod.io/v1/pods/$RUNPOD_POD_ID" || '
+     'curl -sS -X POST -A h3-rs-pod/1 -H @/root/.rp-auth -H "Content-Type: application/json" '
+     '-d "{\\"query\\":\\"mutation { podTerminate(input: {podId: \\\\\\"$RUNPOD_POD_ID\\\\\\"}) }\\"}" https://api.runpod.io/graphql; }',
      # stage TREE [SUB...]: copy /workspace/weights/TREE (or only its SUB directories, the rest
      # symlinked back to the volume) onto the container disk with 8 parallel cp streams, then point
      # /w/TREE at the copy. Idempotent (cp -n). Prints bytes and seconds: the volume's read rate.

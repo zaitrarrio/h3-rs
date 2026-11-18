@@ -1,0 +1,92 @@
+# Build the h3 container (Dockerfile), smoke-test it on the runner (no GPU:
+# CPU op checks, the RunPod worker on a local job, the service on the tiny
+# synthetic model), then push it to ghcr.io/<owner>/<repo>:
+#   sha-<commit>, <branch>, and latest on the default branch, <tag> on v* tags.
+name: container
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  workflow_dispatch:
+
+concurrency:
+  group: container-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      IMAGE: ghcr.io/${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=sha,format=short,prefix=sha-
+            type=ref,event=branch
+            type=ref,event=tag
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: h3:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke test (no GPU)
+        run: |
+          set -euo pipefail
+          docker image ls h3:ci
+          docker run --rm h3:ci --help
+          # every op against the CPU reference; auto moves on to the CPU without a driver
+          docker run --rm h3:ci check --ops-only
+          # an explicit backend never falls back: cuda without a GPU must fail
+          if docker run --rm h3:ci check --backend cuda --ops-only; then echo "--backend cuda ran without a GPU"; exit 1; fi
+          # the RunPod worker on one local job, its report written in the job directory
+          echo '{"input": {"args": ["check", "--backend", "cpu", "--ops-only", "--report", "r.json"]}}' > job.json
+          docker run --rm -v "$PWD/job.json:/job.json:ro" h3:ci worker --test-input /job.json > result.json
+          python3 - <<'PY'
+          import json
+          r = json.load(open("result.json"))
+          assert "error" not in r, r
+          assert r["output"]["exit_code"] == 0 and r["output"]["files"].get("r.json", 0) > 0, r
+          print("worker ok:", r["output"]["files"])
+          PY
+          # the service on the tiny synthetic model, reachable from outside the container
+          docker run -d --name svc -p 7860:7860 h3:ci serve --synthetic --backend cpu --addr 0.0.0.0:7860
+          for i in $(seq 1 30); do curl -sf http://127.0.0.1:7860/api/info > info.json && break; sleep 1; done
+          docker logs svc
+          python3 -c 'import json; i = json.load(open("info.json")); assert i["ready"], i; print("service ok:", i["model"])'
+          curl -sf -o page.html http://127.0.0.1:7860/ && grep -q "H3 Prompt Studio" page.html
+          docker rm -f svc
+
+      - name: Log in to ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha

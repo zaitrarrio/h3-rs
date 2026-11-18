@@ -261,7 +261,8 @@ State and invariants only; the reasoning is in `docs/design.md`.
   the loader measured slower there and is opt-in, `H3_MADVISE=1`).
   Fetches write the volume at ~300 MB/s; clip times are unaffected either
   way. Pods self-terminate through the
-  REST API (the boot's `terminate`, which uploads the running command's
+  REST API, GraphQL when that fails (one pod could not resolve
+  rest.runpod.io) (the boot's `terminate`, which uploads the running command's
   output first; `H3_POD_HOURS` backstop). EU-RO-1 stock is intermittent
   for every card: hunt with a retry loop, never two pods on the volume at
   once.
@@ -359,10 +360,12 @@ State and invariants only; the reasoning is in `docs/design.md`.
   480p draft in 8.6 s after load (TAEH3), 768p 30–35 s, Regen-2K 446 s
   (`docs/runs/2026-11-17-vast-pro6000-turbo-cfg-draft`). Without
   `--tables` every run spends ~46 s on the AdaLN tables.
-- Sizes off the 32-pixel grid (`--tier 272p` = 480×272 at 16:9, 272×480
-  at 9:16, or any `--width` / `--height`): the canvas rounds each edge up
-  to 32 (480×288) and `generate` centre-crops the decoded frames
-  (`Finish`). `--upscale realesr-animevideov3.safetensors` runs Real-ESRGAN
+- `--tier 288p` is H3's 480×288 (288×480 at 9:16, 288×288 at 1:1:
+  `canvas_size` with short edge 288 and a 480×288 budget), on the 32-pixel
+  grid like every tier; it replaced a 272p tier (480×272 cropped from
+  480×288) on 2026-11-18. A `--width` / `--height` off the grid still
+  renders the canvas rounded up to 32 and `generate` / `serve` centre-crop
+  the decoded frames (`finish.rs`). `--upscale realesr-animevideov3.safetensors` runs Real-ESRGAN
   ×4 (`esrgan.rs`, fastwan-rs's network: convs with
   `ConvEpilogue::Prelu` on all three backends, `pixel_shuffle`, the 8-bit
   residual on the host; byte-identical to fastwan-rs's on the real
@@ -374,14 +377,16 @@ State and invariants only; the reasoning is in `docs/design.md`.
   `transformer_ref` has its own modulation, and a table from the other DiT
   is refused. Server Edition, fast recipe, `--tables`
   (`docs/runs/2026-11-17-vast-pro6000-ref2va-upscale`, 180 / 180 checks):
-  a 272p draft 4.0 s + ×4 upscale to 1920×1088 1.7 s (TAEH3: 2.8 s), 480p
+  a 480×288 draft 4.0 s (measured as 272p, the same canvas cropped) + ×4
+  upscale 1.7 s (TAEH3: 2.8 s), 480p
   10.6 + 4.4 s to 3328×1920, 768p 34.7 + 18.5 s to 2688×1536 (×2: the
-  host Lanczos of the ×4 frames is most of it). 272p is below H3's
-  trained tiers: the landscape fox ghosted, the portrait did not; 480p is
-  the smallest reliably clean tier. Ref2VA: draft 480p 19.4 s denoise
+  host Lanczos of the ×4 frames is most of it). 288p is below H3's
+  trained tiers: the landscape fox ghosted at that canvas (twice, also
+  through `serve` on RunPod), the portrait did not; 480p is the smallest
+  reliably clean tier. Ref2VA: draft 480p 19.4 s denoise
   (4.8 s per forward, 2.5× T2VA's), `h3-turbo4-ref` 46.4 s, `-turbo8-ref`
   92.7 s at 768p, all keeping the reference's subject.
-  Regen-2K from 272p drafts: 9:16 → 1440×2560 in 446.5 s, 16:9 →
+  Regen-2K from 272p (480×288-canvas) drafts: 9:16 → 1440×2560 in 446.5 s, 16:9 →
   2560×1440 in 450.1 s (the 2K canvas sets the cost, whatever the draft).
 - AdaLN: the 13 B modulation weights are never resident. Tables are computed
   per generation by streaming each block's weight through the backend once,
@@ -424,6 +429,70 @@ State and invariants only; the reasoning is in `docs/design.md`.
   largest whose output fits 2560×1440; `generate`'s is ×4 up to 480p.
   Checked on the synthetic engine in Chromium (CPU backend); not yet timed
   on a GPU.
+- Backends: `--backend cuda | wgpu | cpu` never falls back (the chosen
+  one works or the run stops with its error); `--backend auto` (the
+  default) takes the first that works of CUDA (if built in), WebGPU (if
+  built in), the CPU. `Cuda::new` returns an error when libcuda is missing
+  (cudarc itself panics), which is what lets `auto` move on in a container
+  started without the NVIDIA runtime.
+- Container (`Dockerfile`, `.github/workflows/container.yml` →
+  `ghcr.io/zaitrarrio/h3-rs:{sha-…,branch,latest}`): `h3` built with
+  `--no-default-features --features cuda` on debian:bookworm-slim plus only
+  libcublas / libcublasLt / libnvrtc 12.8 (675 MB compressed, cuBLASLt is
+  most of it); the driver comes from the host (R570+ for CUDA 12.8).
+  Entrypoint `h3`: `serve --addr 0.0.0.0:7860 …` as a service, any
+  subcommand as a CLI, `worker` on RunPod serverless. CI smoke-tests it on
+  the GPU-less runner (CPU op checks, `auto` on a host with no
+  driver, a worker job, the synthetic service over a
+  mapped port) before pushing. A local `docker build` inside the agent
+  sandbox needs its proxy CA in the build stages (a scratch copy of the
+  Dockerfile; never commit that).
+  Validated on RunPod (`docs/runs/2026-11-18-runpod-container`, image
+  `sha-3030e53`, public): `serve` on an RTX PRO 6000 pod (ready 255 s
+  after create, a 480p draft through the proxy URL and from the hosted
+  page) and `worker` on a serverless endpoint that got an RTX 4090
+  (`check --backend cuda` 180 / 180, a streamed 480p `generate` uploaded
+  to R2). A pod's start command is the image's CMD (after the `h3`
+  entrypoint). Serverless `BLACKWELL_96` stayed throttled; pools are a
+  comma list tried in order (`BLACKWELL_96,ADA_24`). Cold starts are the
+  volume reads (load ~5 min, prompt ~5 min on serverless).
+- Text encoder (`h3_text::Placement`, `crates/h3-cli/src/encoder.rs`):
+  `--encoder auto | stream | host | resident | none` × `--encoder-weights
+  bf16 | int8` (Q8 weight-only on the 50 language layers, 45.4 → 23.4 GB;
+  `h3 quantize-encoder` writes `text_encoder_int8/`, picked up by default).
+  Non-resident layers are read on a thread one layer ahead and uploaded on the
+  side queue (`prefetch_*`). Reads go through `SafetensorsDir::read_into`
+  (parallel `pread` into the final buffer), never the mmap: page faults made
+  bf16 streaming 37 s per prompt against 6.5 s. Every placement gives the
+  same bits per format; int8 against bf16 is ≤ 8e-3 relative, clips within the
+  first-call cuBLASLt rounding band (14 dB). `auto` = resident if device free
+  ≥ need + `H3_ENCODER_RESERVE_GB` (16), else host if `MemAvailable` ≥ need +
+  16 GB, else stream; stream for one-prompt runs; `serve` opens the encoder
+  last so free memory is real. `--prompt-cache` keys on prompt + tokenizer +
+  encoder file headers + output layer + format (f32 rows, 32 in memory).
+  `serve`: gallery, then cache, then encoder (`prompt_source` per job); a
+  gallery without an encoder is gallery-only. Server Edition: bf16 resident
+  opens in 35 s, ~0.1 s per prompt; int8 tree resident 7 s / 0.1–0.2 s
+  (`docs/runs/2026-11-18-runpod-text-encoder`).
+- `h3 worker` (`worker.rs`) speaks RunPod's serverless protocol itself
+  (runpod-python's `rp_job` / `rp_http` / `rp_ping`: job-take with
+  `job_in_progress`, job-done with `isStream=false`, pings with `job_id`,
+  `Authorization: $RUNPOD_AI_API_KEY`), so the image has no Python. A job
+  is `{"args": [...], "uploads": {"name": "PUT URL"}, "timeout_s"}`: `h3
+  <args>` runs in a fresh per-job directory, uploads only name files inside
+  it (no absolute paths or `..`), and the output carries the exit code,
+  time, stdout / stderr tails and the files left. `serve` / `worker` are
+  refused as jobs. `--test-input job.json` runs one job locally.
+  `scripts/runpod/container.py` starts the image on a pod (service) or a
+  serverless endpoint (CLI) through RunPod's GraphQL API (rest.runpod.io
+  is unreachable from the agent sandbox). RunPod resource tags are
+  dashboard-only and for organization accounts; the scripts name every
+  resource `h3-rs-…` instead.
+- Site: https://h3-video.gialabs.sh (also https://h3-rs.pages.dev; classic
+  Cloudflare Pages project `h3-rs`, a proxied CNAME in the `gialabs.sh`
+  zone), built by `web/build.py` into `web/site/` and deployed with
+  `scripts/deploy-pages.sh`. The project was created with wrangler's
+  `--force` (classic Pages, not Workers); later deploys need no flag.
 - Diagnostic switches (`H3_PROFILE`, `H3_STALL`, `H3_TRACE`,
   `H3_STREAM_STRESS`, `H3_CUDA_LT_NTH`, …) must leave a clip's bytes alone
   apart from a pinned candidate: the plain-FP8 timing probe (first call per

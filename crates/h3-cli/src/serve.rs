@@ -71,6 +71,8 @@ pub struct Settings {
     pub preview: bool,
     /// Real-ESRGAN weights (any value with `synthetic`: a tiny random net).
     pub upscale: Option<PathBuf>,
+    /// Text encoder placement and the prompt cache.
+    pub encoder: crate::encoder::EncoderArgs,
 }
 
 /// What a job asked of the upscaler.
@@ -148,6 +150,8 @@ struct Job {
     hd: Vec<Vec<u8>>,
     up_s: f64,
     up_error: Option<String>,
+    /// Where the prompt's rows came from: gallery, cache, encoder, synthetic.
+    prompt_source: &'static str,
 }
 
 impl Job {
@@ -178,6 +182,7 @@ impl Job {
             hd: Vec::new(),
             up_s: 0.0,
             up_error: None,
+            prompt_source: "",
         }
     }
 
@@ -186,7 +191,7 @@ impl Job {
             "id": self.id, "prompt": self.prompt, "stage": self.stage.name(), "seed": self.seed,
             "width": self.out.0, "height": self.out.1, "total_frames": self.geometry.frames,
             "canvas_width": self.geometry.width, "canvas_height": self.geometry.height,
-            "tokens": self.tokens, "encode_s": self.encode_s, "prepare_s": self.prepare_s,
+            "tokens": self.tokens, "prompt_source": self.prompt_source, "encode_s": self.encode_s, "prepare_s": self.prepare_s,
             "steps": self.steps, "total_steps": self.total_steps, "decode_s": self.decode_s,
             "elapsed_s": self.started.map(|t| t.elapsed().as_secs_f64()).unwrap_or(0.0),
             "total_s": self.total_s, "frames": self.frames, "audio": self.audio.is_some(), "error": self.error,
@@ -218,12 +223,18 @@ enum Text<B: Backend> {
         dim: usize,
         only: Option<crate::gallery::Gallery>,
     },
-    Qwen(Box<h3_text::Conditioner<B>>),
-    Gallery(crate::gallery::Gallery, usize),
+    /// Gallery prompts first, then the prompt cache, then the live encoder.
+    Real {
+        dim: usize,
+        gallery: Option<crate::gallery::Gallery>,
+        cache: Option<crate::encoder::PromptCache>,
+        encoder: Option<Box<h3_text::Conditioner<B>>>,
+    },
 }
 
 impl<B: Backend> Text<B> {
-    fn encode(&self, be: &B, prompt: &str) -> Result<(Prompt, usize)> {
+    /// The prompt's rows, its token count, and where it came from.
+    fn encode(&self, be: &B, prompt: &str) -> Result<(Prompt, usize, &'static str)> {
         match self {
             Text::Synthetic { dim, only } => {
                 if let Some(g) = only {
@@ -238,21 +249,40 @@ impl<B: Backend> Text<B> {
                     (h ^ b as u64).wrapping_mul(0x100_0000_01b3)
                 });
                 let n = prompt.split_whitespace().count().max(1);
-                Ok((Prompt::text_only(Rng::new(seed).normal(n * dim), *dim), n))
+                Ok((
+                    Prompt::text_only(Rng::new(seed).normal(n * dim), *dim),
+                    n,
+                    "synthetic",
+                ))
             }
-            Text::Qwen(c) => {
-                let p = c.encode_text(be, prompt)?;
-                let n = p.rows(c.model.cfg.hidden);
-                Ok((p, n))
-            }
-            Text::Gallery(g, dim) => {
-                let e = g.find(prompt).ok_or_else(|| {
-                    anyhow!(
+            Text::Real {
+                dim,
+                gallery,
+                cache,
+                encoder,
+            } => {
+                if let Some(e) = gallery.as_ref().and_then(|g| g.find(prompt)) {
+                    let g = gallery.as_ref().unwrap();
+                    return Ok((g.prompt(e, *dim)?, e.tokens, "gallery"));
+                }
+                if let Some(p) = cache.as_ref().and_then(|c| c.get(prompt)) {
+                    let n = p.rows(*dim);
+                    return Ok((p, n, "cache"));
+                }
+                let Some(c) = encoder else {
+                    return Err(anyhow!(
                         "This engine has no text encoder: pick one of its {} gallery prompts.",
-                        g.entries.len()
-                    )
-                })?;
-                Ok((g.prompt(e, *dim)?, e.tokens))
+                        gallery.as_ref().map_or(0, |g| g.entries.len())
+                    ));
+                };
+                let p = c.encode_text(be, prompt)?;
+                if let Some(cache) = cache
+                    && let Err(e) = cache.put(prompt, &p)
+                {
+                    eprintln!("prompt cache: {e:#}");
+                }
+                let n = p.rows(*dim);
+                Ok((p, n, "encoder"))
             }
         }
     }
@@ -290,7 +320,11 @@ pub fn engine<B: Backend>(
         let only = match &s.gallery {
             Some(dir) => {
                 let g = crate::gallery::Gallery::open(dir)?;
-                shared.info.lock().unwrap()["gallery"] = gallery_list(&g);
+                {
+                    let mut info = shared.info.lock().unwrap();
+                    info["gallery"] = gallery_list(&g);
+                    info["gallery_only"] = json!(true);
+                }
                 Some(g)
             }
             None => None,
@@ -349,17 +383,14 @@ pub fn engine<B: Backend>(
             .ok_or_else(|| anyhow!("--model-dir is needed"))?;
         stage("checking the checkpoint");
         let (src, _) = open_transformer(r)?;
-        let text = match &s.gallery {
+        let gallery = match &s.gallery {
             Some(dir) => {
                 stage("reading the prompt gallery");
                 let g = crate::gallery::Gallery::open(dir)?;
                 shared.info.lock().unwrap()["gallery"] = gallery_list(&g);
-                Text::Gallery(g, cfg.text_dim)
+                Some(g)
             }
-            None => {
-                stage("opening the conditioner");
-                Text::Qwen(Box::new(open_conditioner(&be, model_dir, false, false)?))
-            }
+            None => None,
         };
         let tables = match &r.tables {
             Some(p) => Some(AdalnTables::load(p, &cfg)?),
@@ -411,6 +442,50 @@ pub fn engine<B: Backend>(
             audio_vae: Some(audio_vae),
             tae,
         };
+        // The conditioner last, so `--encoder auto` sees what the rest left free.
+        let enc = &s.encoder;
+        let mode = enc.encoder.unwrap_or(if gallery.is_some() {
+            crate::encoder::EncoderMode::None
+        } else {
+            crate::encoder::EncoderMode::Auto
+        });
+        let (encoder, placement) = if mode == crate::encoder::EncoderMode::None {
+            (None, None)
+        } else {
+            let placement =
+                crate::encoder::choose(&be, model_dir, mode, enc.encoder_weights, true)?;
+            stage(&format!(
+                "opening the text encoder ({placement:?}, {:?})",
+                enc.encoder_weights
+            ));
+            let c = open_conditioner(&be, model_dir, placement, enc, false)?;
+            (Some(Box::new(c)), Some(placement))
+        };
+        let cache = if encoder.is_some() || enc.prompt_cache.is_some() {
+            Some(crate::encoder::PromptCache::new(
+                enc.prompt_cache.clone(),
+                crate::encoder::identity(
+                    model_dir,
+                    &crate::tokenizer_path(model_dir)?,
+                    enc.encoder_weights,
+                )?,
+                cfg.text_dim,
+            )?)
+        } else {
+            None
+        };
+        {
+            let mut info = shared.info.lock().unwrap();
+            info["gallery_only"] = json!(encoder.is_none() && cache.is_none());
+            info["encoder"] = json!(placement.map(|p| format!("{p:?}").to_lowercase()));
+        }
+        let has_gallery = gallery.is_some();
+        let text = Text::Real {
+            dim: cfg.text_dim,
+            gallery,
+            cache,
+            encoder,
+        };
         let model = format!(
             "{} · {} forwards · {}{}{}",
             r.variant
@@ -424,10 +499,11 @@ pub fn engine<B: Backend>(
             } else {
                 "VAE decoder"
             },
-            if matches!(text, Text::Gallery(..)) {
-                " · prompt gallery"
-            } else {
-                ""
+            match (has_gallery, placement) {
+                (true, None) => " · prompt gallery".to_string(),
+                (true, Some(p)) => format!(" · gallery + {p:?} text encoder").to_lowercase(),
+                (false, Some(p)) => format!(" · {p:?} text encoder").to_lowercase(),
+                (false, None) => " · prompt cache".to_string(),
             },
             if s.attn.weights != h3_core::quant::WeightQuant::Native {
                 format!(" · {}", s.attn.weights)
@@ -493,10 +569,11 @@ pub fn engine<B: Backend>(
         };
         let t = Instant::now();
         let run = || -> Result<()> {
-            let (p, tokens) = text.encode(&be, &prompt)?;
+            let (p, tokens, source) = text.encode(&be, &prompt)?;
             shared.with(id, |j| {
                 j.encode_s = t.elapsed().as_secs_f64();
                 j.tokens = tokens;
+                j.prompt_source = source;
                 j.stage = Stage::Preparing;
             });
             let req = Request {
@@ -911,7 +988,7 @@ pub fn serve(
                 }
                 let parsed = parse_request(&body, &s, pika).and_then(|r| {
                     let info = shared.info.lock().unwrap();
-                    match info["gallery"].as_array() {
+                    match info["gallery"].as_array().filter(|_| info["gallery_only"].as_bool().unwrap_or(false)) {
                         Some(g) if !g.iter().any(|p| p.as_str().is_some_and(|p| p.split_whitespace().eq(r.prompt.split_whitespace()))) => {
                             Err(format!("This engine has no text encoder: pick one of its {} gallery prompts.", g.len()))
                         }
@@ -1073,6 +1150,12 @@ mod tests {
             tiling: None,
             preview: false,
             upscale: upscale.then(|| PathBuf::from("x")),
+            encoder: crate::encoder::EncoderArgs {
+                encoder: None,
+                encoder_weights: Default::default(),
+                prompt_cache: None,
+                encoder_int8: None,
+            },
         }
     }
 

@@ -666,6 +666,15 @@ fn env1(name: &str) -> bool {
 
 impl Cuda {
     pub fn new(ordinal: usize) -> Result<Self, CudaError> {
+        // cudarc panics on the first driver call when libcuda is missing (a
+        // container started without the NVIDIA runtime): an error instead,
+        // so `--backend auto` falls back.
+        // SAFETY: only probes whether the driver library loads.
+        if !unsafe { cudarc::driver::sys::is_culib_present() } {
+            return Err(CudaError(
+                "no CUDA driver (libcuda.so.1 not found): no NVIDIA GPU, or the container was started without the NVIDIA runtime".into(),
+            ));
+        }
         let ctx = CudaContext::new(ordinal).map_err(err)?;
         let (maj, min) = ctx.compute_capability().map_err(err)?;
         let arch: &'static str = Box::leak(format!("compute_{maj}{min}").into_boxed_str());
@@ -1782,6 +1791,10 @@ impl Backend for Cuda {
             + w.quant
                 .as_ref()
                 .map_or(0, |(_, s, _)| s.len * if s.f32 { 4 } else { 2 })
+    }
+
+    fn memory_free(&self) -> Option<usize> {
+        self.ctx.mem_get_info().ok().map(|(free, _)| free)
     }
 
     fn sync(&self) {
