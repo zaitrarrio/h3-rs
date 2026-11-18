@@ -208,10 +208,19 @@ runs as an unmerged branch: merged, its delta (2·10⁻⁴ of the weights)
 rounds away in bf16 and MXFP8 and the clips change
 (`docs/runs/2026-11-15-runpod-6000s-longlive-plug`).
 
-The prompt is encoded by
-the native Qwen3-VL port on the chosen backend, streaming its layers from the
-mmapped checkpoint; `h3 encode` stores text-only prompts in a gallery so
-`--embeds` and `serve --gallery` need no text encoder at all.
+The prompt is encoded by the native Qwen3-VL port on the chosen backend.
+`--encoder auto | stream | host | resident` places its 50 language layers:
+read from the checkpoint per prompt, a page-locked RAM copy, or on the
+device. `auto` picks resident when the device's free memory (measured after
+everything else is loaded) holds them plus 16 GB, else host, else stream,
+and stream for one-prompt runs. `--encoder-weights int8` halves them
+(`h3 quantize-encoder` stores a tree that opens in 7 s). `--prompt-cache DIR`
+reuses encoded prompts across runs. `h3 encode` stores prompts in a gallery,
+so `--embeds` and `serve --gallery` work without the encoder; `serve
+--gallery` with `--encoder` serves the gallery first, then the cache, then the
+live encoder. On a Server Edition: bf16 resident 35 s to open and ~0.1 s per
+prompt, int8 resident 7 s / 0.1–0.2 s, bf16 streamed 6.5 s per prompt
+(`docs/runs/2026-11-18-runpod-text-encoder`).
 
 ### Draft tier
 

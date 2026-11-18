@@ -261,7 +261,8 @@ State and invariants only; the reasoning is in `docs/design.md`.
   the loader measured slower there and is opt-in, `H3_MADVISE=1`).
   Fetches write the volume at ~300 MB/s; clip times are unaffected either
   way. Pods self-terminate through the
-  REST API (the boot's `terminate`, which uploads the running command's
+  REST API, GraphQL when that fails (one pod could not resolve
+  rest.runpod.io) (the boot's `terminate`, which uploads the running command's
   output first; `H3_POD_HOURS` backstop). EU-RO-1 stock is intermittent
   for every card: hunt with a retry loop, never two pods on the volume at
   once.
@@ -455,6 +456,24 @@ State and invariants only; the reasoning is in `docs/design.md`.
   entrypoint). Serverless `BLACKWELL_96` stayed throttled; pools are a
   comma list tried in order (`BLACKWELL_96,ADA_24`). Cold starts are the
   volume reads (load ~5 min, prompt ~5 min on serverless).
+- Text encoder (`h3_text::Placement`, `crates/h3-cli/src/encoder.rs`):
+  `--encoder auto | stream | host | resident | none` × `--encoder-weights
+  bf16 | int8` (Q8 weight-only on the 50 language layers, 45.4 → 23.4 GB;
+  `h3 quantize-encoder` writes `text_encoder_int8/`, picked up by default).
+  Non-resident layers are read on a thread one layer ahead and uploaded on the
+  side queue (`prefetch_*`). Reads go through `SafetensorsDir::read_into`
+  (parallel `pread` into the final buffer), never the mmap: page faults made
+  bf16 streaming 37 s per prompt against 6.5 s. Every placement gives the
+  same bits per format; int8 against bf16 is ≤ 8e-3 relative, clips within the
+  first-call cuBLASLt rounding band (14 dB). `auto` = resident if device free
+  ≥ need + `H3_ENCODER_RESERVE_GB` (16), else host if `MemAvailable` ≥ need +
+  16 GB, else stream; stream for one-prompt runs; `serve` opens the encoder
+  last so free memory is real. `--prompt-cache` keys on prompt + tokenizer +
+  encoder file headers + output layer + format (f32 rows, 32 in memory).
+  `serve`: gallery, then cache, then encoder (`prompt_source` per job); a
+  gallery without an encoder is gallery-only. Server Edition: bf16 resident
+  opens in 35 s, ~0.1 s per prompt; int8 tree resident 7 s / 0.1–0.2 s
+  (`docs/runs/2026-11-18-runpod-text-encoder`).
 - `h3 worker` (`worker.rs`) speaks RunPod's serverless protocol itself
   (runpod-python's `rp_job` / `rp_http` / `rp_ping`: job-take with
   `job_in_progress`, job-done with `isStream=false`, pings with `job_id`,
