@@ -424,13 +424,12 @@ State and invariants only; the reasoning is in `docs/design.md`.
   largest whose output fits 2560×1440; `generate`'s is ×4 up to 480p.
   Checked on the synthetic engine in Chromium (CPU backend); not yet timed
   on a GPU.
-- Backend choice: `--backend auto` (the default) takes this build's
-  preferred backend (CUDA if built in, else WebGPU) and fails with its
-  error when it is unusable; only `--allow-fallback` (global flag, or
-  `H3_ALLOW_FALLBACK=1`) lets it fall back to WebGPU, then the CPU, with a
-  note on stderr. Never fall back silently: a GPU run on the CPU is ~100×
-  slower. `Cuda::new` returns an error when libcuda is missing (cudarc
-  itself panics), `Cuda::available` probes without compiling kernels.
+- Backends: `--backend cuda | wgpu | cpu` never falls back (the chosen
+  one works or the run stops with its error); `--backend auto` (the
+  default) takes the first that works of CUDA (if built in), WebGPU (if
+  built in), the CPU. `Cuda::new` returns an error when libcuda is missing
+  (cudarc itself panics), which is what lets `auto` move on in a container
+  started without the NVIDIA runtime.
 - Container (`Dockerfile`, `.github/workflows/container.yml` →
   `ghcr.io/zaitrarrio/h3-rs:{sha-…,branch,latest}`): `h3` built with
   `--no-default-features --features cuda` on debian:bookworm-slim plus only
@@ -438,8 +437,8 @@ State and invariants only; the reasoning is in `docs/design.md`.
   most of it); the driver comes from the host (R570+ for CUDA 12.8).
   Entrypoint `h3`: `serve --addr 0.0.0.0:7860 …` as a service, any
   subcommand as a CLI, `worker` on RunPod serverless. CI smoke-tests it on
-  the GPU-less runner (CPU op checks, strict `auto` failing and
-  `--allow-fallback` passing, a worker job, the synthetic service over a
+  the GPU-less runner (CPU op checks, `auto` on a host with no
+  driver, a worker job, the synthetic service over a
   mapped port) before pushing. A local `docker build` inside the agent
   sandbox needs its proxy CA in the build stages (a scratch copy of the
   Dockerfile; never commit that).

@@ -293,9 +293,9 @@ docker run --gpus all -v /data/h3:/w ghcr.io/zaitrarrio/h3-rs check --backend cu
 docker run --gpus all ghcr.io/zaitrarrio/h3-rs worker
 ```
 
-`--backend auto` uses CUDA here and stops with an error when there is no
-GPU; `--allow-fallback` (or `H3_ALLOW_FALLBACK=1`) lets it run on the CPU
-instead. `scripts/runpod/container.py` starts the image on a RunPod pod or
+`--backend cuda` uses the GPU or stops with an error; `--backend auto`
+(the default) takes CUDA when it works and the CPU otherwise.
+`scripts/runpod/container.py` starts the image on a RunPod pod or
 serverless endpoint.
 
 ## Layout
