@@ -49,6 +49,7 @@ pub struct Continuation {
 
 /// What the text side produced: the conditioner's `[rows, text_dim]` hidden
 /// states and each row's tag (1 text, 0 vision placeholder).
+#[derive(Clone)]
 pub struct Prompt {
     pub embeds: Vec<f32>,
     pub tags: Vec<u8>,

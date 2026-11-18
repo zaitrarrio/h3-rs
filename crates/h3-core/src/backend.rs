@@ -430,6 +430,11 @@ pub trait Backend {
     fn pin_host(&self, _bytes: &[u8]) -> Option<Box<dyn std::any::Any + Send>> {
         None
     }
+    /// Free device memory in bytes, where the backend can tell (CUDA); used
+    /// to decide what stays resident. `None` by default.
+    fn memory_free(&self) -> Option<usize> {
+        None
+    }
     /// Wait for queued work (timing only; downloads synchronise themselves).
     fn sync(&self);
     /// Per-kernel device time since the last [`Backend::profile_reset`], when

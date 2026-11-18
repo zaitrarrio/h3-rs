@@ -62,7 +62,16 @@ fn hf_parity_qwen3vl() {
             output_layer: layer,
             ..cfg.clone()
         };
-        let m = Qwen3Vl::open(&be, c, SafetensorsDir::open(&p).unwrap(), true, true).unwrap();
+        let m = Qwen3Vl::open(
+            &be,
+            c,
+            SafetensorsDir::open(&p).unwrap(),
+            h3_text::Placement::Resident,
+            h3_text::EncoderWeights::Bf16,
+            None,
+            true,
+        )
+        .unwrap();
         let enc = m.encode(&be, &pres, &[&vi]).unwrap();
         let mut want = src
             .get(&format!("expected.hidden{layer}"), &[11, cfg.hidden])

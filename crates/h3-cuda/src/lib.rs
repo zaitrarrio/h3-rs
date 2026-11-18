@@ -1793,6 +1793,10 @@ impl Backend for Cuda {
                 .map_or(0, |(_, s, _)| s.len * if s.f32 { 4 } else { 2 })
     }
 
+    fn memory_free(&self) -> Option<usize> {
+        self.ctx.mem_get_info().ok().map(|(free, _)| free)
+    }
+
     fn sync(&self) {
         self.stream.synchronize().expect("sync");
     }

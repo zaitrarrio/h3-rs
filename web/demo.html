@@ -208,7 +208,7 @@ async function refreshInfo() {
   $("synthetic").hidden = !info.synthetic;
   $("up-row").hidden = !info.upscale;
   if (info.upscale && store("h3.upscale") != null) $("up").checked = store("h3.upscale") === "1";
-  applyGallery(info.gallery);
+  applyGallery(info.gallery, info.gallery_only !== false);
   fillOptions();
   $("go").disabled = !!job;
 }
@@ -228,15 +228,20 @@ function markChip() {
   const cur = norm($("prompt").value);
   document.querySelectorAll("#examples .chip").forEach((b) => b.setAttribute("aria-pressed", String(norm(gallery[b.dataset.i]) === cur)));
 }
-function applyGallery(list) {
+// With a gallery and no text encoder (`gallery_only`) the prompt must be a
+// gallery one; with an encoder as well, the gallery is just a set of chips
+// that skip the encoder.
+let galleryOnly = false;
+function applyGallery(list, only) {
   const next = Array.isArray(list) && list.length ? list : null;
-  if (JSON.stringify(next) === JSON.stringify(gallery)) return;
-  gallery = next;
-  $("prompt").readOnly = !!gallery;
-  $("prompt-label").textContent = gallery ? "Prompt (from the engine's gallery)" : "Describe the clip";
+  const lock = !!next && only;
+  if (JSON.stringify(next) === JSON.stringify(gallery) && lock === galleryOnly) return;
+  gallery = next; galleryOnly = lock;
+  $("prompt").readOnly = lock;
+  $("prompt-label").textContent = lock ? "Prompt (from the engine's gallery)" : "Describe the clip";
   $("examples").setAttribute("aria-label", gallery ? "Gallery prompts" : "Example prompts");
-  $("gallery-note").hidden = !gallery;
-  if (gallery && !gallery.some((p) => norm(p) === norm($("prompt").value))) $("prompt").value = gallery[0];
+  $("gallery-note").hidden = !lock;
+  if (lock && !gallery.some((p) => norm(p) === norm($("prompt").value))) $("prompt").value = gallery[0];
   renderChips();
 }
 function setEngine(kind, text) { $("eng-dot").className = "dot " + kind; $("eng-text").textContent = text; }
