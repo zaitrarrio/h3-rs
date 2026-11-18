@@ -88,7 +88,10 @@ impl std::fmt::Debug for Inputs {
             )
             .field(
                 "continuation",
-                &self.continuation.as_ref().map(|(fr, a)| (fr.len(), a.is_some())),
+                &self
+                    .continuation
+                    .as_ref()
+                    .map(|(fr, a)| (fr.len(), a.is_some())),
             )
             .finish()
     }
@@ -291,15 +294,7 @@ mod tests {
             refs: vec![RefInput::Image(im(30, 20))],
             ..Default::default()
         };
-        let p = prepare(
-            inputs,
-            g,
-            false,
-            Sizing::Release {
-                ref_short_edge: 64,
-            },
-        )
-        .unwrap();
+        let p = prepare(inputs, g, false, Sizing::Release { ref_short_edge: 64 }).unwrap();
         match &p.references[0] {
             Reference::Image(v) => assert_eq!((v.h, v.w), (64, 96)),
             _ => panic!("image"),

@@ -146,9 +146,7 @@ impl Settings {
                 Task::Regen2k => false,
                 Task::Ref2va => r.task == Task::Ref2va && !no_encoder,
                 Task::Fl2va => {
-                    r.task != Task::Ref2va
-                        && !no_encoder
-                        && !(per_task_adapters && r.task != t)
+                    r.task != Task::Ref2va && !no_encoder && !(per_task_adapters && r.task != t)
                 }
                 Task::T2va => r.task != Task::Ref2va && !(per_task_adapters && r.task != t),
             })
@@ -173,9 +171,7 @@ impl Settings {
         if served.contains(&Task::T2va) {
             Task::T2va
         } else {
-            self.model
-                .as_ref()
-                .map_or(Task::T2va, |r| r.task)
+            self.model.as_ref().map_or(Task::T2va, |r| r.task)
         }
     }
 }
@@ -998,7 +994,9 @@ fn base64_decode(s: &str) -> Result<Vec<u8>, String> {
 /// The JSON fields `.b64` (required) and `.mime` of a media object.
 fn media_object(v: &Value, what: &str) -> Result<(Vec<u8>, Option<String>), String> {
     if !v.is_object() {
-        return Err(format!("`{what}` must be an object {{\"b64\": …, \"mime\": …}}."));
+        return Err(format!(
+            "`{what}` must be an object {{\"b64\": …, \"mime\": …}}."
+        ));
     }
     let b64 = v["b64"]
         .as_str()
@@ -1188,7 +1186,9 @@ fn parse_inputs(v: &Value, s: &Settings) -> Result<(Task, Inputs), String> {
     }
     match task {
         Task::T2va if !inputs.is_empty() => {
-            return Err("task t2va takes no images, references or continuation: set `task`.".into());
+            return Err(
+                "task t2va takes no images, references or continuation: set `task`.".into(),
+            );
         }
         Task::Fl2va if inputs.keyframes.is_empty() => {
             return Err("task fl2va needs `first_image` and / or `last_image`.".into());
@@ -1806,8 +1806,16 @@ mod tests {
                 | c.get(2).copied().unwrap_or(0) as u32;
             out.push(A[(n >> 18) as usize & 63] as char);
             out.push(A[(n >> 12) as usize & 63] as char);
-            out.push(if c.len() > 1 { A[(n >> 6) as usize & 63] as char } else { '=' });
-            out.push(if c.len() > 2 { A[n as usize & 63] as char } else { '=' });
+            out.push(if c.len() > 1 {
+                A[(n >> 6) as usize & 63] as char
+            } else {
+                '='
+            });
+            out.push(if c.len() > 2 {
+                A[n as usize & 63] as char
+            } else {
+                '='
+            });
         }
         out
     }
@@ -1823,7 +1831,9 @@ mod tests {
     }
 
     fn y4m(frames: usize, w: usize, h: usize) -> Vec<u8> {
-        let rgb: Vec<u8> = (0..frames * w * h * 3).map(|i| (i * 7 % 256) as u8).collect();
+        let rgb: Vec<u8> = (0..frames * w * h * 3)
+            .map(|i| (i * 7 % 256) as u8)
+            .collect();
         let mut out = Vec::new();
         media::write_y4m_to(&mut out, frames, w, h, &rgb, 24).unwrap();
         out
@@ -1847,7 +1857,10 @@ mod tests {
             let data: Vec<u8> = (0..n).map(|i| (i * 37 + 11) as u8).collect();
             assert_eq!(base64_decode(&b64(&data)).unwrap(), data);
             // Unpadded and URL-safe alphabets decode too.
-            let s = b64(&data).replace('=', "").replace('+', "-").replace('/', "_");
+            let s = b64(&data)
+                .replace('=', "")
+                .replace('+', "-")
+                .replace('/', "_");
             assert_eq!(base64_decode(&s).unwrap(), data);
         }
         assert_eq!(
@@ -1960,7 +1973,9 @@ mod tests {
         .unwrap();
         assert_eq!(p.task, Task::Ref2va);
         assert_eq!(p.inputs.refs.len(), 3);
-        assert!(matches!(&p.inputs.refs[1], RefInput::Video { frames, audio: Some(_), .. } if frames.len() == 22));
+        assert!(
+            matches!(&p.inputs.refs[1], RefInput::Video { frames, audio: Some(_), .. } if frames.len() == 22)
+        );
         assert_eq!(p.inputs.continuation.as_ref().unwrap().0.len(), 22);
         // The explicit task must match the media.
         let err = |extra: Value| parse_request(&base(extra), &s, false).unwrap_err();
@@ -1980,7 +1995,10 @@ mod tests {
             "refs": [{"kind": "image", "b64": b64(&png(8, 8, 2)), "mime": "image/png"}],
         }));
         let e = parse_request(&body, &plug, false).unwrap_err();
-        assert!(e.contains("task ref2va not supported by this engine"), "{e}");
+        assert!(
+            e.contains("task ref2va not supported by this engine"),
+            "{e}"
+        );
         assert!(e.contains("--task ref2va"), "{e}");
         let p = parse_request(
             &base(json!({"last_image": image_json(&png(8, 8, 1), "image/jpeg")})),
@@ -1994,11 +2012,18 @@ mod tests {
             false,
         )
         .unwrap();
-        assert_eq!((p.task, p.inputs.keyframes[0].0), (Task::Fl2va, Anchor::Last));
+        assert_eq!(
+            (p.task, p.inputs.keyframes[0].0),
+            (Task::Fl2va, Anchor::Last)
+        );
         // A Ref2VA engine serves Ref2VA alone; with no media the default is
         // its start task, whose check then names what it needs.
         let r2v = model_settings("h3", Task::Ref2va, false);
-        assert!(parse_request(&base(json!({})), &r2v, false).unwrap_err().contains("refs"));
+        assert!(
+            parse_request(&base(json!({})), &r2v, false)
+                .unwrap_err()
+                .contains("refs")
+        );
         assert!(
             parse_request(
                 &base(json!({"first_image": image_json(&png(8, 8, 1), "image/png")})),
@@ -2033,21 +2058,37 @@ mod tests {
         };
         let err = |extra: Value| parse_request(&body(extra), &s, false).unwrap_err();
         let im = png(8, 8, 1);
-        assert!(err(json!({"first_image": image_json(&im, "image/gif")})).contains("image/png or image/jpeg"));
+        assert!(
+            err(json!({"first_image": image_json(&im, "image/gif")}))
+                .contains("image/png or image/jpeg")
+        );
         assert!(err(json!({"first_image": {"b64": b64(&im)}})).contains("needs `mime`"));
-        assert!(err(json!({"first_image": {"b64": "@@@", "mime": "image/png"}})).contains("base64"));
+        assert!(
+            err(json!({"first_image": {"b64": "@@@", "mime": "image/png"}})).contains("base64")
+        );
         assert!(err(json!({"first_image": {"b64": "", "mime": "image/png"}})).contains("empty"));
         assert!(err(json!({"first_image": "abc"})).contains("must be an object"));
-        assert!(err(json!({"first_image": {"b64": b64(b"not a png"), "mime": "image/png"}})).contains("first_image"));
+        assert!(
+            err(json!({"first_image": {"b64": b64(b"not a png"), "mime": "image/png"}}))
+                .contains("first_image")
+        );
         assert!(err(json!({"refs": "x"})).contains("array"));
-        assert!(err(json!({"refs": [{"kind": "gif", "b64": b64(&im), "mime": "image/png"}]})).contains("image, video or audio"));
+        assert!(
+            err(json!({"refs": [{"kind": "gif", "b64": b64(&im), "mime": "image/png"}]}))
+                .contains("image, video or audio")
+        );
         assert!(err(json!({"refs": [{"kind": "video", "b64": b64(&im)}]})).contains("YUV4MPEG2"));
         assert!(err(json!({"refs": [{"kind": "video", "b64": b64(&y4m(22, 8, 8)), "mime": "video/mp4"}]})).contains("Y4M"));
-        assert!(err(json!({"refs": [{"kind": "video", "b64": b64(&y4m(5, 8, 8))}]})).contains("at least 22"));
+        assert!(
+            err(json!({"refs": [{"kind": "video", "b64": b64(&y4m(5, 8, 8))}]}))
+                .contains("at least 22")
+        );
         assert!(err(json!({"refs": [{"kind": "audio", "b64": b64(&im)}]})).contains("WAV"));
         assert!(err(json!({"refs": [{"kind": "video", "b64": b64(&y4m(22, 8, 8)), "audio_b64": b64(&im)}]})).contains("audio_b64"));
         assert!(err(json!({"continue": {"b64": b64(&y4m(6, 8, 8))}})).contains("5, 22 or 39"));
-        let many: Vec<Value> = (0..10).map(|_| json!({"kind": "image", "b64": b64(&im), "mime": "image/png"})).collect();
+        let many: Vec<Value> = (0..10)
+            .map(|_| json!({"kind": "image", "b64": b64(&im), "mime": "image/png"}))
+            .collect();
         assert!(err(json!({"refs": many})).contains("At most"));
 
         // An image over the pixel limit is refused from its header alone: a
@@ -2079,7 +2120,11 @@ mod tests {
         for &b in data {
             c ^= b as u32;
             for _ in 0..8 {
-                c = if c & 1 != 0 { 0xedb8_8320 ^ (c >> 1) } else { c >> 1 };
+                c = if c & 1 != 0 {
+                    0xedb8_8320 ^ (c >> 1)
+                } else {
+                    c >> 1
+                };
             }
         }
         !c
@@ -2102,7 +2147,10 @@ mod tests {
         st.write_all(body.as_bytes()).unwrap();
         let mut raw = Vec::new();
         st.read_to_end(&mut raw).unwrap();
-        let sep = raw.windows(4).position(|w| w == b"\r\n\r\n").expect("headers");
+        let sep = raw
+            .windows(4)
+            .position(|w| w == b"\r\n\r\n")
+            .expect("headers");
         let head = std::str::from_utf8(&raw[..sep]).unwrap();
         let status: u16 = head.split_whitespace().nth(1).unwrap().parse().unwrap();
         (status, raw[sep + 4..].to_vec())
@@ -2169,9 +2217,15 @@ mod tests {
         assert_eq!(v["task"], json!("fl2va"));
         let st = wait_job(&addr, v["id"].as_u64().unwrap());
         assert_eq!(st["stage"], json!("done"), "{st}");
-        assert_eq!((st["task"].as_str(), st["ref_count"].as_u64()), (Some("fl2va"), Some(0)));
+        assert_eq!(
+            (st["task"].as_str(), st["ref_count"].as_u64()),
+            (Some("fl2va"), Some(0))
+        );
         assert!(st["frames"].as_u64().unwrap() > 0);
-        assert_eq!((st["width"].as_u64(), st["height"].as_u64()), (Some(32), Some(32)));
+        assert_eq!(
+            (st["width"].as_u64(), st["height"].as_u64()),
+            (Some(32), Some(32))
+        );
 
         // Ref2VA: an image, a video with its soundtrack, an audio clip and a
         // continuation.
@@ -2190,7 +2244,10 @@ mod tests {
         assert_eq!(code, 200, "{v}");
         let st = wait_job(&addr, v["id"].as_u64().unwrap());
         assert_eq!(st["stage"], json!("done"), "{st}");
-        assert_eq!((st["task"].as_str(), st["ref_count"].as_u64()), (Some("ref2va"), Some(3)));
+        assert_eq!(
+            (st["task"].as_str(), st["ref_count"].as_u64()),
+            (Some("ref2va"), Some(3))
+        );
         assert!(st["frames"].as_u64().unwrap() > 0);
         let f = |k: &str| st[k].as_f64().unwrap_or(0.0);
         eprintln!(
@@ -2223,6 +2280,12 @@ mod tests {
         assert_eq!(code, 200, "{v}");
         assert_eq!(v["task"], json!("fl2va"));
         let (_, st) = http_json(&addr, "GET", &format!("/api/jobs/{}", v["id"]), None);
-        assert!(matches!(st["stage"].as_str(), Some("queued" | "encoding" | "preparing" | "denoising" | "decoding" | "done")), "{st}");
+        assert!(
+            matches!(
+                st["stage"].as_str(),
+                Some("queued" | "encoding" | "preparing" | "denoising" | "decoding" | "done")
+            ),
+            "{st}"
+        );
     }
 }
