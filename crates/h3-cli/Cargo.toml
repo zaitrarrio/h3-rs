@@ -23,7 +23,11 @@ ureq = "2"
 [features]
 default = ["wgpu"]
 wgpu = ["dep:h3-wgpu"]
-cuda = ["dep:h3-cuda"]
+# `cuda` binds cudarc to CUDA 12.8 (the nvidia/cuda:12.8 runtime images),
+# `cuda-13` to CUDA 13 (fastvideo-rs's serve image, fastvideo-studio); the
+# libraries are loaded at run time either way.
+cuda = ["dep:h3-cuda", "h3-cuda/cuda-12"]
+cuda-13 = ["dep:h3-cuda", "h3-cuda/cuda-13"]
 
 [[bin]]
 name = "h3"
