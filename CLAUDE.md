@@ -449,6 +449,13 @@ State and invariants only; the reasoning is in `docs/design.md`.
   frame pair when `tasks` lists fl2va. The encoders load only for the
   served tasks. `cargo test -p h3-cli` runs an FL2VA and a Ref2VA job
   through the synthetic CPU engine over HTTP.
+- CUDA kernels load as SASS: NVRTC compiles `kernels.cu` for the device's
+  own SM (`sass_arch`, `compile_cubin`, `nvrtcGetCUBIN`) and PTX for
+  `compute_XY` only when NVRTC has no real target or the cubin failed,
+  fastvideo-rs's `nvrtc_sass` rule: a cubin needs no PTX JIT, and NVRTC 13.4
+  against driver R595 rejected PTX with CUDA_ERROR_UNSUPPORTED_PTX_VERSION
+  (fastvideo-studio's first CUDA 13 image). `cargo test -p h3-cuda` compiles
+  cubins for sm_89 / sm_120 with libnvrtc alone.
 - Backends: `--backend cuda | wgpu | cpu` never falls back (the chosen
   one works or the run stops with its error); `--backend auto` (the
   default) takes the first that works of CUDA (if built in), WebGPU (if

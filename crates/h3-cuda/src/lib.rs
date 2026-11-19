@@ -353,6 +353,67 @@ pub fn compile_kernels(arch: &'static str) -> Result<cudarc::nvrtc::Ptx, CudaErr
     .map_err(err)
 }
 
+/// The real SM target (`sm_XY`) NVRTC can emit SASS for, or `None` for an SM
+/// it cannot target directly (then the `compute_XY` PTX path is used).
+pub fn sass_arch(maj: i32, min: i32) -> Option<&'static str> {
+    Some(match (maj, min) {
+        (7, 5) => "sm_75",
+        (8, 0) => "sm_80",
+        (8, 6) => "sm_86",
+        (8, 7) => "sm_87",
+        (8, 9) => "sm_89",
+        (9, 0) => "sm_90",
+        (10, 0) => "sm_100",
+        (10, 3) => "sm_103",
+        (11, 0) => "sm_110",
+        (12, 0) => "sm_120",
+        (12, 1) => "sm_121",
+        _ => return None,
+    })
+}
+
+/// Compile the kernels to SASS (a cubin) for a real target (`sm_120`), the
+/// way fastvideo-rs's `nvrtc_sass` does: a cubin needs no PTX JIT, so an
+/// NVRTC newer than the driver (13.4 against R595 rejected the PTX with
+/// CUDA_ERROR_UNSUPPORTED_PTX_VERSION) still loads. Needs only libnvrtc.
+pub fn compile_cubin(arch: &str) -> Result<Vec<u8>, CudaError> {
+    use cudarc::nvrtc::{result, sys};
+    use std::ffi::{CStr, CString};
+    let src = CString::new(KERNELS).map_err(|e| CudaError(format!("nvrtc source: {e}")))?;
+    let prog = result::create_program(&src, None).map_err(|e| CudaError(format!("nvrtc create: {e:?}")))?;
+    let options = vec!["--std=c++17".to_string(), format!("--gpu-architecture={arch}")];
+    // SAFETY: `prog` comes from `create_program`, `src` outlives it, and it is
+    // destroyed exactly once below whatever happens in between.
+    let out = unsafe {
+        match result::compile_program(prog, &options) {
+            Err(e) => {
+                let log = result::get_program_log(prog)
+                    .ok()
+                    .map(|l| CStr::from_ptr(l.as_ptr()).to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                Err(CudaError(format!("nvrtc {arch}: {e:?}\n{log}")))
+            }
+            Ok(()) => {
+                let mut size = 0usize;
+                match sys::nvrtcGetCUBINSize(prog, &mut size).result() {
+                    Err(e) => Err(CudaError(format!("nvrtcGetCUBINSize {arch}: {e:?}"))),
+                    Ok(()) if size == 0 => Err(CudaError(format!("nvrtc {arch}: empty cubin"))),
+                    Ok(()) => {
+                        let mut buf = vec![0u8; size];
+                        sys::nvrtcGetCUBIN(prog, buf.as_mut_ptr().cast())
+                            .result()
+                            .map(|()| buf)
+                            .map_err(|e| CudaError(format!("nvrtcGetCUBIN {arch}: {e:?}")))
+                    }
+                }
+            }
+        }
+    };
+    // SAFETY: created above, not destroyed yet.
+    let _ = unsafe { result::destroy_program(prog) };
+    out
+}
+
 /// One cached cuBLASLt plan per (n, k, rows, epilogue).
 struct LtPlan {
     desc: lt_sys::cublasLtMatmulDesc_t,
@@ -677,9 +738,19 @@ impl Cuda {
         }
         let ctx = CudaContext::new(ordinal).map_err(err)?;
         let (maj, min) = ctx.compute_capability().map_err(err)?;
-        let arch: &'static str = Box::leak(format!("compute_{maj}{min}").into_boxed_str());
-        let ptx = compile_kernels(arch)?;
-        let module = ctx.load_module(ptx).map_err(err)?;
+        // SASS for the device's own SM first (no PTX JIT: an NVRTC newer than
+        // the driver still loads); PTX for `compute_XY` when NVRTC has no
+        // real target for it or the cubin failed.
+        let module = match sass_arch(maj, min).map(compile_cubin) {
+            Some(Ok(cubin)) => ctx.load_module(cudarc::nvrtc::Ptx::from_binary(cubin)).map_err(err)?,
+            other => {
+                if let Some(Err(e)) = other {
+                    eprintln!("cuda: SASS compile failed ({}); falling back to PTX", e.0);
+                }
+                let arch: &'static str = Box::leak(format!("compute_{maj}{min}").into_boxed_str());
+                ctx.load_module(compile_kernels(arch)?).map_err(err)?
+            }
+        };
         let get = |n: &str| module.load_function(n).map_err(err);
         let f = Kernels {
             bias_act: get("fw_bias_act")?,
@@ -3945,6 +4016,20 @@ mod tests {
             Ok(Ok(ptx)) => std::fs::write(&path, ptx.to_src()).unwrap(),
             Ok(Err(e)) => panic!("{e}"),
             Err(_) => eprintln!("skipping: libnvrtc not loadable"),
+        }
+    }
+
+    #[test]
+    fn kernels_compile_to_sass_for_ada_and_blackwell() {
+        for arch in ["sm_89", "sm_120"] {
+            match std::panic::catch_unwind(|| super::compile_cubin(arch)) {
+                Ok(Ok(cubin)) => assert!(cubin.len() > 1024, "{arch}: cubin too small"),
+                Ok(Err(e)) => panic!("{arch}: {}", e.0),
+                Err(_) => {
+                    eprintln!("skipping: libnvrtc not loadable");
+                    return;
+                }
+            }
         }
     }
 
