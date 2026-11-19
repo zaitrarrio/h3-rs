@@ -8,7 +8,7 @@ anyhow = "1.0.104"
 clap = { version = "4.6.7", features = ["derive"] }
 h3-core = { version = "0.1.0", path = "../h3-core" }
 h3-cpu = { version = "0.1.0", path = "../h3-cpu" }
-h3-cuda = { version = "0.1.0", path = "../h3-cuda", optional = true }
+h3-cuda = { version = "0.1.0", path = "../h3-cuda", optional = true, default-features = false }
 h3-model = { version = "0.1.0", path = "../h3-model" }
 h3-text = { version = "0.1.0", path = "../h3-text" }
 h3-wgpu = { version = "0.1.0", path = "../h3-wgpu", optional = true }
