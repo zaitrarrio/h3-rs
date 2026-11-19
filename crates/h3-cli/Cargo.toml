@@ -8,7 +8,7 @@ anyhow = "1.0.104"
 clap = { version = "4.6.7", features = ["derive"] }
 h3-core = { version = "0.1.0", path = "../h3-core" }
 h3-cpu = { version = "0.1.0", path = "../h3-cpu" }
-h3-cuda = { version = "0.1.0", path = "../h3-cuda", optional = true }
+h3-cuda = { version = "0.1.0", path = "../h3-cuda", optional = true, default-features = false }
 h3-model = { version = "0.1.0", path = "../h3-model" }
 h3-text = { version = "0.1.0", path = "../h3-text" }
 h3-wgpu = { version = "0.1.0", path = "../h3-wgpu", optional = true }
@@ -23,7 +23,11 @@ ureq = "2"
 [features]
 default = ["wgpu"]
 wgpu = ["dep:h3-wgpu"]
-cuda = ["dep:h3-cuda"]
+# `cuda` binds cudarc to CUDA 12.8 (the nvidia/cuda:12.8 runtime images),
+# `cuda-13` to CUDA 13 (fastvideo-rs's serve image, fastvideo-studio); the
+# libraries are loaded at run time either way.
+cuda = ["dep:h3-cuda", "h3-cuda/cuda-12"]
+cuda-13 = ["dep:h3-cuda", "h3-cuda/cuda-13"]
 
 [[bin]]
 name = "h3"
