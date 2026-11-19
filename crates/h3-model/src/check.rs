@@ -1859,16 +1859,24 @@ fn dit_forward<B: Backend>(
 /// A rank-3 LoRA (alpha 6: scale 2) on every attention and FF linear of the
 /// tiny DiT's blocks and refiner, PEFT names, written once per process.
 fn tiny_lora() -> h3_core::lora::Adapter {
+    tiny_lora_seeded(17)
+}
+
+/// [`tiny_lora`] with other values (`seed`): a second adapter to stack on the
+/// same linears, as Pika's task LoRA and LongLive-Plug's do in `pika-plug4`.
+fn tiny_lora_seeded(seed: u64) -> h3_core::lora::Adapter {
     use h3_core::export::{f32_bytes, write};
     let cfg = H3Config::tiny_vsa();
     let shapes: std::collections::HashMap<String, Vec<usize>> =
         h3_core::weights::h3_manifest(&cfg, true)
             .into_iter()
             .collect();
-    let path =
-        std::env::temp_dir().join(format!("h3-check-lora2-{}.safetensors", std::process::id()));
+    let path = std::env::temp_dir().join(format!(
+        "h3-check-lora2-{}-{seed}.safetensors",
+        std::process::id()
+    ));
     if !path.is_file() {
-        let mut rng = Rng::new(17);
+        let mut rng = Rng::new(seed);
         let mut t = Vec::new();
         let prefixes = (0..cfg.layers)
             .map(|l| format!("transformer_blocks.{l}"))
@@ -2056,6 +2064,30 @@ fn lora_check<B: Backend>(p: &mut Pair<'_, B>) {
     let moved = rel(&plain, &merged);
     p.out.push(CheckResult {
         name: "dit tiny LoRA changes the forward (CPU)".into(),
+        rel_err: moved,
+        ok: moved > 1e-2,
+    });
+    // Two adapters on the same linears (`pika-plug4`: Pika's task LoRA and
+    // the plug's): one branch of the summed rank, against the CPU and, on the
+    // CPU, against merging both.
+    let two = [tiny_lora(), tiny_lora_seeded(29)];
+    let got = dit_forward_lora(p.be, dense, WeightQuant::Native, false, false, &two, false);
+    let branch2 = dit_forward_lora(&Cpu, dense, WeightQuant::Native, false, false, &two, false);
+    p.record(
+        "dit tiny native + two stacked LoRA branches",
+        got,
+        branch2.clone(),
+    );
+    let merged2 = dit_forward_lora(&Cpu, dense, WeightQuant::Native, false, false, &two, true);
+    let e = rel(&branch2, &merged2);
+    p.out.push(CheckResult {
+        name: "dit tiny two stacked LoRA branches == merge (CPU, f32)".into(),
+        rel_err: e,
+        ok: e <= 1e-4,
+    });
+    let moved = rel(&merged, &merged2);
+    p.out.push(CheckResult {
+        name: "dit tiny second LoRA changes the forward (CPU)".into(),
         rel_err: moved,
         ok: moved > 1e-2,
     });

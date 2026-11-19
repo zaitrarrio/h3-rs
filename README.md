@@ -18,6 +18,7 @@ is a `--variant`:
 | `fasth3-trim` | `FastVideo/FastVideo-FastH3-Trim-8-Step` (42 blocks; bf16 HF tree or the ComfyUI single-file NVFP4) | 8 | VSA 0.8 |
 | `fasth3-omni` | `FastVideo/FastVideo-FastH3-Omni-8-Step-V1` (Ref2VA, PDD) | 8 | VSA 0.9, tile 128 |
 | `pika-flex` | `Pika-Labs/Pika-H3-Flex` (FL2VA / Ref2VA LoRA, 480p / 768p) | 6 | dense |
+| `pika-plug4` | Pika Flex plus LongLive-Plug's few-step LoRA (the release's transfer; `--variant-dir` holds Pika's `fl2va/`, `ref2va/` and `generator_lora.safetensors`) | 4 | dense |
 | `regen-2k` | `Efficient-Large-Model/Open-H3-Regenerate-2K` (`h3 regen2k`) | 3 | dense / VSA |
 
 Run with the released weights on an RTX PRO 6000 Server Edition
