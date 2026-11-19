@@ -12,6 +12,9 @@ half = "2.7.1"
 rayon = "1.12.0"
 
 [features]
+# cudarc panics without a version feature and, given several, takes the
+# highest, so the default binds 12.8 and `cuda-13` on top of it wins.
+default = ["cuda-12"]
 # The CUDA generation cudarc binds against; the libraries are loaded at run
 # time, so this only has to match what the host image ships (12.8 for the
 # nvidia/cuda:12.8 runtime, 13 for fastvideo-rs's serve image / fastvideo-studio).
