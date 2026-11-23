@@ -1,0 +1,90 @@
+# Local entrypoints for the commands CI runs (.github/workflows/ci.yml).
+# `task` lists them. Timing numbers still come from a named GPU, not from here.
+version: "3"
+
+dir: "{{.TASKFILE_DIR}}"
+
+env:
+  CARGO_TERM_COLOR: always
+
+tasks:
+  default:
+    desc: List available tasks
+    silent: true
+    cmds:
+      - task --list
+
+  setup:
+    desc: Fetch dependencies from Cargo.lock
+    cmds:
+      - cargo fetch --locked
+
+  doctor:
+    desc: Toolchain preflight (Vulkan and libnvrtc are optional)
+    cmds:
+      - bash scripts/doctor.sh
+
+  check:
+    desc: cargo check every target (CI's check job, default features)
+    cmds:
+      - cargo check --workspace --all-targets --locked
+
+  check:cuda:
+    desc: cargo check the CUDA build of the h3 binary
+    cmds:
+      - cargo check -p h3-cli --no-default-features --features cuda --locked
+
+  build:
+    desc: Release build, WebGPU and CPU
+    cmds:
+      - cargo build --release --locked
+
+  build:cuda:
+    desc: Release build with the CUDA backend
+    cmds:
+      - cargo build --release --locked --features cuda
+
+  test:
+    desc: Workspace tests on whatever WebGPU adapter this machine has
+    cmds:
+      - cargo test --workspace --locked --no-fail-fast -- {{.CLI_ARGS}}
+
+  test:lavapipe:
+    desc: Workspace tests on lavapipe, the CI WebGPU adapter
+    cmds:
+      - bash scripts/dev/test-lavapipe.sh {{.CLI_ARGS}}
+
+  test:cuda:
+    desc: NVRTC-compile the CUDA kernels (cargo test -p h3-cuda)
+    cmds:
+      - bash scripts/dev/test-cuda.sh {{.CLI_ARGS}}
+
+  test:parity:
+    desc: DiT, VAE, and Qwen3-VL parity against the committed fixtures
+    cmds:
+      - cargo test -p h3-model --test parity --locked -- {{.CLI_ARGS}}
+      - cargo test -p h3-text --test parity --locked -- {{.CLI_ARGS}}
+
+  test:cli:
+    desc: CLI tests, including the synthetic engine over HTTP
+    cmds:
+      - cargo test -p h3-cli --locked -- {{.CLI_ARGS}}
+
+  dev:
+    desc: Synthetic engine and demo page on 127.0.0.1:7860
+    interactive: true
+    cmds:
+      - cargo run -p h3-cli --locked -- serve --synthetic --backend cpu
+
+  site:
+    desc: Assemble the Pages tree (web/site)
+    cmds:
+      - python3 web/build.py
+
+  verify:
+    desc: CI's check, CUDA-feature check, workspace tests, and the site build
+    cmds:
+      - task: check
+      - task: check:cuda
+      - task: test
+      - task: site

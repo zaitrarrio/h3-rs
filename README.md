@@ -312,6 +312,25 @@ docker run --gpus all ghcr.io/zaitrarrio/h3-rs worker
 `scripts/runpod/container.py` starts the image on a RunPod pod or
 serverless endpoint.
 
+## Tasks
+
+[Task](https://taskfile.dev) is the local entrypoint for the commands CI runs.
+`task` lists them.
+
+```bash
+task setup     # cargo fetch --locked
+task doctor    # rustc, cargo, python3; notes if Vulkan or libnvrtc is absent
+task check     # cargo check --workspace --all-targets --locked
+task test      # cargo test --workspace --locked
+```
+
+`task test:lavapipe` is the CI WebGPU job (lavapipe, `H3_ALLOW_SOFTWARE=1`).
+`task test:cuda` is `cargo test -p h3-cuda` with libnvrtc on
+`LD_LIBRARY_PATH` (the pip wheel `nvidia-cuda-nvrtc-cu12==12.8.*`, or a
+`.nvrtc` venv). `task dev` serves the synthetic engine at
+`127.0.0.1:7860`. `task verify` runs check, the CUDA-feature check, the
+workspace tests, and `web/build.py`.
+
 ## Layout
 
 ```
@@ -325,7 +344,8 @@ crates/h3-model   H3 DiT, video VAE, audio VAE, TAEH3, latent upscaler, pipeline
 crates/h3-text    Qwen3-VL conditioner (tokenizer, image / video preprocessing, presentation, model)
 crates/h3-cli     the `h3` binary
 web/              demo.html (served by `h3 serve`), landing page, site build
-scripts/          reference fixtures (make_fixtures.py), vast.ai rental scripts, Pages deploy
+scripts/          Taskfile helpers (doctor, lavapipe and CUDA tests), reference fixtures, vast.ai and RunPod scripts, Pages deploy
+Taskfile.yml      task setup / doctor / check / test / dev
 docs/design.md    what runs where, what is fused, what is verified, what is next
 ```
 
