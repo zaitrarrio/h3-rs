@@ -52,7 +52,8 @@ elif op == "create":
         "gpuTypeIds": [gpu], "gpuCount": 1,
         "containerDiskInGb": disk, "volumeInGb": 0, "ports": [],
         "dockerStartCmd": ["bash", "-c", start],
-        "env": {"RUNPOD_API_KEY": KEY, "NVIDIA_DRIVER_CAPABILITIES": "all"},
+        # Not RUNPOD_API_KEY: RunPod overrides that name with a pod-scoped key (see pod.py).
+        "env": {"H3_RUNPOD_KEY": KEY, "NVIDIA_DRIVER_CAPABILITIES": "all"},
     }
     if dc != "-":
         body["dataCenterIds"] = [dc]

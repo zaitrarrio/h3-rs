@@ -261,9 +261,13 @@ State and invariants only; the reasoning is in `docs/design.md`.
   the loader measured slower there and is opt-in, `H3_MADVISE=1`).
   Fetches write the volume at ~300 MB/s; clip times are unaffected either
   way. Pods self-terminate through the
-  REST API, GraphQL when that fails (one pod could not resolve
+  REST API, GraphQL when that fails (pods often cannot resolve
   rest.runpod.io) (the boot's `terminate`, which uploads the running command's
-  output first; `H3_POD_HOURS` backstop). EU-RO-1 stock is intermittent
+  output first and logs which path answered; `H3_POD_HOURS` backstop). The
+  account key reaches the pod as `H3_RUNPOD_KEY`: RunPod injects its own
+  pod-scoped `RUNPOD_API_KEY`, which shadowed ours and could not terminate
+  (`{"error":{}}`, two pods on 2026-11-24). From the agent sandbox create
+  pods with `scripts/runpod/pod.py` (GraphQL, retries while out of stock). EU-RO-1 stock is intermittent
   for every card: hunt with a retry loop, never two pods on the volume at
   once.
 - WebGPU binds any activation over `max_storage_buffer_binding_size` (2 GiB

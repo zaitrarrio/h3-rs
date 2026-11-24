@@ -33,12 +33,16 @@ L = ["#!/bin/bash", "set -u", "LOG=/root/boot.log", "exec >>$LOG 2>&1",
      # A command that terminates the pod would lose its own output: upload the in-flight out.log first.
      # The key goes through a header file, never a command line: commands run under
      # `set -x`, and an echoed `Authorization: Bearer …` ended up in two committed logs.
-     '{ umask 077; printf "Authorization: Bearer %s\\n" "$RUNPOD_API_KEY" > /root/.rp-auth; }',
+     # RunPod injects its own pod-scoped RUNPOD_API_KEY into every pod, which shadows an account key
+     # passed under that name and cannot terminate the pod through GraphQL (`{"error":{}}`, two pods
+     # on 2026-11-24): the account key travels as H3_RUNPOD_KEY.
+     '{ umask 077; printf "Authorization: Bearer %s\\n" "${H3_RUNPOD_KEY:-$RUNPOD_API_KEY}" > /root/.rp-auth; }',
      'terminate() { [ -n "${OUT_URL:-}" ] && up /root/out.log "$OUT_URL"; up $LOG "$LOGPUT"; '
      # REST first; GraphQL when it fails (a 2026-11-18 pod could not resolve rest.runpod.io).
-     'curl -sSf -X DELETE -A h3-rs-pod/1 -H @/root/.rp-auth "https://rest.runpod.io/v1/pods/$RUNPOD_POD_ID" || '
-     'curl -sS -X POST -A h3-rs-pod/1 -H @/root/.rp-auth -H "Content-Type: application/json" '
-     '-d "{\\"query\\":\\"mutation { podTerminate(input: {podId: \\\\\\"$RUNPOD_POD_ID\\\\\\"}) }\\"}" https://api.runpod.io/graphql; }',
+     'curl -sSf -X DELETE -A h3-rs-pod/1 -H @/root/.rp-auth "https://rest.runpod.io/v1/pods/$RUNPOD_POD_ID" && echo "terminate: REST ok" || '
+     '{ r=$(curl -sS -X POST -A h3-rs-pod/1 -H @/root/.rp-auth -H "Content-Type: application/json" '
+     '-d "{\\"query\\":\\"mutation { podTerminate(input: {podId: \\\\\\"$RUNPOD_POD_ID\\\\\\"}) }\\"}" https://api.runpod.io/graphql); '
+     'echo "terminate: GraphQL $r"; up $LOG "$LOGPUT"; }; }',
      # stage TREE [SUB...]: copy /workspace/weights/TREE (or only its SUB directories, the rest
      # symlinked back to the volume) onto the container disk with 8 parallel cp streams, then point
      # /w/TREE at the copy. Idempotent (cp -n). Prints bytes and seconds: the volume's read rate.
