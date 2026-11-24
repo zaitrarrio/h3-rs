@@ -276,6 +276,11 @@ impl<B: Backend> Regen<B> {
             });
         }
         let rows = be.download(&x_v);
+        // The 2K denoise's activations, tables and step buffers are done with:
+        // free them before the decoder allocates its own (the run peaked at
+        // 92.5 GB of 97.9 with both alive; `docs/runs/2026-11-24-runpod-validate`).
+        drop((ws, tables, x_v, x_a, v_out, a_out, text));
+        be.sync();
         let mut latent = unpatch_rows(&rows, cfg.in_channels, lt, lh, lw, cfg.patch);
         self.vae.denormalize_latents(&mut latent);
         let td = Instant::now();

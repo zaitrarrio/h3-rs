@@ -676,20 +676,35 @@ impl Nvfp4 {
     /// tile layout ([`mx_scale_offset`] over 16-column groups, rows padded to
     /// 128, groups to 4; the same layout the Trim file stores).
     pub fn cublas_layout(&self) -> (Vec<u8>, Vec<u8>) {
-        let mut packed = vec![0u8; self.rows * self.cols / 2];
-        for r in 0..self.rows {
-            for c in (0..self.cols).step_by(2) {
-                packed[(r * self.cols + c) / 2] = self.code(r, c) | (self.code(r, c + 1) << 4);
-            }
-        }
+        use rayon::prelude::*;
+        // Rows in parallel: a full checkpoint is ~10 GB of codes, and the
+        // serial loop cost 8 s of a Trim load (`docs/runs/2026-11-24-runpod-validate`).
+        let half = self.cols / 2;
+        let packed: Vec<u8> = if self.first_high {
+            // Each byte holds the pair with the even column high: swap nibbles.
+            self.packed.par_iter().map(|b| b.rotate_left(4)).collect()
+        } else {
+            self.packed.clone()
+        };
+        debug_assert_eq!(packed.len(), self.rows * half);
         let groups = self.cols / NVFP4_GROUP;
         let cb = groups.div_ceil(4);
         let mut scales = vec![0u8; nvfp4_scale_len(self.rows, self.cols)];
-        for r in 0..self.rows {
-            for g in 0..groups {
-                scales[mx_scale_offset(r, g, cb)] = self.scales[r * groups + g];
-            }
-        }
+        // A 128-row tile of scales is contiguous (cb · 512 bytes): one task each.
+        scales
+            .par_chunks_mut(cb * 512)
+            .enumerate()
+            .for_each(|(t, tile)| {
+                for rr in 0..128 {
+                    let r = t * 128 + rr;
+                    if r >= self.rows {
+                        break;
+                    }
+                    for g in 0..groups {
+                        tile[mx_scale_offset(rr, g, cb)] = self.scales[r * groups + g];
+                    }
+                }
+            });
         (packed, scales)
     }
 }
