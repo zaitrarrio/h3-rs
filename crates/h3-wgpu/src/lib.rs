@@ -42,6 +42,7 @@ const CONV3D: &str = include_str!("shaders/conv3d.wgsl");
 const CONV3D_DIRECT: &str = include_str!("shaders/conv3d_direct.wgsl");
 const CONV1D: &str = include_str!("shaders/conv1d.wgsl");
 const CONVT1D: &str = include_str!("shaders/convt1d.wgsl");
+const BOX_ROWS: &str = include_str!("shaders/box_rows.wgsl");
 
 /// Token-sized GEMMs only take the f16-math path (activations of small
 /// projections can exceed f16's range).
@@ -1075,42 +1076,43 @@ impl Backend for Wgpu {
     }
 
     fn box_rows(&self, grid: &GBuf, packed: &GBuf, b: &BoxRows, scatter: bool) {
-        let n = b.heads * b.rows() * b.width;
+        let n = b.len();
         if n == 0 {
             return;
         }
-        let (x, y) = if scatter {
-            (grid, packed)
-        } else {
-            (packed, grid)
-        };
-        self.elementwise(
-            &Ep {
-                n,
-                op: if scatter { 22 } else { 21 },
-                dim: b.width,
-                slots: b.rows(),
-                t: b.grid.0,
-                h: b.grid.1,
-                w: b.grid.2,
-                pt: b.t.0,
-                ph: b.y.0,
-                pw: b.x.0,
-                t2: b.t.1 - b.t.0,
-                h2: b.y.1 - b.y.0,
-                w2: b.x.1 - b.x.0,
-                off: b.grid_off,
-                stride: b.grid_head,
-                xoff: b.packed_off,
-                len: b.packed_head,
-                ..Default::default()
-            },
-            x,
-            Some(y),
-            None,
-            None,
-            None,
+        assert!(
+            u32::try_from(n).is_ok(),
+            "box_rows: {n} elements exceed u32 indexing"
         );
+        let pipe = self.pipeline("box_rows", || BOX_ROWS.to_string());
+        let p = [
+            n,
+            b.width,
+            b.rows(),
+            b.heads,
+            b.count.1,
+            b.grid.1,
+            b.grid.2,
+            b.t.0,
+            b.y.0,
+            b.x.0,
+            b.y.1 - b.y.0,
+            b.x.1 - b.x.0,
+            b.step.0,
+            b.step.1,
+            b.grid_off,
+            b.grid_head,
+            b.grid_row,
+            b.packed_off,
+            b.packed_win,
+            b.packed_head,
+            b.packed_row,
+            scatter as usize,
+            0,
+            0,
+        ]
+        .map(|v| v as u32);
+        self.dispatch(&pipe, &p, &[grid, packed], Self::grid(n.div_ceil(256)));
     }
 
     fn copy(&self, src: &GBuf, so: usize, dst: &GBuf, d: usize, len: usize) {

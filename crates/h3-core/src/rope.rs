@@ -104,7 +104,9 @@ pub fn vae_fast_rope(
         .map(|k| 1.0 / theta.powf(k as f64 * 6.0 / rot as f64))
         .collect();
     let half = rot / 2;
-    let id = |i: usize, shift: usize, size: usize| ((((i + shift) % size) as f64) + 0.5) / size as f64 * 2.0 - 1.0;
+    let id = |i: usize, shift: usize, size: usize| {
+        ((((i + shift) % size) as f64) + 0.5) / size as f64 * 2.0 - 1.0
+    };
     let n = (t.1 - t.0) * hw.0 * hw.1;
     let mut cos = Vec::with_capacity(n * half);
     let mut sin = Vec::with_capacity(n * half);

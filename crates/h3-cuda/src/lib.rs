@@ -1650,11 +1650,13 @@ impl Backend for Cuda {
     }
 
     fn box_rows(&self, grid: &CuBuf, packed: &CuBuf, b: &BoxRows, scatter: bool) {
-        let n = b.heads * b.rows() * b.width;
+        let n = b.len();
         if n == 0 {
             return;
         }
         assert!(!grid.f32 && !packed.f32, "box_rows moves bf16 activations");
+        let l = |v: usize| Arg::L(v as i64);
+        let i = |v: usize| Arg::I(v as i32);
         self.launch(
             &self.f.box_rows,
             Self::elems(n),
@@ -1662,21 +1664,28 @@ impl Backend for Cuda {
             &[
                 Arg::P(self.ptr(grid)),
                 Arg::P(self.ptr(packed)),
-                Arg::L(n as i64),
-                Arg::I(b.width as i32),
-                Arg::L(b.rows() as i64),
-                Arg::I(b.grid.1 as i32),
-                Arg::I(b.grid.2 as i32),
-                Arg::I(b.t.0 as i32),
-                Arg::I(b.y.0 as i32),
-                Arg::I(b.x.0 as i32),
-                Arg::I((b.y.1 - b.y.0) as i32),
-                Arg::I((b.x.1 - b.x.0) as i32),
-                Arg::L(b.grid_off as i64),
-                Arg::L(b.grid_head as i64),
-                Arg::L(b.packed_off as i64),
-                Arg::L(b.packed_head as i64),
-                Arg::I(scatter as i32),
+                l(n),
+                i(b.width),
+                l(b.rows()),
+                i(b.heads),
+                i(b.count.1),
+                i(b.grid.1),
+                i(b.grid.2),
+                i(b.t.0),
+                i(b.y.0),
+                i(b.x.0),
+                i(b.y.1 - b.y.0),
+                i(b.x.1 - b.x.0),
+                i(b.step.0),
+                i(b.step.1),
+                l(b.grid_off),
+                l(b.grid_head),
+                l(b.grid_row),
+                l(b.packed_off),
+                l(b.packed_win),
+                l(b.packed_head),
+                l(b.packed_row),
+                i(scatter as usize),
             ],
         );
     }

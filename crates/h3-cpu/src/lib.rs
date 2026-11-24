@@ -631,7 +631,7 @@ impl Backend for Cpu {
         buf.r().len()
     }
     fn box_rows(&self, grid: &CpuBuf, packed: &CpuBuf, b: &BoxRows, scatter: bool) {
-        let n = b.heads * b.rows() * b.width;
+        let n = b.len();
         if scatter {
             let src = packed.r();
             let mut dst = grid.w();

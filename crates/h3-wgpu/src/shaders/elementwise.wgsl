@@ -128,18 +128,6 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>, @builtin(workgroup_id) wid
             let s = sin(al * x[i]);
             x[i] = x[i] + s * s / (be + 1e-9);
         }
-        case 21u, 22u: {
-            let cc = i % p.dim;
-            let r = (i / p.dim) % p.slots;
-            let hh = i / (p.dim * p.slots);
-            let bx = r % p.w2;
-            let by = (r / p.w2) % p.h2;
-            let bt = r / (p.w2 * p.h2);
-            let grow = ((p.pt + bt) * p.h + p.ph + by) * p.w + p.pw + bx;
-            let gi = (p.off + hh * p.stride + grow) * p.dim + cc;
-            let pi = (p.xoff + hh * p.len + r) * p.dim + cc;
-            if (p.op == 21u) { x[pi] = y[gi]; } else { x[gi] = y[pi]; }
-        }
         case 20u: {
             let c = i % p.dim;
             let row = i / p.dim;

@@ -3047,17 +3047,20 @@ extern "C" __global__ void __launch_bounds__(128) fw_conv3d_mma(
 
 // Backend::box_rows: gather (scatter = 0: grid -> packed) or scatter the rows
 // of a box on a [T, H, W] row grid, per head; one thread per element.
-extern "C" __global__ void fw_box_rows(u64 g_, u64 p_, long n, int width, long rows, int H, int W,
-                                       int t0, int y0, int x0, int ny, int nx, long goff, long ghead,
-                                       long poff, long phead, int scatter) {
+extern "C" __global__ void fw_box_rows(u64 g_, u64 p_, long n, int width, long rows, int heads,
+                                       int cx, int H, int W, int t0, int y0, int x0, int ny, int nx,
+                                       int sy, int sx, long goff, long ghead, long grow_s, long poff,
+                                       long pwin, long phead, long prow, int scatter) {
     long i = (long)blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= n) return;
     bf16_t* g = (bf16_t*)g_;
     bf16_t* p = (bf16_t*)p_;
-    const long c = i % width, r = (i / width) % rows, hh = i / ((long)width * rows);
+    const long c = i % width, r = (i / width) % rows;
+    const long hh = (i / ((long)width * rows)) % heads, win = i / ((long)width * rows * heads);
+    const long wy = win / cx, wx = win % cx;
     const long bx = r % nx, by = (r / nx) % ny, bt = r / ((long)nx * ny);
-    const long grow = ((t0 + bt) * (long)H + y0 + by) * W + x0 + bx;
-    const long gi = (goff + hh * ghead + grow) * width + c;
-    const long pi = (poff + hh * phead + r) * width + c;
+    const long grow = ((t0 + bt) * (long)H + y0 + wy * sy + by) * W + x0 + wx * sx + bx;
+    const long gi = (goff + hh * ghead + grow * grow_s) * width + c;
+    const long pi = (poff + win * pwin + hh * phead + r * prow) * width + c;
     if (scatter) g[gi] = p[pi]; else p[pi] = g[gi];
 }
