@@ -32,6 +32,7 @@ mod finish;
 mod gallery;
 mod inputs;
 mod media;
+mod parity;
 mod roundtrip;
 mod serve;
 mod worker;
@@ -305,6 +306,23 @@ enum Cmd {
         steps: usize,
         #[arg(long, default_value_t = 256)]
         text_tokens: usize,
+    },
+    /// The DiT against a PyTorch reference dump (`scripts/reference/full_parity.py`): real widths and weights, its first N blocks.
+    ParityDit {
+        #[arg(long, value_enum, default_value_t = BackendKind::Auto)]
+        backend: BackendKind,
+        /// The checkpoint's `transformer/` directory (with --tiny: the fixture file).
+        #[arg(long)]
+        transformer: PathBuf,
+        /// The dump (`input.*`, `expected.*`).
+        #[arg(long)]
+        fixture: PathBuf,
+        /// The tiny config (checks the script and this command end to end without real weights).
+        #[arg(long, default_value_t = false)]
+        tiny: bool,
+        /// Relative tolerance (default 2e-3 on the CPU, 3e-2 elsewhere).
+        #[arg(long)]
+        tolerance: Option<f32>,
     },
     /// Encode a video with the H3 VAE and decode it with the released and the fast (Sol-H3) decoders: time and PSNR.
     VaeRoundtrip {
@@ -840,6 +858,21 @@ fn main() -> Result<()> {
                 steps,
                 text_tokens
             )?)
+        }
+        Cmd::ParityDit {
+            backend,
+            transformer,
+            fixture,
+            tiny,
+            tolerance,
+        } => {
+            let a = parity::Args {
+                transformer,
+                fixture,
+                tiny,
+                tolerance,
+            };
+            with_backend!(backend, |be| parity::run(&be, &a)?)
         }
         Cmd::VaeRoundtrip {
             backend,
