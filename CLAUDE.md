@@ -476,7 +476,12 @@ State and invariants only; the reasoning is in `docs/design.md`.
   (audio VAE `latent_dim` 24 = 4 × 6 channels, Qwen3-VL vision patch 16,
   DeepStack indexes [0, 1], image / video / vision-start / end ids 62 /
   63 / 60 / 61); a tiny-config change means regenerating. Regenerate only
-  when a reference library changes, and record the version.
+  when a reference library changes, and record the version. At full width
+  `scripts/reference/full_parity.py` runs FastVideo's DiT on the real
+  checkpoint's first N blocks (embedders, refiner, head; CUDA torch on the
+  GPU: FastVideo picks NCCL whenever NVML sees one) and `h3 parity-dit`
+  compares: h3-base blocks 0–1 pass on CUDA (3e-2) and the CPU (2e-3)
+  (`docs/runs/2026-11-24-runpod-parity`); `--tiny` checks the pair locally.
 - WGSL rules (from fastwan-rs): named vec4 accumulators, never arrays indexed
   in loops; zero loop-local accumulators explicitly; every declared binding
   statically used. Kernels and their CUDA twins share names (`fw_<op>`).
