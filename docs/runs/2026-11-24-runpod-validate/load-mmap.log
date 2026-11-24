@@ -1,0 +1,18 @@
+cuda NVIDIA RTX PRO 6000 Blackwell Server Edition (sm_120)
+load 89.1s
+prompt: 33 rows in 0.0s
+step 1/8 0.61s
+step 2/8 0.54s
+step 3/8 0.54s
+step 4/8 0.54s
+step 5/8 0.54s
+step 6/8 0.54s
+step 7/8 0.54s
+step 8/8 0.54s
+run 0: total 6.44s  prepare 0.07s  adaln 0.00s  denoise 4.37s (["0.61", "0.54", "0.54", "0.54", "0.54", "0.54", "0.54", "0.54"])  decode 1.80s  audio 0.18s
+wrote /root/res/load-mmap.y4m (124 frames 480x288) and /root/res/load-mmap.wav
+mux: ffmpeg -i /root/res/load-mmap.y4m -i /root/res/load-mmap.wav -c:v libx264 -pix_fmt yuv420p -c:a aac /root/res/load-mmap.mp4
+
+real	1m47.861s
+user	0m31.083s
+sys	0m23.988s

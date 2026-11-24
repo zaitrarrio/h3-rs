@@ -1014,12 +1014,19 @@ pub fn run_ops<B: Backend>(be: &B, tol: f32) -> Vec<CheckResult> {
 /// attention output's `[rows, window·heads·d]`, and a repeated box (step
 /// 0); its own RNG so the other cases keep their draws.
 fn box_rows_check<B: Backend>(p: &mut Pair<'_, B>) {
+    // Width 5 takes CUDA's one-bf16 kernel, 16 its 16-byte one.
+    for width in [5, 16] {
+        box_rows_cases(p, width);
+    }
+}
+
+fn box_rows_cases<B: Backend>(p: &mut Pair<'_, B>, width: usize) {
     use h3_core::backend::BoxRows;
     let (be, cpu) = (p.be, &Cpu);
     let mut r = Rng::new(91);
     let grid = (4, 9, 11);
     let g_rows = grid.0 * grid.1 * grid.2;
-    let (heads, width) = (3, 5);
+    let heads = 3;
     let base = BoxRows {
         grid,
         t: (1, 3),
@@ -1079,7 +1086,7 @@ fn box_rows_check<B: Backend>(p: &mut Pair<'_, B>) {
             (be.download(&gp), cpu.download(&cp))
         };
         p.record(
-            format!("box_rows {name}, 2x2 boxes 2x3x5 of 4x9x11"),
+            format!("box_rows {name}, 2x2 boxes 2x3x5 of 4x9x11, width {width}"),
             got,
             want,
         );
@@ -1127,6 +1134,17 @@ fn ops<B: Backend>(p: &mut Pair<'_, B>, rng: &mut Rng) {
                 p.op(format!("linear nvfp4 first-high {m}x{k}x{n}"), |r| {
                     r.linear(&x, 3, m, &Mat::Nvfp4(&nvh), None, act, m + 2, 2)
                 });
+                // W4A4: the activations through NVFP4 as well (FP4 tensor
+                // cores on sm_100+, emulated elsewhere), with a bias.
+                if k % 32 == 0 {
+                    let nva = Nvfp4 {
+                        act4: true,
+                        ..nvh.clone()
+                    };
+                    p.op(format!("linear nvfp4 w4a4 {m}x{k}x{n} {act:?}"), |r| {
+                        r.linear(&x, 3, m, &Mat::Nvfp4(&nva), Some(&b), act, m + 2, 2)
+                    });
+                }
             }
             if k % 32 == 0 {
                 // MXFP8 W8A8: the reference rounds the activations too, so the
@@ -1840,6 +1858,7 @@ pub fn synth_nvfp4(w: &[f32], rows: usize, cols: usize) -> Nvfp4 {
         rows,
         cols,
         first_high: false,
+        act4: false,
     }
 }
 

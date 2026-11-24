@@ -1,0 +1,13 @@
+vae load 0.3s
+encode 124 frames 2560x1440 -> latents 37x90x160 in 196.65s
+fast vae load 4.2s
+mxfp8 n=16384 k=2048 rows=16384: whole 1.54 ms, ×2 1.54 ms → whole; plain fp8 (per-tensor scale) 1.40 ms
+mxfp8 n=16384 k=2048 rows=8552: whole 0.83 ms, ×2 0.84 ms → whole; plain fp8 (per-tensor scale) 0.76 ms
+mxfp8 n=16384 k=2048 rows=8512: whole 0.82 ms, ×2 0.83 ms → whole; plain fp8 (per-tensor scale) 0.75 ms
+fast decode 0: 124 frames in 10.28s
+fast decode 1: 124 frames in 10.08s
+fast vs input: 33.44 dB
+
+real	4m2.181s
+user	4m10.735s
+sys	1m3.324s

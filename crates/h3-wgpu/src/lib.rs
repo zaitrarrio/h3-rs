@@ -16,7 +16,7 @@ use h3_core::backend::{
     Act, Backend, BoxRows, Conv1dShape, Conv3dShape, ConvEpilogue, ConvShape, ConvT1dShape,
     FlowStep, Gate, HeadNorm, Modulation, Pad, Rope, Snake,
 };
-use h3_core::quant::{Mxfp8, Q4, Q8};
+use h3_core::quant::{Mxfp8, Nvfp4, Q4, Q8};
 use h3_core::vsa::VsaSpec;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -33,6 +33,8 @@ const VSA_POOL: &str = include_str!("shaders/vsa_pool.wgsl");
 const VSA_COARSE: &str = include_str!("shaders/vsa_coarse.wgsl");
 const ELEM: &str = include_str!("shaders/elementwise.wgsl");
 const MX_ACT: &str = include_str!("shaders/mx_act.wgsl");
+const NV_AMAX: &str = include_str!("shaders/nv_amax.wgsl");
+const NV_ACT: &str = include_str!("shaders/nv_act.wgsl");
 const VSA_QK8: &str = include_str!("shaders/vsa_qk8.wgsl");
 const ATTN_QK8: &str = include_str!("shaders/attn_qk8.wgsl");
 const ATTN_PV8: &str = include_str!("shaders/attn_pv8.wgsl");
@@ -135,6 +137,9 @@ pub struct GWeight {
     /// here) and `linear` rounds its activations through E4M3 / E8M0 blocks
     /// first (`mx_act.wgsl`), so the result equals the CPU reference.
     mx: bool,
+    /// NVFP4 W4A4: stored dequantized like `mx`, and `linear` rounds its
+    /// activations through NVFP4 first (`nv_amax.wgsl` + `nv_act.wgsl`).
+    a4: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -796,6 +801,57 @@ impl Wgpu {
         out
     }
 
+    /// max |bf16(x)| over elements `[start, start + len)` into a one-element
+    /// buffer (`nv_amax.wgsl`, two levels of workgroup trees).
+    fn nv_amax(&self, x: &GBuf, start: usize, len: usize) -> GBuf {
+        const CHUNK: usize = 4096;
+        let pipe = self.pipeline("nv_amax", || NV_AMAX.to_string());
+        // First level over binding-sized slices of x, partials side by side.
+        let slice = (self.row_chunk(&[1]) / CHUNK).max(1) * CHUNK;
+        let groups: usize = (0..len)
+            .step_by(slice)
+            .map(|o| (len - o).min(slice).div_ceil(CHUNK))
+            .sum();
+        let mut part = self.alloc(groups.max(1));
+        let mut g0 = 0;
+        for o in (0..len).step_by(slice) {
+            let n = (len - o).min(slice);
+            let (xr, xo) = self.sub_range(start + o, n);
+            let g = n.div_ceil(CHUNK);
+            let p = [n, xo, CHUNK, 1, g0, 0, 0, 0].map(|v| v as u32);
+            self.dispatch_ranges(&pipe, &p, &[(x, Some(xr)), (&part, None)], Self::grid(g));
+            g0 += g;
+        }
+        let mut n = groups;
+        while n > 1 {
+            let g = n.div_ceil(CHUNK);
+            let next = self.alloc(g);
+            let p = [n, 0, CHUNK, 0, 0, 0, 0, 0].map(|v| v as u32);
+            self.dispatch(&pipe, &p, &[&part, &next], Self::grid(g));
+            part = next;
+            n = g;
+        }
+        part
+    }
+
+    /// `Nvfp4::round_rows` of `rows` rows of `x` from `x_row` with the call's
+    /// maximum `amax` (from [`Self::nv_amax`]) into a fresh `[rows, k]` buffer.
+    fn nv_round(&self, x: &GBuf, x_row: usize, rows: usize, k: usize, amax: &GBuf) -> GBuf {
+        assert!(k.is_multiple_of(16), "NVFP4 needs k % 16 == 0");
+        let out = self.alloc(rows * k);
+        let blocks = rows * k / 16;
+        let (xr, xo) = self.sub_range(x_row * k, rows * k);
+        let pipe = self.pipeline("nv_act", || NV_ACT.to_string());
+        let p = [blocks as u32, xo as u32, 0, 0];
+        self.dispatch_ranges(
+            &pipe,
+            &p,
+            &[(x, Some(xr)), (amax, None), (&out, None)],
+            Self::grid(blocks.div_ceil(256)),
+        );
+        out
+    }
+
     fn elementwise(
         &self,
         p: &Ep,
@@ -1183,6 +1239,7 @@ impl Backend for Wgpu {
                 f16: true,
                 quant: None,
                 mx: false,
+                a4: false,
             }
         } else {
             GWeight {
@@ -1192,13 +1249,22 @@ impl Backend for Wgpu {
                 f16: false,
                 quant: None,
                 mx: false,
+                a4: false,
             }
+        }
+    }
+
+    fn weight_nvfp4(&self, q: &Nvfp4) -> GWeight {
+        GWeight {
+            a4: q.act4,
+            ..self.weight(&q.dequantize(), q.rows, q.cols)
         }
     }
 
     fn weight_mxfp8(&self, q: &Mxfp8) -> GWeight {
         GWeight {
             mx: true,
+            a4: false,
             ..self.weight(&q.dequantize(), q.rows, q.cols)
         }
     }
@@ -1219,6 +1285,7 @@ impl Backend for Wgpu {
             f16: false,
             quant: Some((Quant::Q8, self.upload(&q.scales), q.group)),
             mx: false,
+            a4: false,
         }
     }
 
@@ -1242,6 +1309,7 @@ impl Backend for Wgpu {
             f16: false,
             quant: Some((Quant::Q4, self.upload(&sz), q.group)),
             mx: false,
+            a4: false,
         }
     }
 
@@ -1277,6 +1345,21 @@ impl Backend for Wgpu {
         y_row: usize,
     ) {
         if rows == 0 {
+            return;
+        }
+        if w.a4 {
+            // NVFP4 W4A4: the whole call's maximum first, then each row chunk
+            // rounded with it (`Nvfp4::round_rows` is per call, not per chunk).
+            let k = w.cols;
+            let amax = self.nv_amax(x, x_row * k, rows * k);
+            let chunk = self.row_chunk(&[w.cols, w.rows]);
+            let mut r0 = 0;
+            while r0 < rows {
+                let n = chunk.min(rows - r0);
+                let xq = self.nv_round(x, x_row + r0, n, k, &amax);
+                self.linear_plain(&xq, 0, n, w, bias, act, y, y_row + r0);
+                r0 += n;
+            }
             return;
         }
         if w.mx {

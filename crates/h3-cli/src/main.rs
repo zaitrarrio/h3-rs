@@ -32,6 +32,7 @@ mod finish;
 mod gallery;
 mod inputs;
 mod media;
+mod parity;
 mod roundtrip;
 mod serve;
 mod worker;
@@ -306,6 +307,23 @@ enum Cmd {
         #[arg(long, default_value_t = 256)]
         text_tokens: usize,
     },
+    /// The DiT against a PyTorch reference dump (`scripts/reference/full_parity.py`): real widths and weights, its first N blocks.
+    ParityDit {
+        #[arg(long, value_enum, default_value_t = BackendKind::Auto)]
+        backend: BackendKind,
+        /// The checkpoint's `transformer/` directory (with --tiny: the fixture file).
+        #[arg(long)]
+        transformer: PathBuf,
+        /// The dump (`input.*`, `expected.*`).
+        #[arg(long)]
+        fixture: PathBuf,
+        /// The tiny config (checks the script and this command end to end without real weights).
+        #[arg(long, default_value_t = false)]
+        tiny: bool,
+        /// Relative tolerance (default 2e-3 on the CPU, 3e-2 elsewhere).
+        #[arg(long)]
+        tolerance: Option<f32>,
+    },
     /// Encode a video with the H3 VAE and decode it with the released and the fast (Sol-H3) decoders: time and PSNR.
     VaeRoundtrip {
         #[arg(long, value_enum, default_value_t = BackendKind::Auto)]
@@ -472,6 +490,9 @@ enum Cmd {
         seed: u64,
         #[arg(long, default_value_t = 256)]
         tile: usize,
+        /// Decode with the released 36-block VAE instead of the tree's `vae_fast/` decoder (which the release, and this command, use by default).
+        #[arg(long, default_value_t = false)]
+        released_vae: bool,
         #[arg(long, default_value = "out-2k.y4m")]
         out: PathBuf,
     },
@@ -838,6 +859,21 @@ fn main() -> Result<()> {
                 text_tokens
             )?)
         }
+        Cmd::ParityDit {
+            backend,
+            transformer,
+            fixture,
+            tiny,
+            tolerance,
+        } => {
+            let a = parity::Args {
+                transformer,
+                fixture,
+                tiny,
+                tolerance,
+            };
+            with_backend!(backend, |be| parity::run(&be, &a)?)
+        }
         Cmd::VaeRoundtrip {
             backend,
             model_dir,
@@ -1094,8 +1130,27 @@ fn main() -> Result<()> {
             start_sigma,
             seed,
             tile,
+            released_vae,
             out,
         } => {
+            // The release decodes with its fast decoder (`vae_fast/`); so do we
+            // unless asked for the released one.
+            let mut attn = attn;
+            if released_vae {
+                if attn.fast_vae.is_some() {
+                    bail!("--released-vae and --fast-vae contradict each other");
+                }
+            } else if attn.fast_vae.is_none() {
+                let f = regen_dir.join("vae_fast/fast_h3_vae_noncausal_24l.safetensors");
+                if f.is_file() {
+                    attn.fast_vae = Some(f);
+                } else {
+                    eprintln!(
+                        "note: {} not found; decoding with the released VAE",
+                        f.display()
+                    );
+                }
+            }
             with_backend!(backend, |be| regen2k(
                 &be,
                 &regen_dir,
@@ -1900,6 +1955,75 @@ fn regen2k<B: Backend>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every output path stays a named flag (an attribute once slid onto the
+    /// field above `out` and made it positional: regen2k --out broke).
+    #[test]
+    fn output_flags_parse() {
+        let cli = Cli::try_parse_from([
+            "h3",
+            "regen2k",
+            "--regen-dir",
+            "r",
+            "--model-dir",
+            "m",
+            "--draft",
+            "d.y4m",
+            "--adaln-table",
+            "t.bin",
+            "--prompt",
+            "p",
+            "--out",
+            "x.y4m",
+            "--released-vae",
+        ])
+        .expect("regen2k --out parses");
+        let Cmd::Regen2k {
+            out, released_vae, ..
+        } = cli.cmd
+        else {
+            panic!("not regen2k")
+        };
+        assert_eq!((out, released_vae), (PathBuf::from("x.y4m"), true));
+        let cli = Cli::try_parse_from([
+            "h3",
+            "regen2k",
+            "--regen-dir",
+            "r",
+            "--model-dir",
+            "m",
+            "--draft",
+            "d",
+            "--adaln-table",
+            "t",
+            "--prompt",
+            "p",
+        ])
+        .expect("defaults parse");
+        let Cmd::Regen2k {
+            out, released_vae, ..
+        } = cli.cmd
+        else {
+            panic!("not regen2k")
+        };
+        assert_eq!((out, released_vae), (PathBuf::from("out-2k.y4m"), false));
+        for args in [
+            vec!["h3", "generate", "--prompt", "p", "--out", "a.y4m"],
+            vec![
+                "h3",
+                "vae-roundtrip",
+                "--model-dir",
+                "m",
+                "--input",
+                "i.y4m",
+                "--out-dir",
+                "o",
+            ],
+            vec!["h3", "parity-dit", "--transformer", "t", "--fixture", "f"],
+        ] {
+            Cli::try_parse_from(args.clone()).unwrap_or_else(|e| panic!("{args:?}: {e}"));
+        }
+    }
 
     #[test]
     fn tier_288p_is_on_the_grid() {

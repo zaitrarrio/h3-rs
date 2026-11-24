@@ -1,0 +1,25 @@
+== full-width DiT parity: FastVideo (CUDA torch, f32, GPU) vs h3, first 2 blocks of h3-base
+apt-ok
+torch 2.12.0+cu130 cuda True
+a7eb3401d [bugfix] Streaming: end sessions with the documented segment_cap, session_timeout and error frames (#2072)
+INFO 11-24 13:37:17.852 [cuda.py:175] Selected backend: AttentionBackendEnum.TORCH_SDPA
+INFO 11-24 13:37:17.852 [cuda.py:300] Using Torch SDPA backend.
+loaded 62 tensors from 14 file(s)
+wrote /root/res/dit_full.safetensors video (1, 48, 96) audio (1, 10, 32)
+
+real	0m20.158s
+user	1m9.845s
+sys	1m17.137s
+== parity-dit cuda
+parity ok
+
+real	0m18.936s
+user	0m14.338s
+sys	0m6.912s
+== parity-dit cpu
+parity ok
+
+real	0m12.910s
+user	0m24.682s
+sys	1m21.112s
+exit 0

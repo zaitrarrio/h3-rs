@@ -1,0 +1,15 @@
+adapter: /workspace/h3-rs/plug4/generator_lora.safetensors
+cuda NVIDIA RTX PRO 6000 Blackwell Server Edition (sm_120)
+load 90.5s
+prompt: 33 rows in 0.0s
+step 1/4 1.91s
+step 2/4 1.87s
+step 3/4 1.87s
+step 4/4 1.87s
+run 0: total 10.61s  prepare 0.07s  adaln 0.00s  denoise 7.51s (["1.91", "1.87", "1.87", "1.87"])  decode 2.80s  audio 0.19s
+wrote /root/res/pin-res2.y4m (124 frames 832x480) and /root/res/pin-res2.wav
+mux: ffmpeg -i /root/res/pin-res2.y4m -i /root/res/pin-res2.wav -c:v libx264 -pix_fmt yuv420p -c:a aac /root/res/pin-res2.mp4
+
+real	1m54.039s
+user	3m23.648s
+sys	0m57.213s

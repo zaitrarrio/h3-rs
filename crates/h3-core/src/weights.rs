@@ -169,6 +169,25 @@ impl SafetensorsDir {
         Ok((t.dtype(), t.shape().to_vec(), data))
     }
 
+    /// A tensor's bytes for conversion, borrowed from the map; with
+    /// `H3_PREAD=1`, 1 MiB and up through [`Self::read_into`] (parallel
+    /// `pread`s) instead. That did not pay from RunPod's FUSE volume: a cold
+    /// 25.6 GB load took 107.9 s through pread and 89.1 s through the map, on
+    /// two pods (`docs/runs/2026-11-24-runpod-parity`); staging the files is
+    /// what pays there.
+    pub fn bytes(
+        &self,
+        name: &str,
+    ) -> Result<(safetensors::Dtype, Vec<usize>, std::borrow::Cow<'_, [u8]>)> {
+        let (dt, shape, data) = self.raw(name)?;
+        if data.len() < (1 << 20) || !std::env::var("H3_PREAD").is_ok_and(|v| v == "1") {
+            return Ok((dt, shape, std::borrow::Cow::Borrowed(data)));
+        }
+        let mut buf = vec![0u8; data.len()];
+        self.read_into(name, &mut buf)?;
+        Ok((dt, shape, std::borrow::Cow::Owned(buf)))
+    }
+
     pub fn contains_raw(&self, name: &str) -> bool {
         self.index.contains_key(name)
     }
@@ -298,7 +317,7 @@ impl WeightSource for SafetensorsDir {
         let nv = format!("{}::_nvfp4_weight", nvfp4_module(key));
         if self.contains_raw(&mx8) {
             // MXFP8: E4M3 codes [rows, cols] + the swizzled E8M0 scales as stored (crate::export).
-            let (dt, shape, data) = self.raw(&mx8)?;
+            let (dt, shape, _) = self.raw(&mx8)?;
             if dt != Dtype::U8 || shape.len() != 2 {
                 return Err(bad(format!("mx8 is {dt:?} {shape:?}")));
             }
@@ -308,8 +327,9 @@ impl WeightSource for SafetensorsDir {
                     "mxs is {sdt:?} {sshape:?} for codes {shape:?}"
                 )));
             }
+            let data = self.bytes(&mx8)?.2.into_owned();
             return Ok(Some(Stored::Mxfp8(crate::quant::Mxfp8::from_stored(
-                data.to_vec(),
+                data,
                 sdata.to_vec(),
                 shape[0],
                 shape[1],
@@ -340,7 +360,7 @@ impl WeightSource for SafetensorsDir {
             })));
         }
         if self.contains_raw(&q4) {
-            let (dt, shape, data) = self.raw(&q4)?;
+            let (dt, shape, data) = self.bytes(&q4)?;
             if dt != Dtype::U8 || shape.len() != 2 {
                 return Err(bad(format!("q4 is {dt:?} {shape:?}")));
             }
@@ -353,12 +373,12 @@ impl WeightSource for SafetensorsDir {
                 )));
             }
             return Ok(Some(Stored::Q4(Q4::from_packed(
-                data, scales, zeros, rows, cols,
+                &data, scales, zeros, rows, cols,
             ))));
         }
         if self.contains_raw(&nv) {
             let m = nvfp4_module(key);
-            let (dt, shape, data) = self.raw(&nv)?;
+            let (dt, shape, data) = self.bytes(&nv)?;
             if dt != Dtype::U8 || shape.len() != 2 {
                 return Err(bad(format!("nvfp4 codes are {dt:?} {shape:?}")));
             }
@@ -371,20 +391,20 @@ impl WeightSource for SafetensorsDir {
             }
             let alpha = self.scalar(&format!("{m}::_nvfp4_alpha"))?;
             return Ok(Some(Stored::Nvfp4(Nvfp4::from_stored(
-                data, sdata, alpha, rows, cols, false,
+                &data, sdata, alpha, rows, cols, false,
             ))));
         }
         Ok(None)
     }
 
     fn get(&self, name: &str, shape: &[usize]) -> Result<Vec<f32>> {
-        let (dt, stored, data) = self.raw(name)?;
+        let (dt, stored, data) = self.bytes(name)?;
         if squeeze(&stored) != squeeze(shape) {
             return Err(Error::Weights(format!(
                 "`{name}` is {stored:?}, expected {shape:?}"
             )));
         }
-        bytes_to_f32(dt, data, name)
+        bytes_to_f32(dt, &data, name)
     }
 }
 

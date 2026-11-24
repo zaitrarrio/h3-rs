@@ -237,7 +237,19 @@ State and invariants only; the reasoning is in `docs/design.md`.
 - NVFP4 on CUDA stays 4-bit on the device (codes + E4M3 scales, expanded
   into the bf16 scratch per GEMM like int8 / int4): the 42-block Trim runs in
   24.3 GB peak on an L40S; expanding at load needs 36 GB and OOMs a 48 GB
-  card. WebGPU still expands NVFP4 to f16 pairs at load.
+  card. WebGPU still expands NVFP4 to f16 pairs at load. `H3_NVFP4_A4=1`
+  runs W4A4 instead (ComfyUI's recipe for these files): per GEMM call one
+  tensor scale from the activations' maximum (`2688 / amax`), an E4M3 scale
+  per 16 values and E2M1 codes rounded to nearest even
+  (`Nvfp4::round_rows` is the oracle; `nvfp4_block` fixes the f32 operation
+  order the kernels repeat, `__fdiv_rn` / `__fmul_rn` on CUDA). sm_100+
+  runs cuBLASLt's block-scaled FP4 GEMM (`CUDA_R_4F_E2M1`, `VEC16_UE4M3`,
+  weights uploaded low-nibble-first in the scale tile layout) with alpha /
+  beta as device pointers, so the maximum never reaches the host; older
+  cards and declined shapes round into bf16 and expand; WebGPU emulates
+  (`nv_amax.wgsl`: a two-level max, no atomics; `nv_act.wgsl`). Server
+  Edition, Trim 1344×768×124: denoise 43.3 → **24.7 s** (1.75×), 14.6 dB
+  from W4A16, clean (`docs/runs/2026-11-24-runpod-validate`). Opt-in.
 - Rentals: filter offers on `compute_cap ≥ 800` (a V100 was rented once by
   mistake) and arm the destroy timer on the box (`nohup setsid … sleep …
   DELETE /api/v0/instances/<id>/` with the instance key) plus a final
@@ -261,9 +273,20 @@ State and invariants only; the reasoning is in `docs/design.md`.
   the loader measured slower there and is opt-in, `H3_MADVISE=1`).
   Fetches write the volume at ~300 MB/s; clip times are unaffected either
   way. Pods self-terminate through the
-  REST API, GraphQL when that fails (one pod could not resolve
+  REST API, GraphQL when that fails (pods often cannot resolve
   rest.runpod.io) (the boot's `terminate`, which uploads the running command's
-  output first; `H3_POD_HOURS` backstop). EU-RO-1 stock is intermittent
+  output first and logs which path answered; `H3_POD_HOURS` backstop) with
+  the pod-scoped `RUNPOD_API_KEY` RunPod injects, which terminates its own
+  pod through GraphQL. Pods get **no account key**: one passed in the pod's
+  env replaced the pod-scoped key, and RunPod answers an account key from
+  inside a pod with 401 `{"error":{}}` (every self-terminate failed that way
+  until 2026-11-24; `docs/runs/2026-11-24-runpod-validate`). From the agent
+  sandbox create pods with `scripts/runpod/pod.py` (GraphQL, retries while
+  out of stock). Parallel `pread` instead of the mmap (`H3_PREAD=1`,
+  `SafetensorsDir::bytes`) did not pay from the volume: a cold 25.6 GB load
+  107.9 s against the mmap's 89.1 s, on two pods
+  (`docs/runs/2026-11-24-runpod-parity`; caches cannot be dropped in a pod);
+  staging is what pays. EU-RO-1 stock is intermittent
   for every card: hunt with a retry loop, never two pods on the volume at
   once.
 - WebGPU binds any activation over `max_storage_buffer_binding_size` (2 GiB
@@ -343,8 +366,10 @@ State and invariants only; the reasoning is in `docs/design.md`.
   activations apart: `copy` never mixes them (the vision tower's per-frame
   rope tables are uploaded, not copied). Renoise noise buffers span the
   conditioning rows (`flow_step` reads noise at the rows' offset).
-  `h3 regen2k` decodes with the base VAE like FastVideo's pipeline unless
-  `--fast-vae` is given.
+  `h3 regen2k` decodes with the tree's `vae_fast/` decoder when it is there,
+  as the release's pipeline does (`--released-vae` for the base VAE): 406.8
+  s against 488.4 s, decode 9.4 against 30.7 s, peak 92.5 GB of 97.9
+  (`docs/runs/2026-11-24-runpod-validate`).
 - Fast VAE decoder (`fast_vae.rs`, `--fast-vae FILE|DIR` on `generate` /
   `regen2k` / `serve`, replacing the released decoder): the release's
   `vae_fast/fast_h3_vae_noncausal_24l.safetensors` (Sana
@@ -367,7 +392,10 @@ State and invariants only; the reasoning is in `docs/design.md`.
   released decoder's 9.4 s (MXFP8 2.9 vs 6.6 s), 2K 11.3 s against 34.0 s;
   34.5 dB (768p) / 39.7 dB (2K) from the released decoder's output, no
   seams; a 768p draft's decode 8.65 → 2.71 s. The file is on the EU volume
-  (`open-h3-regenerate-2k/vae_fast/`). Opt-in.
+  (`open-h3-regenerate-2k/vae_fast/`). Opt-in for `generate` / `serve`,
+  the default for `regen2k`. WebGPU at 768p: 15.0 s against the released
+  decoder's 52.9 s for 68 frames; the token-row buffers bind whole, so
+  sizes over the backend's binding (2K on NVIDIA) are refused up front.
 - LightX2V's MiniMax-H3 Turbo LoRAs (`h3-turbo4` / `-ref`, `h3-turbo8` /
   `-ref`, `lightx2v/Minimax-h3-Turbo`) and LongLive-Plug's CFG LoRA
   (`h3-cfg`, not combined with the few-step one, as its card advises) are
@@ -391,7 +419,9 @@ State and invariants only; the reasoning is in `docs/design.md`.
   of any H3 path: a draft from `--embeds` (no text encoder) with
   `--stream-blocks` peaks at **7.5 GB at 288p, 10.6 GB at 480p** (resident
   28.8 / 31.4 GB) at the same speed (480p denoise 7.8 vs 7.6 s;
-  `docs/runs/2026-11-24-runpod-pika-plug4`). Without
+  `docs/runs/2026-11-24-runpod-pika-plug4`), byte-identical to resident with
+  the cuBLASLt candidate pinned (unpinned, a streaming run can time and pick
+  other candidates: 13.6 dB once; `docs/runs/2026-11-24-runpod-validate`). Without
   `--tables` every run spends ~46 s on the AdaLN tables.
 - `--tier 288p` is H3's 480×288 (288×480 at 9:16, 288×288 at 1:1:
   `canvas_size` with short edge 288 and a 480×288 budget), on the 32-pixel
@@ -446,7 +476,12 @@ State and invariants only; the reasoning is in `docs/design.md`.
   (audio VAE `latent_dim` 24 = 4 × 6 channels, Qwen3-VL vision patch 16,
   DeepStack indexes [0, 1], image / video / vision-start / end ids 62 /
   63 / 60 / 61); a tiny-config change means regenerating. Regenerate only
-  when a reference library changes, and record the version.
+  when a reference library changes, and record the version. At full width
+  `scripts/reference/full_parity.py` runs FastVideo's DiT on the real
+  checkpoint's first N blocks (embedders, refiner, head; CUDA torch on the
+  GPU: FastVideo picks NCCL whenever NVML sees one) and `h3 parity-dit`
+  compares: h3-base blocks 0–1 pass on CUDA (3e-2) and the CPU (2e-3)
+  (`docs/runs/2026-11-24-runpod-parity`); `--tiny` checks the pair locally.
 - WGSL rules (from fastwan-rs): named vec4 accumulators, never arrays indexed
   in loops; zero loop-local accumulators explicitly; every declared binding
   statically used. Kernels and their CUDA twins share names (`fw_<op>`).
@@ -460,8 +495,10 @@ State and invariants only; the reasoning is in `docs/design.md`.
   2.4 GB per job), the page decoding a 16-frame window of ImageBitmaps
   around the playhead. Its default factor (`finish::serve_factor`) is the
   largest whose output fits 2560×1440; `generate`'s is ×4 up to 480p.
-  Checked on the synthetic engine in Chromium (CPU backend); not yet timed
-  on a GPU. One request carries a task's inputs (no per-job `h3 generate`
+  Checked on the synthetic engine in Chromium (CPU backend); on the Server
+  Edition (`docs/runs/2026-11-24-runpod-validate`) a 480p draft's ×2 / ×4
+  upscale takes 5.1–5.4 / 4.8–5.2 s and 768p auto (×2) 17.5–19.3 s,
+  JPEGs included. One request carries a task's inputs (no per-job `h3 generate`
   for a hosted worker): `task` (`t2va | fl2va | ref2va`, default inferred
   from the media, else t2va / the start task), `first_image` / `last_image`
   `{b64, mime: image/png | image/jpeg}`, `refs` `[{kind: image | video |
