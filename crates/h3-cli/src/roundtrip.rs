@@ -70,6 +70,15 @@ fn decode_all<B: Backend>(
     Ok((Volume::cat_t(&parts), t0.elapsed().as_secs_f64()))
 }
 
+/// `H3_PROFILE=1`: the backend's op table since the last one (all decodes of
+/// a `--repeat`), then cleared.
+fn profile<B: Backend>(be: &B, what: &str) {
+    if let Some(r) = be.profile_report() {
+        eprintln!("== profile: {what}\n{r}");
+        be.profile_reset();
+    }
+}
+
 pub fn run<B: Backend>(be: &B, a: &Args) -> Result<()> {
     let (frames, _) = media::read_frames(&a.input)?;
     let n = a.frames.map_or(frames.len(), |f| f.min(frames.len()));
@@ -100,6 +109,7 @@ pub fn run<B: Backend>(be: &B, a: &Args) -> Result<()> {
     eprintln!("vae load {:.1}s", t0.elapsed().as_secs_f64());
     let t0 = Instant::now();
     let m = vae.encode_pixels(be, &px, a.tiling)?;
+    profile(be, "encoder");
     let z = Posterior::from_moments(&m).mode();
     eprintln!(
         "encode {n} frames {w}x{h} -> latents {}x{}x{} in {:.2}s",
@@ -118,6 +128,7 @@ pub fn run<B: Backend>(be: &B, a: &Args) -> Result<()> {
             out = Some(v);
         }
         let v = out.unwrap();
+        profile(be, "released decoder");
         eprintln!("base vs input: {:.2} dB", psnr(&v, &px));
         Some(v)
     };
@@ -133,6 +144,7 @@ pub fn run<B: Backend>(be: &B, a: &Args) -> Result<()> {
             out = Some(v);
         }
         let v = out.unwrap();
+        profile(be, "fast decoder");
         eprintln!("fast vs input: {:.2} dB", psnr(&v, &px));
         if let Some(b) = &base {
             eprintln!("fast vs base: {:.2} dB", psnr(&v, b));

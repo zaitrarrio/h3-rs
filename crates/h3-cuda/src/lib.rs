@@ -2260,7 +2260,15 @@ impl Backend for Cuda {
                     // tensors are VEC16_UE4M3 of the two operands; alpha / beta
                     // are f32 in the state buffer (POINTER_MODE_DEVICE); bias
                     // holds n bf16 values; workspace is LT_WORKSPACE.
-                    unsafe {
+                    let tag = || {
+                        format!(
+                            "gemm nvfp4 w4a4{} n={n} k={k}{}",
+                            if epi == 2 { "+gelu" } else { "" },
+                            if rows < 1024 { " (small)" } else { "" }
+                        )
+                    };
+                    self.count_flops(rows, n, k);
+                    self.timed(tag, || unsafe {
                         use lt_sys::cublasLtMatmulDescAttributes_t as A;
                         for (attr, v) in [
                             (A::CUBLASLT_MATMUL_DESC_A_SCALE_POINTER, asp),
@@ -2303,7 +2311,7 @@ impl Backend for Cuda {
                             self.stream.cu_stream() as *mut _,
                         )
                         .expect("cublasLt fp4 matmul");
-                    }
+                    });
                     let left = if act == Act::GeluTanh && epi == 2 {
                         0
                     } else {
