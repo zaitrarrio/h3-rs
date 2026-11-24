@@ -490,10 +490,10 @@ enum Cmd {
         seed: u64,
         #[arg(long, default_value_t = 256)]
         tile: usize,
-        #[arg(long, default_value = "out-2k.y4m")]
         /// Decode with the released 36-block VAE instead of the tree's `vae_fast/` decoder (which the release, and this command, use by default).
         #[arg(long, default_value_t = false)]
         released_vae: bool,
+        #[arg(long, default_value = "out-2k.y4m")]
         out: PathBuf,
     },
     /// RunPod serverless worker: take jobs (`{"args": [...], "uploads": {...}}`),
@@ -1955,6 +1955,75 @@ fn regen2k<B: Backend>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every output path stays a named flag (an attribute once slid onto the
+    /// field above `out` and made it positional: regen2k --out broke).
+    #[test]
+    fn output_flags_parse() {
+        let cli = Cli::try_parse_from([
+            "h3",
+            "regen2k",
+            "--regen-dir",
+            "r",
+            "--model-dir",
+            "m",
+            "--draft",
+            "d.y4m",
+            "--adaln-table",
+            "t.bin",
+            "--prompt",
+            "p",
+            "--out",
+            "x.y4m",
+            "--released-vae",
+        ])
+        .expect("regen2k --out parses");
+        let Cmd::Regen2k {
+            out, released_vae, ..
+        } = cli.cmd
+        else {
+            panic!("not regen2k")
+        };
+        assert_eq!((out, released_vae), (PathBuf::from("x.y4m"), true));
+        let cli = Cli::try_parse_from([
+            "h3",
+            "regen2k",
+            "--regen-dir",
+            "r",
+            "--model-dir",
+            "m",
+            "--draft",
+            "d",
+            "--adaln-table",
+            "t",
+            "--prompt",
+            "p",
+        ])
+        .expect("defaults parse");
+        let Cmd::Regen2k {
+            out, released_vae, ..
+        } = cli.cmd
+        else {
+            panic!("not regen2k")
+        };
+        assert_eq!((out, released_vae), (PathBuf::from("out-2k.y4m"), false));
+        for args in [
+            vec!["h3", "generate", "--prompt", "p", "--out", "a.y4m"],
+            vec![
+                "h3",
+                "vae-roundtrip",
+                "--model-dir",
+                "m",
+                "--input",
+                "i.y4m",
+                "--out-dir",
+                "o",
+            ],
+            vec!["h3", "parity-dit", "--transformer", "t", "--fixture", "f"],
+        ] {
+            Cli::try_parse_from(args.clone()).unwrap_or_else(|e| panic!("{args:?}: {e}"));
+        }
+    }
 
     #[test]
     fn tier_288p_is_on_the_grid() {
