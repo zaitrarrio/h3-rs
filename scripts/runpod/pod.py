@@ -11,9 +11,10 @@ sandbox, so this is the path `rp.py create` cannot take there.
 
 Prints `POD <id> <$/h> <gpu>` and exits 0, or exits 1 after TRIES.
 
-The account key goes to the pod as H3_RUNPOD_KEY: RunPod injects its own
-pod-scoped RUNPOD_API_KEY into every pod, which shadows an account key
-passed under that name and cannot terminate the pod through GraphQL.
+The pod gets no account key: RunPod injects a pod-scoped RUNPOD_API_KEY,
+which is what terminates the pod through GraphQL (the boot's `terminate`);
+an account key in the pod's env would replace it, and RunPod rejects account
+keys from inside pods (401 `{"error":{}}`).
 """
 import json
 import os
@@ -34,7 +35,7 @@ q = f"""mutation {{ podFindAndDeployOnDemand(input: {{
   name: {s(name)}, imageName: "nvidia/cuda:12.8.1-runtime-ubuntu24.04",
   dockerArgs: {s("bash -c " + shlex.quote(start))}, containerDiskInGb: {disk}, volumeInGb: 0, ports: "",
   {volume}
-  env: [{{key: "H3_RUNPOD_KEY", value: {s(KEY)}}}, {{key: "NVIDIA_DRIVER_CAPABILITIES", value: "all"}}]
+  env: [{{key: "NVIDIA_DRIVER_CAPABILITIES", value: "all"}}]
 }}) {{ id costPerHr machine {{ gpuDisplayName }} }} }}"""
 for i in range(tries):
     try:

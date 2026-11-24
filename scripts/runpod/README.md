@@ -31,8 +31,8 @@ or only the named subdirectories with the rest symlinked back, onto the
 container disk with eight parallel `cp` streams and repoints `/w/TREE`;
 size the container disk for it at `rp.py create` (last argument, GB). A
 command terminates the pod with `terminate`
-(exported by the boot: REST, then GraphQL, logging which one answered; the
-account key reaches the pod as `H3_RUNPOD_KEY`, because RunPod replaces a
-`RUNPOD_API_KEY` env with its own pod-scoped key, which could not terminate
-the pod); the boot's backstop terminates it after
+(exported by the boot: REST, then GraphQL, logging which one answered) with
+the pod-scoped `RUNPOD_API_KEY` RunPod injects; pods get no account key
+(one in the pod's env replaces the pod-scoped key, and RunPod answers an
+account key from inside a pod with 401); the boot's backstop terminates it after
 `H3_POD_HOURS` (default 4) regardless.

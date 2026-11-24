@@ -1,0 +1,11 @@
+adapter: /workspace/h3-rs/plug4/generator_lora.safetensors
+h3 demo: http://127.0.0.1:7860/
+engine: starting on cuda NVIDIA RTX PRO 6000 Blackwell Server Edition (sm_120) (0.0s)
+engine: checking the checkpoint (0.0s)
+engine: reading the prompt gallery (0.0s)
+engine: loading the transformer onto the device (50 blocks, mxfp8) (0.7s)
+engine: loading the decoders (87.1s)
+fast VAE decoder: /root/vf.safetensors in 4.5s
+engine: loading the upscaler (92.2s)
+engine: waiting for the device (92.2s)
+engine ready on cuda NVIDIA RTX PRO 6000 Blackwell Server Edition (sm_120) in 92.2s

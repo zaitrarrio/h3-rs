@@ -1,0 +1,15 @@
+adapter: /workspace/h3-rs/plug4/generator_lora.safetensors
+cuda NVIDIA RTX PRO 6000 Blackwell Server Edition (sm_120)
+load 90.1s
+prompt: 33 rows in 0.0s
+step 1/4 2.01s
+step 2/4 1.87s
+step 3/4 1.87s
+step 4/4 1.87s
+run 0: total 10.63s  prepare 0.07s  adaln 0.00s  denoise 7.62s (["2.01", "1.87", "1.87", "1.87"])  decode 2.72s  audio 0.18s
+wrote /root/res/unp-res.y4m (124 frames 832x480) and /root/res/unp-res.wav
+mux: ffmpeg -i /root/res/unp-res.y4m -i /root/res/unp-res.wav -c:v libx264 -pix_fmt yuv420p -c:a aac /root/res/unp-res.mp4
+
+real	1m53.493s
+user	3m24.160s
+sys	0m56.151s
