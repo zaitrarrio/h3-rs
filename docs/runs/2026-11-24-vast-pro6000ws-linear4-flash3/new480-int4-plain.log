@@ -1,0 +1,9 @@
+wgpu Vulkan: NVIDIA RTX PRO 6000 Blackwell Workstation Edition (NVIDIA 615.78.08)  |  h3-plug4 832x480x124  15100 tokens  50 blocks  weights int4-g64
+load (synthetic) 148.76s
+adaln tables 128.87s (96768 per block)
+forward 0: 29.381s (587.6 ms/block; ×50/50 blocks ≈ 29.38s)
+forward 1: 30.236s (604.7 ms/block; ×50/50 blocks ≈ 30.24s)
+
+real	5m37.941s
+user	3m15.382s
+sys	2m54.732s

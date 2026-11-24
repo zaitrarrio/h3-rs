@@ -507,9 +507,17 @@ State and invariants only; the reasoning is in `docs/design.md`.
   480p int4 draft): 56–58 s per forward against CUDA's 3.8 s; `flash` 37.5 %
   (428 vs 27 ms per call), the `linear3_q4` GEMMs 62 % (FFN up 282 vs 17.7
   ms), elementwise + head_split + norms 0.5 %: 16-bit activation storage
-  would save memory, not time. The lever is fastwan-rs's `linear4` /
-  `flash3` (not yet ported here). `H3_WGPU_F16=1` does not reach the int4
-  GEMMs.
+  would save memory, not time. fastwan-rs's `linear4` (128×128 tiles, 8×8
+  per thread, bit-identical to `linear3`; GEMMs of ≥ 128 rows) and `flash3`
+  (vec4 panels, four threads per softmax row, with h3's GQA / causal / VSA
+  sub-chunks / gate / pv8 / empty-chunk skip) are the defaults since
+  2026-11-24: 480p int4 53.1 → **29.3 s** per forward, 288p 15.3 → 8.5 s,
+  480p native 28.2 s, same memory; flash 403 → 233 ms, FFN up 265 → 140 ms
+  (33 TFLOP/s) on a Vast RTX PRO 6000 WS, 615.78.08
+  (`docs/runs/2026-11-24-vast-pro6000ws-linear4-flash3`; 197 / 197 there).
+  `H3_WGPU_LINEAR=3` / `H3_WGPU_FLASH=1` select the old kernels (their own
+  conformance pass). `H3_WGPU_F16=1` does not reach the int4 GEMMs, and
+  `linear4h` is not ported.
 - WGSL rules (from fastwan-rs): named vec4 accumulators, never arrays indexed
   in loops; zero loop-local accumulators explicitly; every declared binding
   statically used. A rounding recipe that must match the oracle divides with

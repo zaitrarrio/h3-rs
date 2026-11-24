@@ -1,0 +1,77 @@
+== new480-native
+exit 0
+peak GPU 53514 MiB
+wgpu Vulkan: NVIDIA RTX PRO 6000 Blackwell Workstation Edition (NVIDIA 615.78.08)  |  h3-plug4 832x480x124  15100 tokens  50 blocks  weights native
+load (synthetic) 203.31s
+adaln tables 132.25s (96768 per block)
+forward 0: 28.194s (563.9 ms/block; ×50/50 blocks ≈ 28.19s)
+forward 1: 29.049s (581.0 ms/block; ×50/50 blocks ≈ 29.05s)
+GPU time by kernel (57219.2 ms total, timestamp queries):
+    23359.0 ms  40.8%     100 calls   233.590 ms/call  flash3
+    13794.1 ms  24.1%     100 calls   137.941 ms/call  linear4_f16 28672x5376 None
+     9932.2 ms  17.4%     100 calls    99.322 ms/call  linear4_f16 21504x5376 None
+     6485.3 ms  11.3%     100 calls    64.853 ms/call  linear4_f16 5376x14336 None
+     3125.2 ms   5.5%     100 calls    31.252 ms/call  linear4_f16 5376x7168 None
+      212.6 ms   0.4%     200 calls     1.063 ms/call  elementwise
+      180.8 ms   0.3%     300 calls     0.603 ms/call  head_split
+      124.5 ms   0.2%     202 calls     0.616 ms/call  norm
+        2.3 ms   0.0%       2 calls     1.163 ms/call  linear4_f16 96x5376 None
+        2.0 ms   0.0%       2 calls     1.025 ms/call  linear4_f16 32x5376 None
+        1.1 ms   0.0%       2 calls     0.527 ms/call  linear4_f16 5376x96 None
+        0.0 ms   0.0%       2 calls     0.018 ms/call  linear4_f16 5376x32 None
+real	6m33.686s
+== new288-int4
+exit 0
+peak GPU 18236 MiB
+wgpu Vulkan: NVIDIA RTX PRO 6000 Blackwell Workstation Edition (NVIDIA 615.78.08)  |  h3-plug4 480x288x124  5665 tokens  50 blocks  weights int4-g64
+load (synthetic) 148.03s
+adaln tables 125.81s (96768 per block)
+forward 0: 8.509s (170.2 ms/block; ×50/50 blocks ≈ 8.51s)
+forward 1: 8.588s (171.8 ms/block; ×50/50 blocks ≈ 8.59s)
+GPU time by kernel (17074.7 ms total, timestamp queries):
+     5229.3 ms  30.6%     100 calls    52.293 ms/call  linear4_q4 28672x5376 None
+     3961.1 ms  23.2%     100 calls    39.611 ms/call  linear4_q4 21504x5376 None
+     3290.5 ms  19.3%     100 calls    32.905 ms/call  flash3
+     2925.2 ms  17.1%     100 calls    29.252 ms/call  linear4_q4 5376x14336 None
+     1472.3 ms   8.6%     100 calls    14.723 ms/call  linear4_q4 5376x7168 None
+       76.4 ms   0.4%     200 calls     0.382 ms/call  elementwise
+       68.5 ms   0.4%     300 calls     0.228 ms/call  head_split
+       46.6 ms   0.3%     202 calls     0.231 ms/call  norm
+        2.2 ms   0.0%       2 calls     1.118 ms/call  linear4_f16 96x5376 None
+        2.0 ms   0.0%       2 calls     1.020 ms/call  linear4_f16 32x5376 None
+        0.4 ms   0.0%       2 calls     0.224 ms/call  linear4_f16 5376x96 None
+        0.0 ms   0.0%       2 calls     0.017 ms/call  linear4_f16 5376x32 None
+real	4m51.520s
+== old288-int4
+exit 0
+peak GPU 18282 MiB
+wgpu Vulkan: NVIDIA RTX PRO 6000 Blackwell Workstation Edition (NVIDIA 615.78.08)  |  h3-plug4 480x288x124  5665 tokens  50 blocks  weights int4-g64
+load (synthetic) 146.76s
+adaln tables 125.19s (96768 per block)
+forward 0: 15.257s (305.1 ms/block; ×50/50 blocks ≈ 15.26s)
+forward 1: 15.512s (310.2 ms/block; ×50/50 blocks ≈ 15.51s)
+GPU time by kernel (30746.8 ms total, timestamp queries):
+     9759.4 ms  31.7%     100 calls    97.594 ms/call  linear3_q4 28672x5376 None
+     7342.8 ms  23.9%     100 calls    73.428 ms/call  linear3_q4 21504x5376 None
+     5956.4 ms  19.4%     100 calls    59.564 ms/call  flash
+     5003.9 ms  16.3%     100 calls    50.039 ms/call  linear3_q4 5376x14336 None
+     2489.7 ms   8.1%     100 calls    24.897 ms/call  linear3_q4 5376x7168 None
+       75.9 ms   0.2%     200 calls     0.379 ms/call  elementwise
+       68.1 ms   0.2%     300 calls     0.227 ms/call  head_split
+       46.1 ms   0.2%     202 calls     0.228 ms/call  norm
+        2.0 ms   0.0%       2 calls     1.004 ms/call  linear3_f16 32x5376 None
+        2.0 ms   0.0%       2 calls     0.987 ms/call  linear3_f16 96x5376 None
+        0.5 ms   0.0%       2 calls     0.274 ms/call  linear3_f16 5376x96 None
+        0.0 ms   0.0%       2 calls     0.015 ms/call  linear3_f16 5376x32 None
+real	5m3.304s
+== new480-int4-plain
+exit 0
+peak GPU 21604 MiB
+wgpu Vulkan: NVIDIA RTX PRO 6000 Blackwell Workstation Edition (NVIDIA 615.78.08)  |  h3-plug4 832x480x124  15100 tokens  50 blocks  weights int4-g64
+load (synthetic) 148.76s
+adaln tables 128.87s (96768 per block)
+forward 0: 29.381s (587.6 ms/block; ×50/50 blocks ≈ 29.38s)
+forward 1: 30.236s (604.7 ms/block; ×50/50 blocks ≈ 30.24s)
+real	5m37.941s
+exit 0
+
