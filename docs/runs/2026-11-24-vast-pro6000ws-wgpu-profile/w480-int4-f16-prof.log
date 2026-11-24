@@ -1,0 +1,22 @@
+wgpu Vulkan: NVIDIA RTX PRO 6000 Blackwell Workstation Edition (NVIDIA 615.71.09) +f16  |  h3-plug4 832x480x124  15100 tokens  50 blocks  weights int4-g64
+load (synthetic) 119.57s
+adaln tables 98.17s (96768 per block)
+forward 0: 56.144s (1122.9 ms/block; ×50/50 blocks ≈ 56.14s)
+forward 1: 57.842s (1156.8 ms/block; ×50/50 blocks ≈ 57.84s)
+GPU time by kernel (113908.9 ms total, timestamp queries):
+    42779.9 ms  37.6%     100 calls   427.799 ms/call  flash
+    28123.1 ms  24.7%     100 calls   281.231 ms/call  linear3_q4 28672x5376 None
+    21100.6 ms  18.5%     100 calls   211.006 ms/call  linear3_q4 21504x5376 None
+    14300.5 ms  12.6%     100 calls   143.005 ms/call  linear3_q4 5376x14336 None
+     7074.0 ms   6.2%     100 calls    70.740 ms/call  linear3_q4 5376x7168 None
+      214.1 ms   0.2%     200 calls     1.070 ms/call  elementwise
+      183.7 ms   0.2%     300 calls     0.612 ms/call  head_split
+      125.5 ms   0.1%     202 calls     0.621 ms/call  norm
+        3.7 ms   0.0%       2 calls     1.841 ms/call  linear3h 96x5376 None
+        2.0 ms   0.0%       2 calls     0.993 ms/call  linear3_f16 32x5376 None
+        1.9 ms   0.0%       2 calls     0.932 ms/call  linear3h 5376x96 None
+        0.0 ms   0.0%       2 calls     0.017 ms/call  linear3_f16 5376x32 None
+
+real	5m32.295s
+user	2m31.666s
+sys	2m9.041s

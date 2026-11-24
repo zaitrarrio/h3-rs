@@ -1,0 +1,64 @@
+== w480-int4-plain
+exit 0
+peak GPU 21650 MiB
+wgpu Vulkan: NVIDIA RTX PRO 6000 Blackwell Workstation Edition (NVIDIA 615.71.09)  |  h3-plug4 832x480x124  15100 tokens  50 blocks  weights int4-g64
+load (synthetic) 129.05s
+adaln tables 99.67s (96768 per block)
+forward 0: 56.067s (1121.3 ms/block; ×50/50 blocks ≈ 56.07s)
+forward 1: 57.769s (1155.4 ms/block; ×50/50 blocks ≈ 57.77s)
+real	5m43.116s
+user	2m28.795s
+sys	2m25.480s
+== w480-int4-prof
+exit 0
+peak GPU 21650 MiB
+wgpu Vulkan: NVIDIA RTX PRO 6000 Blackwell Workstation Edition (NVIDIA 615.71.09)  |  h3-plug4 832x480x124  15100 tokens  50 blocks  weights int4-g64
+load (synthetic) 128.64s
+adaln tables 101.82s (96768 per block)
+forward 0: 56.268s (1125.4 ms/block; ×50/50 blocks ≈ 56.27s)
+forward 1: 57.917s (1158.3 ms/block; ×50/50 blocks ≈ 57.92s)
+GPU time by kernel (114165.6 ms total, timestamp queries):
+    42828.8 ms  37.5%     100 calls   428.288 ms/call  flash
+    28204.0 ms  24.7%     100 calls   282.040 ms/call  linear3_q4 28672x5376 None
+    21165.5 ms  18.5%     100 calls   211.655 ms/call  linear3_q4 21504x5376 None
+    14341.7 ms  12.6%     100 calls   143.417 ms/call  linear3_q4 5376x14336 None
+     7095.2 ms   6.2%     100 calls    70.952 ms/call  linear3_q4 5376x7168 None
+      214.1 ms   0.2%     200 calls     1.070 ms/call  elementwise
+      183.9 ms   0.2%     300 calls     0.613 ms/call  head_split
+      125.5 ms   0.1%     202 calls     0.621 ms/call  norm
+        3.1 ms   0.0%       2 calls     1.566 ms/call  linear3_f16 96x5376 None
+        2.0 ms   0.0%       2 calls     0.994 ms/call  linear3_f16 32x5376 None
+        1.6 ms   0.0%       2 calls     0.808 ms/call  linear3_f16 5376x96 None
+        0.0 ms   0.0%       2 calls     0.016 ms/call  linear3_f16 5376x32 None
+real	5m45.203s
+user	2m31.170s
+sys	2m25.949s
+== c480-int4-prof
+exit 0
+peak GPU 18462 MiB
+cuda NVIDIA RTX PRO 6000 Blackwell Workstation Edition (sm_120)  |  h3-plug4 832x480x124  15100 tokens  50 blocks  weights int4-g64
+load (synthetic) 121.31s
+adaln tables 74.08s (96768 per block)
+forward 0: 3.821s (76.4 ms/block; ×50/50 blocks ≈ 3.82s)
+forward 1: 3.834s (76.7 ms/block; ×50/50 blocks ≈ 3.83s)
+profile (CUDA, synced per op): 7649.8 ms in ops; GEMMs 4475.6 ms at 260.0 TFLOP/s
+  attention (mma2, d128)                      2717.7 ms  35.5%     100 calls    27.177 ms/call
+  gemm n=28672 k=5376                         1774.8 ms  23.2%     100 calls    17.748 ms/call
+  gemm n=21504 k=5376                         1331.3 ms  17.4%     100 calls    13.313 ms/call
+  gemm n=5376 k=14336                          899.4 ms  11.8%     100 calls     8.994 ms/call
+  gemm n=5376 k=7168                           446.8 ms   5.8%     100 calls     4.468 ms/call
+  dequant int4                                 146.8 ms   1.9%     400 calls     0.367 ms/call
+  head_split (qk-norm + rope)                  101.2 ms   1.3%     300 calls     0.337 ms/call
+  swiglu                                        88.3 ms   1.2%     100 calls     0.883 ms/call
+  rms_norm (+residual, modulation)              76.7 ms   1.0%     202 calls     0.380 ms/call
+  gate_residual                                 43.6 ms   0.6%     100 calls     0.436 ms/call
+  gemm+bias n=32 k=5376 (small)                 22.4 ms   0.3%       2 calls    11.218 ms/call
+  gemm+bias n=96 k=5376                          0.5 ms   0.0%       2 calls     0.246 ms/call
+  gemm+bias n=5376 k=96                          0.3 ms   0.0%       2 calls     0.163 ms/call
+  copy (dtod)                                    0.0 ms   0.0%       2 calls     0.021 ms/call
+  gemm+bias n=5376 k=32 (small)                  0.0 ms   0.0%       2 calls     0.020 ms/call
+real	3m35.588s
+user	2m34.730s
+sys	2m7.582s
+exit 0
+

@@ -502,6 +502,14 @@ State and invariants only; the reasoning is in `docs/design.md`.
   f32): the CPU 8.2e-7 / 1.1e-6 (video / audio), CUDA 5.4e-3 / 5.0e-3, 2
   blocks 3.5e-3 / 4.3e-3 (`docs/runs/2026-11-24-runpod-roundA`); `--tiny`
   checks the pair locally.
+- WebGPU step profile (`docs/runs/2026-11-24-vast-pro6000ws-wgpu-profile`,
+  RTX PRO 6000 Workstation Edition, 615.71.09, `bench` synthetic weights,
+  480p int4 draft): 56–58 s per forward against CUDA's 3.8 s; `flash` 37.5 %
+  (428 vs 27 ms per call), the `linear3_q4` GEMMs 62 % (FFN up 282 vs 17.7
+  ms), elementwise + head_split + norms 0.5 %: 16-bit activation storage
+  would save memory, not time. The lever is fastwan-rs's `linear4` /
+  `flash3` (not yet ported here). `H3_WGPU_F16=1` does not reach the int4
+  GEMMs.
 - WGSL rules (from fastwan-rs): named vec4 accumulators, never arrays indexed
   in loops; zero loop-local accumulators explicitly; every declared binding
   statically used. A rounding recipe that must match the oracle divides with

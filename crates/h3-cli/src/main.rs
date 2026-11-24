@@ -301,9 +301,10 @@ enum Cmd {
         /// Transformer blocks to build (50 for the real model; fewer for a quick look).
         #[arg(long)]
         layers: Option<usize>,
-        /// Forwards to time.
+        /// Forwards to time (`--steps` is the model's Euler ladder, shared
+        /// with `generate`: the two used to clash and clap refused every call).
         #[arg(long, default_value_t = 2)]
-        steps: usize,
+        forwards: usize,
         #[arg(long, default_value_t = 256)]
         text_tokens: usize,
     },
@@ -846,7 +847,7 @@ fn main() -> Result<()> {
             attn,
             backend,
             layers,
-            steps,
+            forwards,
             text_tokens,
         } => {
             with_backend!(backend, |be| bench(
@@ -855,7 +856,7 @@ fn main() -> Result<()> {
                 &shape,
                 &attn,
                 layers,
-                steps,
+                forwards,
                 text_tokens
             )?)
         }
@@ -1955,6 +1956,17 @@ fn regen2k<B: Backend>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// clap's own consistency check over every subcommand: a flattened group
+    /// gaining a flag another field already had (`bench --steps`) made every
+    /// `h3 bench` call fail with "required argument steps".
+    #[test]
+    fn cli_definition_is_consistent() {
+        use clap::CommandFactory;
+        Cli::command().debug_assert();
+        Cli::try_parse_from(["h3", "bench", "--steps", "4", "--forwards", "1"])
+            .expect("bench --steps / --forwards parse");
+    }
 
     /// Every output path stays a named flag (an attribute once slid onto the
     /// field above `out` and made it positional: regen2k --out broke).
