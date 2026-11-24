@@ -265,8 +265,10 @@ h3 regen2k --regen-dir regen --model-dir h3 --draft fox.y4m --prompt "..." \
 ```
 
 The 2K latents are decoded by the base model's VAE, as in FastVideo's
-pipeline; the release's `vae_fast/` Sol decoder (windowed attention) is not
-used.
+pipeline. `--fast-vae <tree>/vae_fast` decodes them with the release's
+Sol-H3 decoder instead (windowed attention, one pass over the whole clip);
+`h3 vae-roundtrip --model-dir <h3-base> --input clip.y4m --fast-vae …`
+compares the two decoders on the same latents.
 
 ### Prompt-to-clip demo
 

@@ -557,14 +557,15 @@ pub fn engine<B: Backend>(
         )?;
         stage("loading the decoders");
         let vae_dir = model_dir.join("vae");
-        let vae = VideoVae::load_with(
+        let mut vae = VideoVae::load_with(
             &be,
             VideoVaeConfig::h3(),
             &SafetensorsDir::open(&vae_dir)?,
             visual_inputs,
-            !s.preview,
+            !s.preview && s.attn.fast_vae.is_none(),
             s.attn.decoder_weights,
         )?;
+        s.attn.attach_fast_vae(&be, &mut vae, s.preview)?;
         let audio_vae = AudioVae::load(
             &be,
             AudioVaeConfig::h3(),

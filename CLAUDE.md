@@ -319,8 +319,12 @@ State and invariants only; the reasoning is in `docs/design.md`.
   `pika-plug4` is LongLive-Plug's transfer to Pika Flex: Pika's task LoRA
   and the plug's stacked as one branch of rank 256 (the checker holds two
   stacked branches to their merge on the CPU and to the CPU on each
-  backend), the plug's four forwards, Pika's buckets; not yet run on real
-  weights. Run with real weights on the
+  backend), the plug's four forwards, Pika's buckets. On RunPod's Server
+  Edition (fast recipe, 768p, fox assets; `docs/runs/2026-11-24-runpod-
+  pika-plug4`, 183 / 183 checks): FL2VA denoise 33.6 s (4 × 8.3 s)
+  against Pika's 49.4 s (6 × 8.2 s), Ref2VA 47.3 s against 69.8 s, peak
+  41.9 / 43.9 GB; same scene and subject, a different sample (framing
+  moves: 11–13 dB Y), clean. Run with real weights on the
   600 W Server Edition (`docs/runs/2026-11-08-vast-pro6000-server-variants`):
   base T2VA (49 × 10.7 s), FL2VA (49 × 12.7 s), Ref2VA (49 × 18.3 s: the
   reference image is 7176 Qwen3-VL tokens at the contract's 2048 short
@@ -339,11 +343,31 @@ State and invariants only; the reasoning is in `docs/design.md`.
   activations apart: `copy` never mixes them (the vision tower's per-frame
   rope tables are uploaded, not copied). Renoise noise buffers span the
   conditioning rows (`flow_step` reads noise at the rows' offset).
-  `h3 regen2k` decodes with the base VAE like FastVideo's pipeline; the
-  release's `vae_fast/` Sol decoder (`blocks.N.attn.to_qkv`, 24 blocks,
-  16×16×5 attention windows, shifted on odd layers, 5 global rows per block,
-  window-local RoPE; ComfyUI `comfy/ldm/minimax/vae.py`) is not implemented
-  and paints a 16-pixel grid through the full-attention decoder.
+  `h3 regen2k` decodes with the base VAE like FastVideo's pipeline unless
+  `--fast-vae` is given.
+- Fast VAE decoder (`fast_vae.rs`, `--fast-vae FILE|DIR` on `generate` /
+  `regen2k` / `serve`, replacing the released decoder): the release's
+  `vae_fast/fast_h3_vae_noncausal_24l.safetensors` (Sana
+  `NonCausalViTDecoder`; not on the EU volume until a round fetches it).
+  It decodes the whole clip in one pass: 24 layers, 5×16×16 windows
+  shifted by 2 frames / half a window on odd layers (zero padding in front,
+  never cyclic: a border window is a smaller box), 5 global rows per native
+  5-latent block (they attend to their block plus themselves, a window to
+  its tokens plus the global rows of the 1–2 blocks it overlaps), RoPE
+  window-local. Windows are `Backend::box_rows` boxes: one launch gathers
+  every equal-sized window of a time slab (`window_runs`) into `[window·
+  heads, rows, d]`, one `attention` call runs them as heads, one scatter
+  writes token-major. The file's `to_qkv` is per head `[q|k|v]` and `ff.w1`
+  `[gate|up]`: the loader permutes both; a missed permute is 0.8 rel in the
+  oracle test. Held to a literal host transcription of the padded / masked
+  reference at 3e-7 (`matches_the_sana_transcription`); the checker has a
+  tiny case (CUDA 1.3e-2, 188 / 188). `h3 vae-roundtrip` encodes a video and
+  decodes the same latents with both decoders (times, PSNR). Server Edition
+  (`docs/runs/2026-11-24-runpod-fast-vae`): 768p 3.1–3.3 s against the
+  released decoder's 9.4 s (MXFP8 2.9 vs 6.6 s), 2K 11.3 s against 34.0 s;
+  34.5 dB (768p) / 39.7 dB (2K) from the released decoder's output, no
+  seams; a 768p draft's decode 8.65 → 2.71 s. The file is on the EU volume
+  (`open-h3-regenerate-2k/vae_fast/`). Opt-in.
 - LightX2V's MiniMax-H3 Turbo LoRAs (`h3-turbo4` / `-ref`, `h3-turbo8` /
   `-ref`, `lightx2v/Minimax-h3-Turbo`) and LongLive-Plug's CFG LoRA
   (`h3-cfg`, not combined with the few-step one, as its card advises) are
@@ -363,7 +387,11 @@ State and invariants only; the reasoning is in `docs/design.md`.
   one for the same seed, so never re-render a picked draft at another
   tier. On the 600 W Server Edition with `--tables` and the fast recipe: a
   480p draft in 8.6 s after load (TAEH3), 768p 30–35 s, Regen-2K 446 s
-  (`docs/runs/2026-11-17-vast-pro6000-turbo-cfg-draft`). Without
+  (`docs/runs/2026-11-17-vast-pro6000-turbo-cfg-draft`). The least VRAM
+  of any H3 path: a draft from `--embeds` (no text encoder) with
+  `--stream-blocks` peaks at **7.5 GB at 288p, 10.6 GB at 480p** (resident
+  28.8 / 31.4 GB) at the same speed (480p denoise 7.8 vs 7.6 s;
+  `docs/runs/2026-11-24-runpod-pika-plug4`). Without
   `--tables` every run spends ~46 s on the AdaLN tables.
 - `--tier 288p` is H3's 480×288 (288×480 at 9:16, 288×288 at 1:1:
   `canvas_size` with short edge 288 and a 480×288 budget), on the 32-pixel

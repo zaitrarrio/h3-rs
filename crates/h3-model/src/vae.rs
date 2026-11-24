@@ -411,6 +411,9 @@ pub struct VideoVae<B: Backend> {
     pub cfg: VideoVaeConfig,
     pub encoder: Option<Encoder<B>>,
     pub decoder: Option<Decoder<B>>,
+    /// The fast (Sol-H3) decoder: when set, [`VideoVae::decode`] runs it in
+    /// place of the released decoder (`--fast-vae`).
+    pub fast: Option<crate::fast_vae::FastDecoder<B>>,
 }
 
 /// Device-side scratch: allocate as needed (the VAE runs one tile at a time).
@@ -469,6 +472,7 @@ impl<B: Backend> VideoVae<B> {
             cfg,
             encoder: enc,
             decoder: dec,
+            fast: None,
         })
     }
 
@@ -1114,6 +1118,9 @@ impl<B: Backend> VideoVae<B> {
         tiling: Option<Tiling>,
         on_chunk: &mut dyn FnMut(&Volume),
     ) -> Result<usize> {
+        if let Some(fast) = &self.fast {
+            return fast.decode(be, z, on_chunk);
+        }
         let cfg = &self.cfg;
         let (pad, chunks, total) = self.temporal_plan(z.t)?;
         let z = z.pad_last_frame(pad);

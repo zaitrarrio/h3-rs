@@ -1008,7 +1008,86 @@ pub fn run_ops<B: Backend>(be: &B, tol: f32) -> Vec<CheckResult> {
     p.out
 }
 
+/// `box_rows` (the fast VAE decoder's window gather / scatter): a 2×2
+/// batch of boxes off every edge of a padded, per-head grid into the
+/// `[window·heads, rows, d]` layout, a token-major grid scattered from an
+/// attention output's `[rows, window·heads·d]`, and a repeated box (step
+/// 0); its own RNG so the other cases keep their draws.
+fn box_rows_check<B: Backend>(p: &mut Pair<'_, B>) {
+    use h3_core::backend::BoxRows;
+    let (be, cpu) = (p.be, &Cpu);
+    let mut r = Rng::new(91);
+    let grid = (4, 9, 11);
+    let g_rows = grid.0 * grid.1 * grid.2;
+    let (heads, width) = (3, 5);
+    let base = BoxRows {
+        grid,
+        t: (1, 3),
+        y: (2, 5),
+        x: (1, 6),
+        count: (2, 2),
+        step: (4, 5),
+        heads,
+        width,
+        grid_off: 2,
+        grid_head: g_rows + 3,
+        grid_row: 1,
+        packed_off: 1,
+        packed_win: heads * 32,
+        packed_head: 32,
+        packed_row: 1,
+    };
+    let rows = base.rows();
+    let cases = [
+        ("gather head-major", base, false),
+        ("scatter head-major", base, true),
+        (
+            "scatter token-major",
+            BoxRows {
+                grid_off: 1,
+                grid_head: 1,
+                grid_row: heads,
+                packed_off: 0,
+                packed_win: heads,
+                packed_head: 1,
+                packed_row: 4 * heads,
+                ..base
+            },
+            true,
+        ),
+        (
+            "gather repeated box",
+            BoxRows {
+                step: (0, 0),
+                ..base
+            },
+            false,
+        ),
+    ];
+    let g_len = (2 + heads * (g_rows + 3)) * width;
+    let p_len = (1 + 4 * heads * 32).max(4 * heads * rows) * width;
+    let g = r.normal(g_len);
+    let pk = r.normal(p_len);
+    for (name, b, scatter) in cases {
+        let (gg, gp) = (be.upload(&g), be.upload(&pk));
+        be.box_rows(&gg, &gp, &b, scatter);
+        let (cg, cp) = (cpu.upload(&g), cpu.upload(&pk));
+        cpu.box_rows(&cg, &cp, &b, scatter);
+        let (got, want) = if scatter {
+            (be.download(&gg), cpu.download(&cg))
+        } else {
+            (be.download(&gp), cpu.download(&cp))
+        };
+        p.record(
+            format!("box_rows {name}, 2x2 boxes 2x3x5 of 4x9x11"),
+            got,
+            want,
+        );
+    }
+}
+
 fn ops<B: Backend>(p: &mut Pair<'_, B>, rng: &mut Rng) {
+    box_rows_check(p);
     // linear: odd M/N/K, row offsets, every activation and weight format.
     for &(m, k, n, act) in &[
         (1, 8, 4, Act::None),
@@ -2128,6 +2207,34 @@ fn vae_check<B: Backend>(p: &mut Pair<'_, B>) {
     let got = run(&V(p.be));
     let want = run(&V(&Cpu));
     p.record("video vae tiny encode+decode", got, want);
+    // The fast (Sol-H3) decoder: both layer parities, border windows in y
+    // and x, a partial last block (7 latents = 5 + 2).
+    let fast = |be: &dyn ErasedFast| be.run();
+    trait ErasedFast {
+        fn run(&self) -> Vec<f32>;
+    }
+    struct F<'a, B: Backend>(&'a B);
+    impl<B: Backend> ErasedFast for F<'_, B> {
+        fn run(&self) -> Vec<f32> {
+            use crate::fast_vae::{FastDecoder, FastVaeConfig};
+            let be = self.0;
+            let cfg = FastVaeConfig::tiny(4);
+            let dec = FastDecoder::load(
+                be,
+                cfg,
+                &Synthetic { seed: 5 },
+                h3_core::quant::WeightQuant::Native,
+            )
+            .unwrap();
+            let z = Volume::from_data(4, 7, 5, 7, Rng::new(7).normal(4 * 7 * 5 * 7));
+            dec.decode_normalized(be, &z).unwrap().data
+        }
+    }
+    p.record(
+        "fast vae tiny decode 7x5x7 (windows, globals, shifts)",
+        fast(&F(p.be)),
+        fast(&F(&Cpu)),
+    );
 }
 
 fn audio_check<B: Backend>(p: &mut Pair<'_, B>) {

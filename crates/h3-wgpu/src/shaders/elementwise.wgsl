@@ -21,6 +21,9 @@
 //   op 19 trilinear resize:     x[c, t2, h2, w2] from y[c, t, h, w], align_corners=false
 //   op 20 vsa gate add:         x[tok, h, c] += aux[(h·slot + ui[tok] / off)·dim + c] · y[(h·len + tok)·dim + c]
 //                               (dense-plan VSA: dim = d, slots = heads, slot = nb, off = te, len = seq)
+//   op 21 box gather:           x[packed] = y[grid]   (Backend::box_rows; i over heads·rows·dim,
+//   op 22 box scatter:          x[grid] = y[packed]    grid t·h·w, box start pt,ph,pw, size t2,h2,w2,
+//                               rows = slots, grid off / head = off / stride, packed off / head = xoff / len)
 struct P { n: u32, op: u32, dim: u32, slots: u32, slot: u32, off: u32, xoff: u32, c: u32,
            t: u32, h: u32, w: u32, pt: u32, ph: u32, pw: u32, t2: u32, h2: u32,
            w2: u32, left: u32, len: u32, r: u32, frames: u32, stride: u32, col: u32, has_z: u32,

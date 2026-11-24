@@ -13,8 +13,8 @@
 //! `H3_ALLOW_SOFTWARE=1` accepts a CPU rasterizer (lavapipe) adapter.
 
 use h3_core::backend::{
-    Act, Backend, Conv1dShape, Conv3dShape, ConvEpilogue, ConvShape, ConvT1dShape, FlowStep, Gate,
-    HeadNorm, Modulation, Pad, Rope, Snake,
+    Act, Backend, BoxRows, Conv1dShape, Conv3dShape, ConvEpilogue, ConvShape, ConvT1dShape,
+    FlowStep, Gate, HeadNorm, Modulation, Pad, Rope, Snake,
 };
 use h3_core::quant::{Mxfp8, Q4, Q8};
 use h3_core::vsa::VsaSpec;
@@ -42,6 +42,7 @@ const CONV3D: &str = include_str!("shaders/conv3d.wgsl");
 const CONV3D_DIRECT: &str = include_str!("shaders/conv3d_direct.wgsl");
 const CONV1D: &str = include_str!("shaders/conv1d.wgsl");
 const CONVT1D: &str = include_str!("shaders/convt1d.wgsl");
+const BOX_ROWS: &str = include_str!("shaders/box_rows.wgsl");
 
 /// Token-sized GEMMs only take the f16-math path (activations of small
 /// projections can exceed f16's range).
@@ -1072,6 +1073,46 @@ impl Backend for Wgpu {
 
     fn buf_len(&self, buf: &GBuf) -> usize {
         buf.len
+    }
+
+    fn box_rows(&self, grid: &GBuf, packed: &GBuf, b: &BoxRows, scatter: bool) {
+        let n = b.len();
+        if n == 0 {
+            return;
+        }
+        assert!(
+            u32::try_from(n).is_ok(),
+            "box_rows: {n} elements exceed u32 indexing"
+        );
+        let pipe = self.pipeline("box_rows", || BOX_ROWS.to_string());
+        let p = [
+            n,
+            b.width,
+            b.rows(),
+            b.heads,
+            b.count.1,
+            b.grid.1,
+            b.grid.2,
+            b.t.0,
+            b.y.0,
+            b.x.0,
+            b.y.1 - b.y.0,
+            b.x.1 - b.x.0,
+            b.step.0,
+            b.step.1,
+            b.grid_off,
+            b.grid_head,
+            b.grid_row,
+            b.packed_off,
+            b.packed_win,
+            b.packed_head,
+            b.packed_row,
+            scatter as usize,
+            0,
+            0,
+        ]
+        .map(|v| v as u32);
+        self.dispatch(&pipe, &p, &[grid, packed], Self::grid(n.div_ceil(256)));
     }
 
     fn copy(&self, src: &GBuf, so: usize, dst: &GBuf, d: usize, len: usize) {

@@ -32,6 +32,7 @@ mod finish;
 mod gallery;
 mod inputs;
 mod media;
+mod roundtrip;
 mod serve;
 mod worker;
 
@@ -99,7 +100,7 @@ struct ModelArgs {
     steps: Option<usize>,
 }
 
-#[derive(clap::Args, Clone, Copy)]
+#[derive(clap::Args, Clone)]
 struct AttnArgs {
     #[arg(long, value_enum, default_value_t = AttnKind::Auto)]
     attention: AttnKind,
@@ -124,12 +125,38 @@ struct AttnArgs {
     /// The video decoder's block linears: native | mxfp8 (FP8 tensor cores on sm_100+) | int8.
     #[arg(long, default_value = "native")]
     decoder_weights: WeightQuant,
+    /// Decode with the fast (Sol-H3) VAE decoder instead of the released one: its `.safetensors` file or the Open-H3-Regenerate-2K tree (`vae_fast/`). Its block linears follow --decoder-weights.
+    #[arg(long)]
+    fast_vae: Option<PathBuf>,
     /// Tokens per FFN chunk (default: all).
     #[arg(long)]
     ffn_chunk: Option<usize>,
 }
 
 impl AttnArgs {
+    /// `--fast-vae`: load the fast decoder into `vae` (not for a TAE preview).
+    fn attach_fast_vae<B: Backend>(
+        &self,
+        be: &B,
+        vae: &mut VideoVae<B>,
+        preview: bool,
+    ) -> Result<()> {
+        if let (Some(p), false) = (&self.fast_vae, preview) {
+            let t0 = std::time::Instant::now();
+            vae.fast = Some(h3_model::fast_vae::FastDecoder::open(
+                be,
+                p,
+                self.decoder_weights,
+            )?);
+            eprintln!(
+                "fast VAE decoder: {} in {:.1}s",
+                p.display(),
+                t0.elapsed().as_secs_f64()
+            );
+        }
+        Ok(())
+    }
+
     fn attention(&self, v: &Variant) -> Attention {
         match (self.attention, v.vsa) {
             (AttnKind::Dense, _) | (AttnKind::Auto, None) => Attention::Dense {
@@ -278,6 +305,37 @@ enum Cmd {
         steps: usize,
         #[arg(long, default_value_t = 256)]
         text_tokens: usize,
+    },
+    /// Encode a video with the H3 VAE and decode it with the released and the fast (Sol-H3) decoders: time and PSNR.
+    VaeRoundtrip {
+        #[arg(long, value_enum, default_value_t = BackendKind::Auto)]
+        backend: BackendKind,
+        /// A tree with `vae/` (h3-base).
+        #[arg(long)]
+        model_dir: PathBuf,
+        /// The video (Y4M, PNG frames, …), sides multiples of 16.
+        #[arg(long)]
+        input: PathBuf,
+        /// The fast decoder (file or Open-H3-Regenerate-2K tree).
+        #[arg(long)]
+        fast_vae: Option<PathBuf>,
+        /// Use the first N frames.
+        #[arg(long)]
+        frames: Option<usize>,
+        /// Spatial tile of the released VAE in pixels (0: none; `generate`'s default is 256).
+        #[arg(long, default_value_t = 256)]
+        tile: usize,
+        #[arg(long, default_value = "native")]
+        decoder_weights: WeightQuant,
+        /// Only the fast decoder.
+        #[arg(long, default_value_t = false)]
+        skip_base: bool,
+        /// Decode each this many times (the first includes one-time setup).
+        #[arg(long, default_value_t = 1)]
+        repeat: usize,
+        /// Write base.y4m / fast.y4m here.
+        #[arg(long)]
+        out_dir: Option<PathBuf>,
     },
     /// Encode text prompts with Qwen3-VL into a gallery (`serve --gallery`, `generate --embeds`).
     Encode {
@@ -779,6 +837,31 @@ fn main() -> Result<()> {
                 steps,
                 text_tokens
             )?)
+        }
+        Cmd::VaeRoundtrip {
+            backend,
+            model_dir,
+            input,
+            fast_vae,
+            frames,
+            tile,
+            decoder_weights,
+            skip_base,
+            repeat,
+            out_dir,
+        } => {
+            let a = roundtrip::Args {
+                model_dir,
+                input,
+                fast_vae,
+                frames,
+                tiling: (tile > 0).then_some(Tiling { tile, overlap: 64 }),
+                decoder_weights,
+                skip_base,
+                repeat,
+                out_dir,
+            };
+            with_backend!(backend, |be| roundtrip::run(&be, &a)?)
         }
         Cmd::Encode {
             model_dir,
@@ -1458,14 +1541,15 @@ fn generate<B: Backend>(
         },
         &r.adapters,
     )?;
-    let vae = VideoVae::load_with(
+    let mut vae = VideoVae::load_with(
         be,
         vae_cfg,
         &SafetensorsDir::open(&vae_dir)?,
         need_encoder,
-        !preview,
+        !preview && attn.fast_vae.is_none(),
         attn.decoder_weights,
     )?;
+    attn.attach_fast_vae(be, &mut vae, preview)?;
     let audio_vae = AudioVae::load(
         be,
         AudioVaeConfig::h3(),
@@ -1715,16 +1799,17 @@ fn regen2k<B: Backend>(
         &cfg,
     )?;
     // FastVideo's pipeline decodes with the base model's VAE (36-block
-    // full-attention decoder); the release's `vae_fast/` Sol decoder uses
-    // windowed attention this crate does not implement.
-    let vae = VideoVae::load_with(
+    // full-attention decoder); `--fast-vae` takes the release's `vae_fast/`
+    // Sol decoder instead (`fast_vae.rs`).
+    let mut vae = VideoVae::load_with(
         be,
         VideoVaeConfig::h3(),
         &SafetensorsDir::open(&model_dir.join("vae"))?,
         true,
-        true,
+        attn.fast_vae.is_none(),
         attn.decoder_weights,
     )?;
+    attn.attach_fast_vae(be, &mut vae, false)?;
     let audio_vae = AudioVae::load(
         be,
         AudioVaeConfig::h3(),

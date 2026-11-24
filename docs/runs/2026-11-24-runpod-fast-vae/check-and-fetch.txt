@@ -1,0 +1,12 @@
+binary-ok
+name, driver_version, power.limit [W], clocks.max.sm [MHz], memory.total [MiB]
+NVIDIA RTX PRO 6000 Blackwell Server Edition, 595.112.07, 600.00 W, 2430 MHz, 97887 MiB
+== check cuda
+box_rows gather head-major, 2x2 boxes 2x3x5 of 4x9x11 rel 2.35e-3  ok
+box_rows scatter head-major, 2x2 boxes 2x3x5 of 4x9x11 rel 2.03e-3  ok
+box_rows scatter token-major, 2x2 boxes 2x3x5 of 4x9x11 rel 2.04e-3  ok
+box_rows gather repeated box, 2x2 boxes 2x3x5 of 4x9x11 rel 2.48e-3  ok
+fast vae tiny decode 7x5x7 (windows, globals, shifts) rel 1.28e-2  ok
+all 188 checks pass (tolerance 3e-2)
+/workspace/weights/open-h3-regenerate-2k/vae_fast/fast_h3_vae_noncausal_24l.safetensors: OK
+-rw------- 1 root root 6471256328 Nov 24 11:22 /root/vf.safetensors
