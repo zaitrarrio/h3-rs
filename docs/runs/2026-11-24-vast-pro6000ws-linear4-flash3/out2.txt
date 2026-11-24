@@ -1,0 +1,15 @@
+name, driver_version, power.limit [W], clocks.max.sm [MHz], memory.total [MiB]
+NVIDIA RTX PRO 6000 Blackwell Workstation Edition, 615.78.08, 600.00 W, 3090 MHz, 97887 MiB
+	deviceName         = NVIDIA RTX PRO 6000 Blackwell Workstation Edition
+	driverInfo         = 615.78.08
+	deviceName         = llvmpipe (LLVM 20.1.2, 256 bits)
+	driverInfo         = Mesa 25.2.8-0ubuntu0.24.04.5 (LLVM 20.1.2)
+== check wgpu (linear4 + flash3)
+wgpu Vulkan: NVIDIA RTX PRO 6000 Blackwell Workstation Edition (NVIDIA 615.78.08)
+all 197 checks pass (tolerance 1e-2)
+== check wgpu ops (linear3 + flash)
+all 152 checks pass (tolerance 1e-2)
+== check cuda ops
+all 152 checks pass (tolerance 3e-2)
+exit 0
+

@@ -24,11 +24,13 @@ use wgpu::util::DeviceExt;
 
 const COMMON: &str = include_str!("shaders/common.wgsl");
 const LINEAR3: &str = include_str!("shaders/linear3.wgsl");
+const LINEAR4: &str = include_str!("shaders/linear4.wgsl");
 const LINEAR3H: &str = include_str!("shaders/linear3h.wgsl");
 const NORM: &str = include_str!("shaders/norm.wgsl");
 const HEADS: &str = include_str!("shaders/head_split.wgsl");
 const ATTN: &str = include_str!("shaders/attention.wgsl");
 const FLASH: &str = include_str!("shaders/flash.wgsl");
+const FLASH3: &str = include_str!("shaders/flash3.wgsl");
 const VSA_POOL: &str = include_str!("shaders/vsa_pool.wgsl");
 const VSA_COARSE: &str = include_str!("shaders/vsa_coarse.wgsl");
 const ELEM: &str = include_str!("shaders/elementwise.wgsl");
@@ -51,6 +53,9 @@ const BOX_ROWS: &str = include_str!("shaders/box_rows.wgsl");
 const F16_MIN_ROWS: usize = 1024;
 /// Shared memory the flash kernel declares.
 const FLASH_SHARED: u32 = 2048 * 4 + 4160 * 4 + 5 * 64 * 4 + 4;
+/// Shared memory flash3 declares (vec4 panels, S tile, partial max / sum,
+/// row state, row tokens, the any-key flag).
+const FLASH3_SHARED: u32 = 512 * 16 + 4160 * 4 + 2 * 256 * 4 + 5 * 64 * 4 + 4;
 /// Shared memory the VSA coarse kernel declares (scores + keep flags + reduction).
 const COARSE_SHARED: u32 = 4096 * 4 + 128 * 4 + 256 * 4 + 4;
 const MAX_TILES: usize = 4096;
@@ -117,6 +122,13 @@ pub struct WgpuOptions {
     /// forcing the row-chunked GEMM / head_split paths (`H3_WGPU_MAX_BINDING`;
     /// the conformance test sets 64 KiB).
     pub max_binding: Option<u64>,
+    /// GEMM kernel (`H3_WGPU_LINEAR`): 4 = 128×128 tiles, 8×8 per thread
+    /// (`linear4.wgsl`, the default; GEMMs under 128 rows run 3), 3 = 64×64,
+    /// 4×4 per thread (`linear3.wgsl`). The two agree bit for bit.
+    pub linear: u32,
+    /// Attention kernel (`H3_WGPU_FLASH`): 3 = `flash3.wgsl` (the default),
+    /// 1 = `flash.wgsl`, 0 = neither (the unfused attention path).
+    pub flash: u32,
 }
 
 impl WgpuOptions {
@@ -127,6 +139,15 @@ impl WgpuOptions {
             max_binding: std::env::var("H3_WGPU_MAX_BINDING")
                 .ok()
                 .and_then(|v| v.parse().ok()),
+            linear: match std::env::var("H3_WGPU_LINEAR").as_deref() {
+                Ok("3") => 3,
+                _ => 4,
+            },
+            flash: match std::env::var("H3_WGPU_FLASH").as_deref() {
+                Ok("0") => 0,
+                Ok("1") => 1,
+                _ => 3,
+            },
         }
     }
 }
@@ -166,6 +187,10 @@ pub struct Wgpu {
     info: wgpu::AdapterInfo,
     attn_bk: usize,
     flash_ok: bool,
+    /// `flash3.wgsl` rather than `flash.wgsl` where flash runs.
+    flash3: bool,
+    /// `linear4.wgsl` for GEMMs of ≥ 128 rows.
+    linear4: bool,
     coarse_ok: bool,
     f16: bool,
     max_binding: Option<u64>,
@@ -237,8 +262,9 @@ impl Wgpu {
             .map_err(|e| InitError(format!("request_device: {e}")))?;
         let wgs = device.limits().max_compute_workgroup_storage_size as usize;
         let attn_bk = if wgs >= 2 * 32 * 128 * 4 { 32 } else { 16 };
-        let flash_ok = wgs >= FLASH_SHARED as usize
-            && std::env::var("H3_WGPU_FLASH").map_or(true, |v| v != "0");
+        let flash_ok = wgs >= FLASH_SHARED as usize && opts.flash != 0;
+        let flash3 = opts.flash == 3 && wgs >= FLASH3_SHARED as usize;
+        let linear4 = opts.linear == 4;
         let coarse_ok = wgs >= COARSE_SHARED as usize;
         let dummy = GBuf {
             buf: Arc::new(device.create_buffer(&wgpu::BufferDescriptor {
@@ -269,6 +295,8 @@ impl Wgpu {
             queue,
             attn_bk,
             flash_ok,
+            flash3,
+            linear4,
             coarse_ok,
             f16,
             max_binding: opts.max_binding,
@@ -752,17 +780,24 @@ impl Wgpu {
             Act::Silu => 3,
         };
         let half = self.f16 && w.f16 && rows >= F16_MIN_ROWS;
+        // 128×128 tiles for GEMMs of 128+ rows (RTX PRO 6000 profile: the
+        // linear3 GEMMs were 62 % of a 480p int4 step); f16 math stays on
+        // its 64×64 kernel.
+        let (src, tile, name) = if self.linear4 && rows >= 128 && !half {
+            (LINEAR4, 128, "linear4")
+        } else {
+            (LINEAR3, 64, "linear3")
+        };
         let pipe = if let Some((kind, ..)) = &w.quant {
             match kind {
-                Quant::Q8 => self.pipeline("linear3_q8", || Self::q8_src(LINEAR3)),
-                Quant::Q4 => self.pipeline("linear3_q4", || Self::q4_src(LINEAR3)),
+                Quant::Q8 => self.pipeline(&format!("{name}_q8"), || Self::q8_src(src)),
+                Quant::Q4 => self.pipeline(&format!("{name}_q4"), || Self::q4_src(src)),
             }
         } else if half {
             self.pipeline("linear3h", || LINEAR3H.to_string())
         } else {
-            self.pipeline(if w.f16 { "linear3_f16" } else { "linear3_f32" }, || {
-                Self::weight_src(LINEAR3, w.f16)
-            })
+            let key = format!("{name}_{}", if w.f16 { "f16" } else { "f32" });
+            self.pipeline(&key, || Self::weight_src(src, w.f16))
         };
         let p = [
             rows as u32,
@@ -777,7 +812,7 @@ impl Wgpu {
         let b = bias.unwrap_or(&self.dummy);
         let lim = self.max_binding_bytes();
         if (x.len as u64) * 4 <= lim && (y.len as u64) * 4 <= lim {
-            let groups = (w.rows.div_ceil(64) as u32, rows.div_ceil(64) as u32, 1);
+            let groups = (w.rows.div_ceil(tile) as u32, rows.div_ceil(tile) as u32, 1);
             return match &w.quant {
                 Some((_, scales, _)) => {
                     self.dispatch(&pipe, &p, &[x, &w.buf, b, y, scales], groups)
@@ -800,7 +835,7 @@ impl Wgpu {
             pc[3] = xo as u32;
             pc[4] = yo as u32;
             let (xr, yr) = (Some(xr), Some(yr));
-            let groups = (w.rows.div_ceil(64) as u32, n.div_ceil(64) as u32, 1);
+            let groups = (w.rows.div_ceil(tile) as u32, n.div_ceil(tile) as u32, 1);
             match &w.quant {
                 Some((_, scales, _)) => self.dispatch_ranges(
                     &pipe,
@@ -983,7 +1018,11 @@ impl Wgpu {
         vsa: Option<(&GVsa, Option<&GBuf>)>,
         pv8: Option<(&GBuf, &GBuf)>,
     ) {
-        let pipe = self.pipeline("flash", || FLASH.to_string());
+        let pipe = if self.flash3 {
+            self.pipeline("flash3", || FLASH3.to_string())
+        } else {
+            self.pipeline("flash", || FLASH.to_string())
+        };
         let (nb, tile, sub, has_gate) = vsa.map_or((0, 64, 1, 0), |(s, g)| {
             (s.nb, s.tile, s.sub, g.is_some() as u32)
         });
