@@ -1,0 +1,17 @@
+adapter: /root/pp/ref2va/adapter.safetensors
+adapter: /root/pp/generator_lora.safetensors
+cuda NVIDIA RTX PRO 6000 Blackwell Server Edition (sm_120)
+load 64.4s
+text encoder: Stream, Bf16, opened in 1.0s
+prompt: 7209 rows in 53.7s
+step 1/4 12.29s
+step 2/4 11.65s
+step 3/4 11.69s
+step 4/4 11.71s
+run 0: total 105.83s  prepare 0.11s  adaln 39.59s  denoise 47.34s (["12.29", "11.65", "11.69", "11.71"])  decode 7.96s  audio 0.18s
+wrote /root/res/pplug-ref2va.y4m (124 frames 1344x768) and /root/res/pplug-ref2va.wav
+mux: ffmpeg -i /root/res/pplug-ref2va.y4m -i /root/res/pplug-ref2va.wav -c:v libx264 -pix_fmt yuv420p -c:a aac /root/res/pplug-ref2va.mp4
+
+real	3m57.528s
+user	5m19.135s
+sys	2m8.537s

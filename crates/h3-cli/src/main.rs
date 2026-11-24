@@ -322,8 +322,8 @@ enum Cmd {
         /// Use the first N frames.
         #[arg(long)]
         frames: Option<usize>,
-        /// Spatial tile of the released VAE in pixels (0: none).
-        #[arg(long, default_value_t = 0)]
+        /// Spatial tile of the released VAE in pixels (0: none; `generate`'s default is 256).
+        #[arg(long, default_value_t = 256)]
         tile: usize,
         #[arg(long, default_value = "native")]
         decoder_weights: WeightQuant,

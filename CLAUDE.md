@@ -319,8 +319,12 @@ State and invariants only; the reasoning is in `docs/design.md`.
   `pika-plug4` is LongLive-Plug's transfer to Pika Flex: Pika's task LoRA
   and the plug's stacked as one branch of rank 256 (the checker holds two
   stacked branches to their merge on the CPU and to the CPU on each
-  backend), the plug's four forwards, Pika's buckets; not yet run on real
-  weights. Run with real weights on the
+  backend), the plug's four forwards, Pika's buckets. On RunPod's Server
+  Edition (fast recipe, 768p, fox assets; `docs/runs/2026-11-24-runpod-
+  pika-plug4`, 183 / 183 checks): FL2VA denoise 33.6 s (4 × 8.3 s)
+  against Pika's 49.4 s (6 × 8.2 s), Ref2VA 47.3 s against 69.8 s, peak
+  41.9 / 43.9 GB; same scene and subject, a different sample (framing
+  moves: 11–13 dB Y), clean. Run with real weights on the
   600 W Server Edition (`docs/runs/2026-11-08-vast-pro6000-server-variants`):
   base T2VA (49 × 10.7 s), FL2VA (49 × 12.7 s), Ref2VA (49 × 18.3 s: the
   reference image is 7176 Qwen3-VL tokens at the contract's 2048 short
@@ -363,7 +367,11 @@ State and invariants only; the reasoning is in `docs/design.md`.
   one for the same seed, so never re-render a picked draft at another
   tier. On the 600 W Server Edition with `--tables` and the fast recipe: a
   480p draft in 8.6 s after load (TAEH3), 768p 30–35 s, Regen-2K 446 s
-  (`docs/runs/2026-11-17-vast-pro6000-turbo-cfg-draft`). Without
+  (`docs/runs/2026-11-17-vast-pro6000-turbo-cfg-draft`). The least VRAM
+  of any H3 path: a draft from `--embeds` (no text encoder) with
+  `--stream-blocks` peaks at **7.5 GB at 288p, 10.6 GB at 480p** (resident
+  28.8 / 31.4 GB) at the same speed (480p denoise 7.8 vs 7.6 s;
+  `docs/runs/2026-11-24-runpod-pika-plug4`). Without
   `--tables` every run spends ~46 s on the AdaLN tables.
 - `--tier 288p` is H3's 480×288 (288×480 at 9:16, 288×288 at 1:1:
   `canvas_size` with short edge 288 and a 480×288 budget), on the 32-pixel
