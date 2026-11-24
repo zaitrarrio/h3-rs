@@ -343,11 +343,26 @@ State and invariants only; the reasoning is in `docs/design.md`.
   activations apart: `copy` never mixes them (the vision tower's per-frame
   rope tables are uploaded, not copied). Renoise noise buffers span the
   conditioning rows (`flow_step` reads noise at the rows' offset).
-  `h3 regen2k` decodes with the base VAE like FastVideo's pipeline; the
-  release's `vae_fast/` Sol decoder (`blocks.N.attn.to_qkv`, 24 blocks,
-  16×16×5 attention windows, shifted on odd layers, 5 global rows per block,
-  window-local RoPE; ComfyUI `comfy/ldm/minimax/vae.py`) is not implemented
-  and paints a 16-pixel grid through the full-attention decoder.
+  `h3 regen2k` decodes with the base VAE like FastVideo's pipeline unless
+  `--fast-vae` is given.
+- Fast VAE decoder (`fast_vae.rs`, `--fast-vae FILE|DIR` on `generate` /
+  `regen2k` / `serve`, replacing the released decoder): the release's
+  `vae_fast/fast_h3_vae_noncausal_24l.safetensors` (Sana
+  `NonCausalViTDecoder`; not on the EU volume until a round fetches it).
+  It decodes the whole clip in one pass: 24 layers, 5×16×16 windows
+  shifted by 2 frames / half a window on odd layers (zero padding in front,
+  never cyclic: a border window is a smaller box), 5 global rows per native
+  5-latent block (they attend to their block plus themselves, a window to
+  its tokens plus the global rows of the 1–2 blocks it overlaps), RoPE
+  window-local. Windows are `Backend::box_rows` boxes: one launch gathers
+  every equal-sized window of a time slab (`window_runs`) into `[window·
+  heads, rows, d]`, one `attention` call runs them as heads, one scatter
+  writes token-major. The file's `to_qkv` is per head `[q|k|v]` and `ff.w1`
+  `[gate|up]`: the loader permutes both; a missed permute is 0.8 rel in the
+  oracle test. Held to a literal host transcription of the padded / masked
+  reference at 3e-7 (`matches_the_sana_transcription`); the checker has a
+  tiny case. `h3 vae-roundtrip` encodes a video and decodes the same latents
+  with both decoders (times, PSNR). Not yet run on a GPU.
 - LightX2V's MiniMax-H3 Turbo LoRAs (`h3-turbo4` / `-ref`, `h3-turbo8` /
   `-ref`, `lightx2v/Minimax-h3-Turbo`) and LongLive-Plug's CFG LoRA
   (`h3-cfg`, not combined with the few-step one, as its card advises) are
