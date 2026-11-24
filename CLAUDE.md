@@ -394,8 +394,10 @@ State and invariants only; the reasoning is in `docs/design.md`.
   34.5 dB (768p) / 39.7 dB (2K) from the released decoder's output, no
   seams; a 768p draft's decode 8.65 → 2.71 s. `box_rows` moves 16 bytes
   per thread when the width allows (`fw_box_rows16`): 2K 1317 → 473 ms of
-  gathers, decode 11.85 → 11.38 s, of which 6.76 s are kernels
-  (`…-runpod-roundA`). The file is on the EU volume
+  gathers; with the chunk thread's crop and denormalise in one pass
+  (`crop_t_denormalize`) the 2K decode is 10.7–10.9 s (was 11.85–12.08),
+  6.86 s of it the forward, 1.58 s the heads and bf16 downloads
+  (`H3_PROFILE=1` prints these host spans; `…-runpod-roundC`). The file is on the EU volume
   (`open-h3-regenerate-2k/vae_fast/`). Opt-in for `generate` / `serve`,
   the default for `regen2k`. WebGPU at 768p: 15.0 s against the released
   decoder's 52.9 s for 68 frames; the token-row buffers bind whole, so
@@ -428,13 +430,16 @@ State and invariants only; the reasoning is in `docs/design.md`.
   other candidates: 13.6 dB once; `docs/runs/2026-11-24-runpod-validate`). With `--weights int4
   --stream-blocks --ffn-chunk 4096` (CUDA) **8.9 GB at 288p, 10.1 GB at
   480p** (int4 resident 23.9 GB at 2.9 s per step, a clean other sample),
-  but streamed int4 ran 11 s per step: the codes were packed on the host
-  per upload from unlocked memory, now kept packed and page-locked
-  (`Q4Packed`, `weight_q4_packed`; not re-measured;
-  `docs/runs/2026-11-24-runpod-roundA`). WebGPU int4 peaked at 47 GB
-  resident (54 GB streamed) with the host a whole step ahead of the GPU:
-  it now waits once more than `H3_WGPU_INFLIGHT` (4) submissions are
-  outstanding, so dropped buffers are freed (not re-measured). Without
+  at resident speed (480p 2.89 vs 2.87 s per step, byte-identical; 288p
+  0.94 s, 5.8 s after load) since streamed int4 stays packed and
+  page-locked on the host (`Q4Packed`, `weight_q4_packed`; packing per
+  upload made it 11 s; `docs/runs/2026-11-24-runpod-roundA`, `…-roundC`).
+  WebGPU ran a whole step ahead of the GPU, so no dropped buffer was freed
+  until a download; it now waits once more than `H3_WGPU_INFLIGHT` (4)
+  submissions are outstanding: 480p int4 streamed 54.5 → 16.5 GB, resident
+  plateau 39.4 → 27.4 GB, same speed (55 s per step) and bytes. A transient
+  right after load still sets the WebGPU peaks (47.3 GB resident, 16.2 GB
+  at 288p streamed; cause not found). Without
   `--tables` every run spends ~46 s on the AdaLN tables.
 - `--tier 288p` is H3's 480×288 (288×480 at 9:16, 288×288 at 1:1:
   `canvas_size` with short edge 288 and a 480×288 budget), on the 32-pixel

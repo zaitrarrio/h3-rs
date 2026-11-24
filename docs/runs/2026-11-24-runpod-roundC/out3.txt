@@ -1,0 +1,37 @@
+== WebGPU int4 drafts with the in-flight bound
+== w288-int4-stream-ffn (wgpu)
+exit 0
+peak GPU 16154 MiB
+wgpu Vulkan: NVIDIA RTX PRO 6000 Blackwell Server Edition (NVIDIA 595.112.07)
+load 80.5s
+step 1/4 15.57s
+step 2/4 15.46s
+step 3/4 15.49s
+step 4/4 15.44s
+run 0: total 88.71s  prepare 0.76s  adaln 0.00s  denoise 61.97s (["15.57", "15.46", "15.49", "15.44"])  decode 25.63s  audio 0.30s
+real	2m51.270s
+== w480-int4 (wgpu)
+exit 0
+peak GPU 47321 MiB
+wgpu Vulkan: NVIDIA RTX PRO 6000 Blackwell Server Edition (NVIDIA 595.112.07)
+load 90.6s
+step 1/4 54.32s
+step 2/4 54.17s
+step 3/4 54.18s
+step 4/4 54.17s
+run 0: total 269.41s  prepare 1.08s  adaln 0.00s  denoise 216.85s (["54.32", "54.17", "54.18", "54.17"])  decode 51.07s  audio 0.30s
+real	6m1.590s
+== w480-int4-stream-ffn (wgpu)
+exit 0
+peak GPU 16519 MiB
+wgpu Vulkan: NVIDIA RTX PRO 6000 Blackwell Server Edition (NVIDIA 595.112.07)
+load 97.0s
+step 1/4 55.23s
+step 2/4 55.14s
+step 3/4 55.07s
+step 4/4 55.06s
+run 0: total 272.93s  prepare 0.80s  adaln 0.00s  denoise 220.50s (["55.23", "55.14", "55.07", "55.06"])  decode 51.25s  audio 0.30s
+real	6m12.085s
+w480-int4 vs w480-int4-stream-ffn: PSNR y:inf u:inf v:inf average:inf min:inf max:inf
+exit 0
+
