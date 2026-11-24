@@ -25,7 +25,7 @@
 //! does).
 
 use crate::linear::{Linear, load_plain};
-use crate::vae::{Volume, denormalize_pixels};
+use crate::vae::{Volume, crop_t_denormalize};
 use h3_core::backend::{Act, Backend, BoxRows, Gate, HeadNorm, Modulation, Rope};
 use h3_core::quant::{Mxfp8, Q8, WeightQuant};
 use h3_core::rope::vae_fast_rope;
@@ -717,32 +717,55 @@ impl<B: Backend> FastDecoder<B> {
     /// [`crate::vae::VideoVae::decode`]'s contract: denormalised latents in,
     /// frames in `[0, 1]` to `on_chunk` (one native block at a time).
     pub fn decode(&self, be: &B, z: &Volume, on_chunk: &mut dyn FnMut(&Volume)) -> Result<usize> {
+        // `H3_PROFILE=1`: where the wall time goes on the host side (the
+        // forward until its rows are ready, then per chunk the head's kernels
+        // with the download, the wait for the previous chunk's conversion and
+        // the caller's callback). Timing only: the bytes do not change.
+        let prof = std::env::var_os("H3_PROFILE").is_some_and(|v| v != "0");
+        let t_all = std::time::Instant::now();
         let rows = self.forward(be, z)?;
+        if prof {
+            be.sync();
+        }
+        let t_fwd = t_all.elapsed().as_secs_f64();
         let trim = self.cfg.trim;
         let mut written = 0;
+        let (mut t_dl, mut t_wait, mut t_cb) = (0.0, 0.0, 0.0);
         std::thread::scope(|sc| {
             let mut pending: Option<std::thread::ScopedJoinHandle<'_, Volume>> = None;
-            for i in 0..z.t.div_ceil(self.cfg.block) {
-                let (pix, (c, ft, ph, pw)) = self.head_block(be, &rows, (z.t, z.h, z.w), i);
-                let data = be.download(&pix);
-                if let Some(p) = pending.take() {
+            let mut finish =
+                |p: std::thread::ScopedJoinHandle<'_, Volume>, t_wait: &mut f64, t_cb: &mut f64| {
+                    let t0 = std::time::Instant::now();
                     let px = p.join().expect("fast decode chunk thread");
+                    *t_wait += t0.elapsed().as_secs_f64();
+                    let t0 = std::time::Instant::now();
                     written += px.t;
                     on_chunk(&px);
+                    *t_cb += t0.elapsed().as_secs_f64();
+                };
+            for i in 0..z.t.div_ceil(self.cfg.block) {
+                let t0 = std::time::Instant::now();
+                let (pix, (c, ft, ph, pw)) = self.head_block(be, &rows, (z.t, z.h, z.w), i);
+                let data = be.download(&pix);
+                t_dl += t0.elapsed().as_secs_f64();
+                if let Some(p) = pending.take() {
+                    finish(p, &mut t_wait, &mut t_cb);
                 }
                 pending = Some(sc.spawn(move || {
-                    let mut v =
-                        Volume::from_data(c, ft, ph, pw, data).crop(trim, ft - trim, 0, ph, 0, pw);
-                    denormalize_pixels(&mut v);
-                    v
+                    crop_t_denormalize(&Volume::from_data(c, ft, ph, pw, data), trim, ft - trim)
                 }));
             }
             if let Some(p) = pending.take() {
-                let px = p.join().expect("fast decode chunk thread");
-                written += px.t;
-                on_chunk(&px);
+                finish(p, &mut t_wait, &mut t_cb);
             }
         });
+        if prof {
+            eprintln!(
+                "fast vae host: total {:.2}s = forward {t_fwd:.2}s + heads/downloads {t_dl:.2}s + \
+                 waiting on conversion {t_wait:.2}s + callback {t_cb:.2}s",
+                t_all.elapsed().as_secs_f64()
+            );
+        }
         let want = self.cfg.frames(z.t);
         if written != want {
             return Err(Error::Geometry(format!(

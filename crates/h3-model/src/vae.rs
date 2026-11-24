@@ -1257,6 +1257,30 @@ fn finish_chunk(
 }
 
 /// `p · std + mean`, clamped to `[0, 1]`.
+/// `x.crop(t0, nt, ..)` followed by [`denormalize_pixels`] in one parallel
+/// pass over the kept frames (the same f32 operations, so the same bytes): the
+/// fast decoder's chunk thread did two passes over every 2K chunk.
+pub fn crop_t_denormalize(x: &Volume, t0: usize, nt: usize) -> Volume {
+    assert!(t0 + nt <= x.t, "crop out of range");
+    let plane = x.h * x.w;
+    let mut o = Volume::zeros(x.c, nt, x.h, x.w);
+    if plane == 0 {
+        return o;
+    }
+    o.data
+        .par_chunks_mut(plane)
+        .enumerate()
+        .for_each(|(i, dst)| {
+            let (c, t) = (i / nt, i % nt);
+            let (m, s) = (PIXEL_MEAN[c.min(2)], PIXEL_STD[c.min(2)]);
+            let src = &x.data[(c * x.t + t0 + t) * plane..][..plane];
+            for (d, &v) in dst.iter_mut().zip(src) {
+                *d = (v * s + m).clamp(0.0, 1.0);
+            }
+        });
+    o
+}
+
 pub fn denormalize_pixels(x: &mut Volume) {
     let inner = x.t * x.h * x.w;
     let plane = (x.h * x.w).max(1);
@@ -1277,6 +1301,15 @@ mod tests {
     use super::*;
     use h3_core::weights::Synthetic;
     use h3_cpu::Cpu;
+
+    #[test]
+    fn crop_t_denormalize_matches_the_two_passes() {
+        let mut r = h3_core::rng::Rng::new(3);
+        let x = Volume::from_data(3, 9, 5, 7, r.normal(3 * 9 * 5 * 7));
+        let mut want = x.crop(3, 6, 0, 5, 0, 7);
+        denormalize_pixels(&mut want);
+        assert_eq!(crop_t_denormalize(&x, 3, 6).data, want.data);
+    }
 
     #[test]
     fn tiles_and_blend() {
