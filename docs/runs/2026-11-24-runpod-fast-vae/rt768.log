@@ -1,0 +1,16 @@
+vae load 6.1s
+encode 124 frames 1344x768 -> latents 37x48x84 in 50.64s
+base decode 0: 124 frames in 9.29s
+base decode 1: 124 frames in 9.39s
+base vs input: 33.16 dB
+fast vae load 3.9s
+fast decode 0: 124 frames in 3.25s
+fast decode 1: 124 frames in 3.32s
+fast vs input: 31.61 dB
+fast vs base: 34.52 dB
+wrote /root/res/rt768/fast.y4m
+wrote /root/res/rt768/base.y4m
+
+real	1m43.826s
+user	1m35.414s
+sys	0m46.418s

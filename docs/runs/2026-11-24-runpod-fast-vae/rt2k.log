@@ -1,0 +1,16 @@
+vae load 5.1s
+encode 124 frames 2560x1440 -> latents 37x90x160 in 188.17s
+base decode 0: 124 frames in 33.97s
+base decode 1: 124 frames in 33.97s
+base vs input: 34.03 dB
+fast vae load 4.0s
+fast decode 0: 124 frames in 11.24s
+fast decode 1: 124 frames in 11.69s
+fast vs input: 33.49 dB
+fast vs base: 39.65 dB
+wrote /root/res/rt2k/fast.y4m
+wrote /root/res/rt2k/base.y4m
+
+real	5m22.517s
+user	5m6.940s
+sys	1m58.038s

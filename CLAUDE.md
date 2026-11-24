@@ -361,8 +361,13 @@ State and invariants only; the reasoning is in `docs/design.md`.
   `[gate|up]`: the loader permutes both; a missed permute is 0.8 rel in the
   oracle test. Held to a literal host transcription of the padded / masked
   reference at 3e-7 (`matches_the_sana_transcription`); the checker has a
-  tiny case. `h3 vae-roundtrip` encodes a video and decodes the same latents
-  with both decoders (times, PSNR). Not yet run on a GPU.
+  tiny case (CUDA 1.3e-2, 188 / 188). `h3 vae-roundtrip` encodes a video and
+  decodes the same latents with both decoders (times, PSNR). Server Edition
+  (`docs/runs/2026-11-24-runpod-fast-vae`): 768p 3.1–3.3 s against the
+  released decoder's 9.4 s (MXFP8 2.9 vs 6.6 s), 2K 11.3 s against 34.0 s;
+  34.5 dB (768p) / 39.7 dB (2K) from the released decoder's output, no
+  seams; a 768p draft's decode 8.65 → 2.71 s. The file is on the EU volume
+  (`open-h3-regenerate-2k/vae_fast/`). Opt-in.
 - LightX2V's MiniMax-H3 Turbo LoRAs (`h3-turbo4` / `-ref`, `h3-turbo8` /
   `-ref`, `lightx2v/Minimax-h3-Turbo`) and LongLive-Plug's CFG LoRA
   (`h3-cfg`, not combined with the few-step one, as its card advises) are
