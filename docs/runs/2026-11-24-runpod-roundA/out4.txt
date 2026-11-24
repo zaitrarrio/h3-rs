@@ -1,0 +1,10 @@
+== regen2k peak memory (denoise state freed before the decode)
+exit 0
+peak GPU 80524 MiB
+step 3/3 99.09s
+regen: total 416.0s  prepare 110.0s  steps ["98.6", "99.1", "99.1"]  decode 9.1s
+wrote /root/res/regen.y4m (121 frames 2560x1440, silent)
+real	8m56.921s
+user	7m5.321s
+sys	4m31.162s
+exit 0

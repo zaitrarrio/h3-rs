@@ -24,7 +24,7 @@ use h3_core::backend::{
     Act, Backend, BoxRows, Conv1dShape, Conv3dShape, ConvEpilogue, ConvShape, ConvT1dShape,
     FlowStep, Gate, HeadNorm, Modulation, Pad, Rope, Snake,
 };
-use h3_core::quant::{Mxfp8, Nvfp4, Q4, Q8, mx_scale_len};
+use h3_core::quant::{Mxfp8, Nvfp4, Q4, Q4Packed, Q8, mx_scale_len};
 use h3_core::vsa::VsaSpec;
 use half::bf16;
 use rayon::prelude::*;
@@ -1929,18 +1929,30 @@ impl Backend for Cuda {
     }
 
     fn weight_q4(&self, q: &Q4) -> CuWeight {
-        let bytes = q.packed();
-        let sz: Vec<f32> = q
-            .scales
-            .iter()
-            .zip(&q.zeros)
-            .flat_map(|(&s, &z)| [s, z])
-            .collect();
+        self.weight_q4_packed(&q.to_packed())
+    }
+
+    /// Codes and the `[scale, zero]` table straight from the host bytes (a
+    /// page-locked streamed block's copy is DMA with no host wait).
+    fn weight_q4_packed(&self, q: &Q4Packed) -> CuWeight {
+        // SAFETY: `f32` reinterpreted as the bytes of the same allocation.
+        let sz: &[u8] =
+            unsafe { std::slice::from_raw_parts(q.sz.as_ptr() as *const u8, q.sz.len() * 4) };
+        // An f32 table is its little-endian u16 halves, `upload_table`'s layout.
+        let table = if q.sz.is_empty() {
+            Backend::upload_table(self, &[])
+        } else {
+            CuBuf {
+                f32: true,
+                len: q.sz.len(),
+                ..self.upload_bytes(sz)
+            }
+        };
         CuWeight {
-            buf: self.upload_bytes(&bytes),
+            buf: self.upload_bytes(&q.packed[..(q.rows * q.cols).div_ceil(2)]),
             rows: q.rows,
             cols: q.cols,
-            quant: Some((Quant::Q4, Backend::upload_table(self, &sz), q.group)),
+            quant: Some((Quant::Q4, table, q.group)),
         }
     }
 

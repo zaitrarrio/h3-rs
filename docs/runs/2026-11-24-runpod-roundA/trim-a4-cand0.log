@@ -1,0 +1,19 @@
+cuda NVIDIA RTX PRO 6000 Blackwell Server Edition (sm_120)
+/w/fasth3-trim-8step-nvfp4/diffusion_models/fastvideo_fasth3_trim_8step_nvfp4.safetensors: ComfyUI single-file layout
+load 18.5s
+prompt: 33 rows in 0.0s
+step 1/8 3.16s
+step 2/8 3.14s
+step 3/8 3.15s
+step 4/8 3.15s
+step 5/8 3.16s
+step 6/8 3.16s
+step 7/8 3.16s
+step 8/8 3.17s
+run 0: total 34.72s  prepare 0.33s  adaln 0.29s  denoise 25.27s (["3.16", "3.14", "3.15", "3.15", "3.16", "3.16", "3.16", "3.17"])  decode 8.57s  audio 0.18s
+wrote /root/res/trim-a4-cand0.y4m (124 frames 1344x768) and /root/res/trim-a4-cand0.wav
+mux: ffmpeg -i /root/res/trim-a4-cand0.y4m -i /root/res/trim-a4-cand0.wav -c:v libx264 -pix_fmt yuv420p -c:a aac /root/res/trim-a4-cand0.mp4
+
+real	1m6.558s
+user	0m59.286s
+sys	0m28.645s

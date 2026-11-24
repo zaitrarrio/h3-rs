@@ -368,8 +368,9 @@ State and invariants only; the reasoning is in `docs/design.md`.
   conditioning rows (`flow_step` reads noise at the rows' offset).
   `h3 regen2k` decodes with the tree's `vae_fast/` decoder when it is there,
   as the release's pipeline does (`--released-vae` for the base VAE): 406.8
-  s against 488.4 s, decode 9.4 against 30.7 s, peak 92.5 GB of 97.9
-  (`docs/runs/2026-11-24-runpod-validate`).
+  s against 488.4 s, decode 9.4 against 30.7 s; peak 92.5 GB of 97.9, 80.5
+  GB since the denoise state is freed before the decode
+  (`docs/runs/2026-11-24-runpod-validate`, `…-runpod-roundA`).
 - Fast VAE decoder (`fast_vae.rs`, `--fast-vae FILE|DIR` on `generate` /
   `regen2k` / `serve`, replacing the released decoder): the release's
   `vae_fast/fast_h3_vae_noncausal_24l.safetensors` (Sana
@@ -391,7 +392,10 @@ State and invariants only; the reasoning is in `docs/design.md`.
   (`docs/runs/2026-11-24-runpod-fast-vae`): 768p 3.1–3.3 s against the
   released decoder's 9.4 s (MXFP8 2.9 vs 6.6 s), 2K 11.3 s against 34.0 s;
   34.5 dB (768p) / 39.7 dB (2K) from the released decoder's output, no
-  seams; a 768p draft's decode 8.65 → 2.71 s. The file is on the EU volume
+  seams; a 768p draft's decode 8.65 → 2.71 s. `box_rows` moves 16 bytes
+  per thread when the width allows (`fw_box_rows16`): 2K 1317 → 473 ms of
+  gathers, decode 11.85 → 11.38 s, of which 6.76 s are kernels
+  (`…-runpod-roundA`). The file is on the EU volume
   (`open-h3-regenerate-2k/vae_fast/`). Opt-in for `generate` / `serve`,
   the default for `regen2k`. WebGPU at 768p: 15.0 s against the released
   decoder's 52.9 s for 68 frames; the token-row buffers bind whole, so
@@ -421,7 +425,16 @@ State and invariants only; the reasoning is in `docs/design.md`.
   28.8 / 31.4 GB) at the same speed (480p denoise 7.8 vs 7.6 s;
   `docs/runs/2026-11-24-runpod-pika-plug4`), byte-identical to resident with
   the cuBLASLt candidate pinned (unpinned, a streaming run can time and pick
-  other candidates: 13.6 dB once; `docs/runs/2026-11-24-runpod-validate`). Without
+  other candidates: 13.6 dB once; `docs/runs/2026-11-24-runpod-validate`). With `--weights int4
+  --stream-blocks --ffn-chunk 4096` (CUDA) **8.9 GB at 288p, 10.1 GB at
+  480p** (int4 resident 23.9 GB at 2.9 s per step, a clean other sample),
+  but streamed int4 ran 11 s per step: the codes were packed on the host
+  per upload from unlocked memory, now kept packed and page-locked
+  (`Q4Packed`, `weight_q4_packed`; not re-measured;
+  `docs/runs/2026-11-24-runpod-roundA`). WebGPU int4 peaked at 47 GB
+  resident (54 GB streamed) with the host a whole step ahead of the GPU:
+  it now waits once more than `H3_WGPU_INFLIGHT` (4) submissions are
+  outstanding, so dropped buffers are freed (not re-measured). Without
   `--tables` every run spends ~46 s on the AdaLN tables.
 - `--tier 288p` is H3's 480×288 (288×480 at 9:16, 288×288 at 1:1:
   `canvas_size` with short edge 288 and a 480×288 budget), on the 32-pixel
@@ -480,11 +493,18 @@ State and invariants only; the reasoning is in `docs/design.md`.
   `scripts/reference/full_parity.py` runs FastVideo's DiT on the real
   checkpoint's first N blocks (embedders, refiner, head; CUDA torch on the
   GPU: FastVideo picks NCCL whenever NVML sees one) and `h3 parity-dit`
-  compares: h3-base blocks 0–1 pass on CUDA (3e-2) and the CPU (2e-3)
-  (`docs/runs/2026-11-24-runpod-parity`); `--tiny` checks the pair locally.
+  compares: h3-base's first 8 blocks against FastVideo a7eb340 (CUDA torch,
+  f32): the CPU 8.2e-7 / 1.1e-6 (video / audio), CUDA 5.4e-3 / 5.0e-3, 2
+  blocks 3.5e-3 / 4.3e-3 (`docs/runs/2026-11-24-runpod-roundA`); `--tiny`
+  checks the pair locally.
 - WGSL rules (from fastwan-rs): named vec4 accumulators, never arrays indexed
   in loops; zero loop-local accumulators explicitly; every declared binding
-  statically used. Kernels and their CUDA twins share names (`fw_<op>`).
+  statically used. A rounding recipe that must match the oracle divides with
+  a correctly rounded division (`div_rn` in `nv_act.wgsl`, CUDA
+  `__fdiv_rn`), never `/` (2.5 ulp allowed; NVIDIA divides through a
+  reciprocal, which failed two W4A4 checks at 1.2–3.2e-2 on an RTX PRO 6000;
+  lavapipe reproduces it with `a * (1 / b)`), and builds powers of two by
+  bitcast, not `exp2`. Kernels and their CUDA twins share names (`fw_<op>`).
 - `h3 serve` binds 127.0.0.1, answers CORS for one `--allow-origin` only, and
   rejects non-JSON or foreign-origin generate requests; `web/demo.html` is
   compiled into the binary (rebuild after editing).

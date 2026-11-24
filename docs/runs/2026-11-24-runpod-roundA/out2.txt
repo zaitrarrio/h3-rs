@@ -1,0 +1,36 @@
+== trim-a4-tuned
+exit 0
+peak GPU 26655 MiB
+/w/fasth3-trim-8step-nvfp4/diffusion_models/fastvideo_fasth3_trim_8step_nvfp4.safetensors: ComfyUI single-file layout
+load 20.4s
+prompt: 33 rows in 0.0s
+step 1/8 3.30s
+step 2/8 3.14s
+step 3/8 3.15s
+step 4/8 3.15s
+step 5/8 3.16s
+step 6/8 3.16s
+step 7/8 3.16s
+step 8/8 3.16s
+run 0: total 35.14s  prepare 0.35s  adaln 0.33s  denoise 25.37s (["3.30", "3.14", "3.15", "3.15", "3.16", "3.16", "3.16", "3.16"])  decode 8.83s  audio 0.18s
+wrote /root/res/trim-a4-tuned.y4m (124 frames 1344x768) and /root/res/trim-a4-tuned.wav
+real	1m8.921s
+== trim-a4-cand0
+exit 0
+peak GPU 27487 MiB
+/w/fasth3-trim-8step-nvfp4/diffusion_models/fastvideo_fasth3_trim_8step_nvfp4.safetensors: ComfyUI single-file layout
+load 18.5s
+prompt: 33 rows in 0.0s
+step 1/8 3.16s
+step 2/8 3.14s
+step 3/8 3.15s
+step 4/8 3.15s
+step 5/8 3.16s
+step 6/8 3.16s
+step 7/8 3.16s
+step 8/8 3.17s
+run 0: total 34.72s  prepare 0.33s  adaln 0.29s  denoise 25.27s (["3.16", "3.14", "3.15", "3.15", "3.16", "3.16", "3.16", "3.17"])  decode 8.57s  audio 0.18s
+wrote /root/res/trim-a4-cand0.y4m (124 frames 1344x768) and /root/res/trim-a4-cand0.wav
+real	1m6.558s
+trim-a4-tuned vs trim-a4-cand0: PSNR y:14.775566 u:26.490498 v:30.863450 average:19.164584 min:18.390606 max:19.806618
+exit 0

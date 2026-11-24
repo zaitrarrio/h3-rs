@@ -85,8 +85,8 @@ impl HostAttnFf {
             .unwrap_or(0)
     }
 
-    /// Native-precision linears to bf16 bits (see `HostWeight::to_bf16`).
-    fn to_bf16(&mut self) {
+    /// The streamed host form of every linear (`HostWeight::to_stream_form`).
+    fn to_stream_form(&mut self, bf16: bool) {
         for l in [
             &mut self.qkv,
             &mut self.out,
@@ -96,7 +96,7 @@ impl HostAttnFf {
         .into_iter()
         .chain(self.gate.as_mut())
         {
-            l.to_bf16();
+            l.to_stream_form(bf16);
         }
     }
 
@@ -458,9 +458,7 @@ impl<B: Backend> H3Dit<B> {
                 // A streamed bf16 block used to be kept as f32 and converted on
                 // the host every step, then copied synchronously from pageable
                 // memory: on a 5090 that was ~0.3 s per edge block per step.
-                if be.bf16_weights() {
-                    h.to_bf16();
-                }
+                h.to_stream_form(be.bf16_weights());
                 h.pin(be, &mut pins);
                 Residency::Host(h)
             } else {

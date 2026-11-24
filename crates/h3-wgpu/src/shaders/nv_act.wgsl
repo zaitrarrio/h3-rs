@@ -17,6 +17,37 @@ fn bf16_round(v: f32) -> f32 {
     return bitcast<f32>(u & 0xFFFF0000u);
 }
 
+// a / b correctly rounded (round to nearest even), like Rust's `/` and CUDA's
+// __fdiv_rn. WGSL's `/` may be off by 2.5 ulp (NVIDIA's Vulkan driver divides
+// through a reciprocal), and one ulp flips an E2M1 code at a rounding
+// boundary: the W4A4 checks failed at 1.2–3.2e-2 on an RTX PRO 6000. Long
+// division of the 24-bit significands for positive normal operands with a
+// normal quotient; anything else (zero, subnormal, inf, NaN) falls back to `/`.
+fn div_rn(a: f32, b: f32) -> f32 {
+    let ua = bitcast<u32>(a);
+    let ub = bitcast<u32>(b);
+    let ea = i32(ua >> 23u);
+    let eb = i32(ub >> 23u);
+    if (ea == 0 || eb == 0 || ea >= 255 || eb >= 255) { return a / b; }
+    let mb = (ub & 0x7FFFFFu) | 0x800000u;
+    var r = (ua & 0x7FFFFFu) | 0x800000u;
+    var e = ea - eb + 127;
+    if (r < mb) { r = r << 1u; e = e - 1; }
+    // 25 quotient bits (24 + a guard bit), the remainder as the sticky bit.
+    var q = 0u;
+    for (var i = 0u; i < 25u; i = i + 1u) {
+        q = q << 1u;
+        if (r >= mb) { r = r - mb; q = q | 1u; }
+        r = r << 1u;
+    }
+    let guard = q & 1u;
+    q = q >> 1u;
+    if (guard == 1u && (r != 0u || (q & 1u) == 1u)) { q = q + 1u; }
+    if (q == 0x1000000u) { q = 0x800000u; e = e + 1; }
+    if (e <= 0 || e >= 255) { return a / b; }
+    return bitcast<f32>((u32(e) << 23u) | (q & 0x7FFFFFu));
+}
+
 fn e4m3_sat(v: f32) -> u32 {
     let u = bitcast<u32>(v);
     let sign = (u >> 24u) & 0x80u;
@@ -42,8 +73,8 @@ fn e4m3_decode(b: u32) -> f32 {
     if ((b & 0x80u) != 0u) { sign = -1.0; }
     let e = i32((b >> 3u) & 0xFu);
     let m = f32(b & 7u);
-    if (e == 0) { return sign * m / 512.0; }
-    return sign * (1.0 + m / 8.0) * exp2(f32(e - 7));
+    if (e == 0) { return sign * m * (1.0 / 512.0); }
+    return sign * (1.0 + m / 8.0) * bitcast<f32>(u32(e - 7 + 127) << 23u);
 }
 
 // E2M1 value of v: round to nearest even, saturate at ±6 (cvt.rn.satfinite.e2m1x2).
@@ -69,15 +100,15 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>, @builtin(workgroup_id) wid
     let t_max = amax[0];
     var enc = 0.0;
     var dec = 0.0;
-    if (t_max > 0.0 && t_max < 3.4e38) { enc = 2688.0 / t_max; dec = t_max / 2688.0; }
+    if (t_max > 0.0 && t_max < 3.4e38) { enc = div_rn(2688.0, t_max); dec = div_rn(t_max, 2688.0); }
     var bmax = 0.0;
     for (var j = 0u; j < 16u; j = j + 1u) {
         let v = abs(bf16_round(x[p.x_off + base + j]));
         if (v > bmax || v != v) { bmax = v; }
     }
-    let sf = e4m3_decode(e4m3_sat(bmax / 6.0 * enc));
+    let sf = e4m3_decode(e4m3_sat(div_rn(bmax, 6.0) * enc));
     var t = 0.0;
-    if (sf > 0.0) { t = enc / sf; }
+    if (sf > 0.0) { t = div_rn(enc, sf); }
     for (var j = 0u; j < 16u; j = j + 1u) {
         let v = bf16_round(x[p.x_off + base + j]);
         var q = 0.0;

@@ -254,6 +254,39 @@ impl Q8 {
     }
 }
 
+/// A [`Q4`] in its device form: two codes per byte (element `2i` in the low
+/// nibble, the bytes zero-padded to a multiple of 4) and `[scale, zero]` per
+/// group interleaved. Streamed blocks keep their int4 weights like this on the
+/// host (page-locked), so a prefetch is a plain copy: packing a block's codes
+/// on every upload made a streamed int4 draft 4× slower than resident (11 vs
+/// 2.9 s per step on an RTX PRO 6000).
+#[derive(Debug, Clone)]
+pub struct Q4Packed {
+    pub packed: Vec<u8>,
+    pub sz: Vec<f32>,
+    pub rows: usize,
+    pub cols: usize,
+    pub group: usize,
+}
+
+impl Q4Packed {
+    pub fn unpack(&self) -> Q4 {
+        let n = self.rows * self.cols;
+        let (scales, zeros) = self.sz.chunks(2).map(|c| (c[0], c[1])).unzip();
+        Q4::from_packed(
+            &self.packed[..n.div_ceil(2)],
+            scales,
+            zeros,
+            self.rows,
+            self.cols,
+        )
+    }
+
+    pub fn bytes(&self) -> usize {
+        self.packed.len() + self.sz.len() * 4
+    }
+}
+
 /// A `[rows, cols]` matrix as unsigned 4-bit codes with an affine scale/zero
 /// per group of columns: `w ≈ (q − z)·s`, `q ∈ [0, 15]`. Scales and zeros are
 /// rounded to f16 when made (how they are stored), so a quantized file and an
@@ -365,6 +398,24 @@ impl Q4 {
             .chunks(2)
             .map(|c| c[0] | (c.get(1).copied().unwrap_or(0) << 4))
             .collect()
+    }
+
+    /// The form the GPU backends upload ([`Q4Packed`]).
+    pub fn to_packed(&self) -> Q4Packed {
+        let mut packed = self.packed();
+        packed.resize(packed.len().div_ceil(4) * 4, 0);
+        Q4Packed {
+            packed,
+            sz: self
+                .scales
+                .iter()
+                .zip(&self.zeros)
+                .flat_map(|(&s, &z)| [s, z])
+                .collect(),
+            rows: self.rows,
+            cols: self.cols,
+            group: self.group,
+        }
     }
 
     pub fn from_packed(
