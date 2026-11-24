@@ -1008,7 +1008,53 @@ pub fn run_ops<B: Backend>(be: &B, tol: f32) -> Vec<CheckResult> {
     p.out
 }
 
+/// `box_rows` (the fast VAE decoder's window gather / scatter): a box off
+/// every edge of a padded, per-head grid, both directions; its own RNG so
+/// the other cases keep their draws.
+fn box_rows_check<B: Backend>(p: &mut Pair<'_, B>) {
+    let (be, cpu) = (p.be, &Cpu);
+    let mut r = Rng::new(91);
+    let grid = (4, 6, 7);
+    let g_rows = grid.0 * grid.1 * grid.2;
+    let b = h3_core::backend::BoxRows {
+        grid,
+        t: (1, 3),
+        y: (2, 5),
+        x: (1, 6),
+        heads: 3,
+        width: 5,
+        grid_off: 2,
+        grid_head: g_rows + 3,
+        packed_off: 1,
+        packed_head: 30 + 2,
+    };
+    let g_len = (2 + 3 * (g_rows + 3)) * b.width;
+    let p_len = (1 + 3 * 32) * b.width;
+    let g = r.normal(g_len);
+    let pk = r.normal(p_len);
+    for scatter in [false, true] {
+        let (gg, gp) = (be.upload(&g), be.upload(&pk));
+        be.box_rows(&gg, &gp, &b, scatter);
+        let (cg, cp) = (cpu.upload(&g), cpu.upload(&pk));
+        cpu.box_rows(&cg, &cp, &b, scatter);
+        let (got, want) = if scatter {
+            (be.download(&gg), cpu.download(&cg))
+        } else {
+            (be.download(&gp), cpu.download(&cp))
+        };
+        p.record(
+            format!(
+                "box_rows {} 3 heads, box 2x3x5 of 4x6x7",
+                if scatter { "scatter" } else { "gather" }
+            ),
+            got,
+            want,
+        );
+    }
+}
+
 fn ops<B: Backend>(p: &mut Pair<'_, B>, rng: &mut Rng) {
+    box_rows_check(p);
     // linear: odd M/N/K, row offsets, every activation and weight format.
     for &(m, k, n, act) in &[
         (1, 8, 4, Act::None),

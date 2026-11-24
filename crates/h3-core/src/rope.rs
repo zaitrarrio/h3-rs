@@ -82,6 +82,49 @@ pub fn vae_decoder_rope(
     RopeTable { cos, sin, half }
 }
 
+/// The fast (Sol-H3) VAE decoder's window-local table for latents
+/// `t ∈ [t0, t1)` of an `(h, w)` token grid, `(t, y, x)` order: each axis id
+/// is the token's index inside its window after the layer's shift,
+/// normalised to `(i + 0.5) / size · 2 − 1` (time windows of `block`
+/// latents shifted by `st`, spatial windows of `window` tokens shifted by
+/// `s`), on the base decoder's frequencies (Sana `NonCausalViTDecoder._rope`).
+#[allow(clippy::too_many_arguments)]
+pub fn vae_fast_rope(
+    t: (usize, usize),
+    hw: (usize, usize),
+    rot: usize,
+    theta: f64,
+    block: usize,
+    window: usize,
+    s: usize,
+    st: usize,
+) -> RopeTable {
+    let per_axis = rot / 6;
+    let inv: Vec<f64> = (0..per_axis)
+        .map(|k| 1.0 / theta.powf(k as f64 * 6.0 / rot as f64))
+        .collect();
+    let half = rot / 2;
+    let id = |i: usize, shift: usize, size: usize| ((((i + shift) % size) as f64) + 0.5) / size as f64 * 2.0 - 1.0;
+    let n = (t.1 - t.0) * hw.0 * hw.1;
+    let mut cos = Vec::with_capacity(n * half);
+    let mut sin = Vec::with_capacity(n * half);
+    for ti in t.0..t.1 {
+        for y in 0..hw.0 {
+            for x in 0..hw.1 {
+                let p = [id(ti, st, block), id(y, s, window), id(x, s, window)];
+                for axis in p {
+                    for &f in &inv {
+                        let a = (std::f64::consts::TAU * axis * f) as f32;
+                        cos.push(a.cos());
+                        sin.push(a.sin());
+                    }
+                }
+            }
+        }
+    }
+    RopeTable { cos, sin, half }
+}
+
 /// Qwen3-VL text table. `positions[i] = [t, h, w]` (all equal for text
 /// tokens). Frequency `j < 64`: for `j < 3·section[1]`, axis `j % 3`
 /// (0 = t, 1 = h, 2 = w); otherwise t.

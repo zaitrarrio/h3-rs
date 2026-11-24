@@ -4,8 +4,8 @@
 //! unit tests and a short low-resolution clip end to end.
 
 use h3_core::backend::{
-    Act, Backend, Conv1dShape, Conv3dShape, ConvEpilogue, ConvShape, ConvT1dShape, FlowStep, Gate,
-    HeadNorm, Modulation, Pad, Rope, Snake,
+    Act, Backend, BoxRows, Conv1dShape, Conv3dShape, ConvEpilogue, ConvShape, ConvT1dShape,
+    FlowStep, Gate, HeadNorm, Modulation, Pad, Rope, Snake,
 };
 use h3_core::quant::{Mxfp8, Nvfp4, Q4, Q8};
 use h3_core::vsa::{VsaSpec, select};
@@ -630,6 +630,25 @@ impl Backend for Cpu {
     fn buf_len(&self, buf: &CpuBuf) -> usize {
         buf.r().len()
     }
+    fn box_rows(&self, grid: &CpuBuf, packed: &CpuBuf, b: &BoxRows, scatter: bool) {
+        let n = b.heads * b.rows() * b.width;
+        if scatter {
+            let src = packed.r();
+            let mut dst = grid.w();
+            for i in 0..n {
+                let (g, p) = b.index(i);
+                dst[g] = src[p];
+            }
+        } else {
+            let src = grid.r();
+            let mut dst = packed.w();
+            for i in 0..n {
+                let (g, p) = b.index(i);
+                dst[p] = src[g];
+            }
+        }
+    }
+
     fn copy(&self, src: &CpuBuf, so: usize, dst: &CpuBuf, d: usize, len: usize) {
         if Arc::ptr_eq(&src.0, &dst.0) {
             let mut b = dst.w();

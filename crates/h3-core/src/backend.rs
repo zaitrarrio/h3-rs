@@ -337,6 +337,50 @@ impl<T> Clone for Snake<'_, T> {
 }
 impl<T> Copy for Snake<'_, T> {}
 
+/// A box `t ∈ [t.0, t.1) × y ∈ [y.0, y.1) × x ∈ [x.0, x.1)` of rows on a
+/// `[T, H, W]` grid (row `(t·H + y)·W + x`), `width` elements per row, for
+/// each head `h < heads`: the grid's head `h` starts at row `grid_off +
+/// h·grid_head`, the packed rows (box order, `t` slowest) at `packed_off +
+/// h·packed_head` ([`Backend::box_rows`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BoxRows {
+    pub grid: (usize, usize, usize),
+    pub t: (usize, usize),
+    pub y: (usize, usize),
+    pub x: (usize, usize),
+    pub heads: usize,
+    pub width: usize,
+    pub grid_off: usize,
+    pub grid_head: usize,
+    pub packed_off: usize,
+    pub packed_head: usize,
+}
+
+impl BoxRows {
+    /// Rows in the box.
+    pub fn rows(&self) -> usize {
+        (self.t.1 - self.t.0) * (self.y.1 - self.y.0) * (self.x.1 - self.x.0)
+    }
+
+    /// `(grid element, packed element)` of element `i < heads·rows·width`.
+    pub fn index(&self, i: usize) -> (usize, usize) {
+        let rows = self.rows();
+        let (c, r, h) = (
+            i % self.width,
+            (i / self.width) % rows,
+            i / (self.width * rows),
+        );
+        let (ny, nx) = (self.y.1 - self.y.0, self.x.1 - self.x.0);
+        let (bx, by, bt) = (r % nx, (r / nx) % ny, r / (nx * ny));
+        let (_, gh, gw) = self.grid;
+        let grow = ((self.t.0 + bt) * gh + self.y.0 + by) * gw + self.x.0 + bx;
+        (
+            (self.grid_off + h * self.grid_head + grow) * self.width + c,
+            (self.packed_off + h * self.packed_head + r) * self.width + c,
+        )
+    }
+}
+
 pub trait Backend {
     /// A flat device buffer of activations.
     type Buf;
@@ -375,6 +419,10 @@ pub trait Backend {
     fn copy(&self, src: &Self::Buf, src_off: usize, dst: &Self::Buf, dst_off: usize, len: usize);
     /// `buf[off..off + len] = value`.
     fn fill(&self, buf: &Self::Buf, off: usize, len: usize, value: f32);
+    /// Gather (`scatter` false: `grid` → `packed`) or scatter (`packed` →
+    /// `grid`) the rows of a box on a `[T, H, W]` row grid, per head
+    /// ([`BoxRows`]): the fast VAE decoder's window attention.
+    fn box_rows(&self, grid: &Self::Buf, packed: &Self::Buf, b: &BoxRows, scatter: bool);
     fn weight(&self, data: &[f32], rows: usize, cols: usize) -> Self::Weight;
     /// [`Backend::weight`] from bf16 bits: streamed bf16 blocks keep their
     /// host copy in this form so every step's upload is a byte copy (a

@@ -21,6 +21,9 @@
 //   op 19 trilinear resize:     x[c, t2, h2, w2] from y[c, t, h, w], align_corners=false
 //   op 20 vsa gate add:         x[tok, h, c] += aux[(h·slot + ui[tok] / off)·dim + c] · y[(h·len + tok)·dim + c]
 //                               (dense-plan VSA: dim = d, slots = heads, slot = nb, off = te, len = seq)
+//   op 21 box gather:           x[packed] = y[grid]   (Backend::box_rows; i over heads·rows·dim,
+//   op 22 box scatter:          x[grid] = y[packed]    grid t·h·w, box start pt,ph,pw, size t2,h2,w2,
+//                               rows = slots, grid off / head = off / stride, packed off / head = xoff / len)
 struct P { n: u32, op: u32, dim: u32, slots: u32, slot: u32, off: u32, xoff: u32, c: u32,
            t: u32, h: u32, w: u32, pt: u32, ph: u32, pw: u32, t2: u32, h2: u32,
            w2: u32, left: u32, len: u32, r: u32, frames: u32, stride: u32, col: u32, has_z: u32,
@@ -124,6 +127,18 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>, @builtin(workgroup_id) wid
             let be = exp(z[cc]);
             let s = sin(al * x[i]);
             x[i] = x[i] + s * s / (be + 1e-9);
+        }
+        case 21u, 22u: {
+            let cc = i % p.dim;
+            let r = (i / p.dim) % p.slots;
+            let hh = i / (p.dim * p.slots);
+            let bx = r % p.w2;
+            let by = (r / p.w2) % p.h2;
+            let bt = r / (p.w2 * p.h2);
+            let grow = ((p.pt + bt) * p.h + p.ph + by) * p.w + p.pw + bx;
+            let gi = (p.off + hh * p.stride + grow) * p.dim + cc;
+            let pi = (p.xoff + hh * p.len + r) * p.dim + cc;
+            if (p.op == 21u) { x[pi] = y[gi]; } else { x[gi] = y[pi]; }
         }
         case 20u: {
             let c = i % p.dim;

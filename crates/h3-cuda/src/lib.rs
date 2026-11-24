@@ -21,8 +21,8 @@ use cudarc::driver::{
     PushKernelArg,
 };
 use h3_core::backend::{
-    Act, Backend, Conv1dShape, Conv3dShape, ConvEpilogue, ConvShape, ConvT1dShape, FlowStep, Gate,
-    HeadNorm, Modulation, Pad, Rope, Snake,
+    Act, Backend, BoxRows, Conv1dShape, Conv3dShape, ConvEpilogue, ConvShape, ConvT1dShape,
+    FlowStep, Gate, HeadNorm, Modulation, Pad, Rope, Snake,
 };
 use h3_core::quant::{Mxfp8, Nvfp4, Q4, Q8, mx_scale_len};
 use h3_core::vsa::VsaSpec;
@@ -273,6 +273,7 @@ struct Kernels {
     axpby: CudaFunction,
     channel_affine: CudaFunction,
     fill: CudaFunction,
+    box_rows: CudaFunction,
     spin: CudaFunction,
     tanh_clamp: CudaFunction,
     clamp: CudaFunction,
@@ -380,8 +381,12 @@ pub fn compile_cubin(arch: &str) -> Result<Vec<u8>, CudaError> {
     use cudarc::nvrtc::{result, sys};
     use std::ffi::{CStr, CString};
     let src = CString::new(KERNELS).map_err(|e| CudaError(format!("nvrtc source: {e}")))?;
-    let prog = result::create_program(&src, None).map_err(|e| CudaError(format!("nvrtc create: {e:?}")))?;
-    let options = vec!["--std=c++17".to_string(), format!("--gpu-architecture={arch}")];
+    let prog = result::create_program(&src, None)
+        .map_err(|e| CudaError(format!("nvrtc create: {e:?}")))?;
+    let options = vec![
+        "--std=c++17".to_string(),
+        format!("--gpu-architecture={arch}"),
+    ];
     // SAFETY: `prog` comes from `create_program`, `src` outlives it, and it is
     // destroyed exactly once below whatever happens in between.
     let out = unsafe {
@@ -742,7 +747,9 @@ impl Cuda {
         // the driver still loads); PTX for `compute_XY` when NVRTC has no
         // real target for it or the cubin failed.
         let module = match sass_arch(maj, min).map(compile_cubin) {
-            Some(Ok(cubin)) => ctx.load_module(cudarc::nvrtc::Ptx::from_binary(cubin)).map_err(err)?,
+            Some(Ok(cubin)) => ctx
+                .load_module(cudarc::nvrtc::Ptx::from_binary(cubin))
+                .map_err(err)?,
             other => {
                 if let Some(Err(e)) = other {
                     eprintln!("cuda: SASS compile failed ({}); falling back to PTX", e.0);
@@ -766,6 +773,7 @@ impl Cuda {
             axpby: get("fw_axpby")?,
             channel_affine: get("fw_channel_affine")?,
             fill: get("fw_fill")?,
+            box_rows: get("fw_box_rows")?,
             spin: get("fw_spin")?,
             tanh_clamp: get("fw_tanh_clamp")?,
             clamp: get("fw_clamp")?,
@@ -1180,7 +1188,7 @@ impl Cuda {
 
     fn kernel_name(&self, f: &CudaFunction) -> &'static str {
         let k = &self.f;
-        let all: [(&CudaFunction, &'static str); 77] = [
+        let all: [(&CudaFunction, &'static str); 78] = [
             (&k.bias_act, "bias_act"),
             (&k.swiglu, "swiglu"),
             (&k.gate_residual, "gate_residual"),
@@ -1194,6 +1202,7 @@ impl Cuda {
             (&k.axpby, "axpby"),
             (&k.channel_affine, "channel_affine"),
             (&k.fill, "fill"),
+            (&k.box_rows, "box_rows"),
             (&k.spin, "stream stress spin"),
             (&k.tanh_clamp, "tanh_clamp"),
             (&k.clamp, "clamp"),
@@ -1637,6 +1646,38 @@ impl Backend for Cuda {
                 )
                 .expect("dtod");
             },
+        );
+    }
+
+    fn box_rows(&self, grid: &CuBuf, packed: &CuBuf, b: &BoxRows, scatter: bool) {
+        let n = b.heads * b.rows() * b.width;
+        if n == 0 {
+            return;
+        }
+        assert!(!grid.f32 && !packed.f32, "box_rows moves bf16 activations");
+        self.launch(
+            &self.f.box_rows,
+            Self::elems(n),
+            (256, 1, 1),
+            &[
+                Arg::P(self.ptr(grid)),
+                Arg::P(self.ptr(packed)),
+                Arg::L(n as i64),
+                Arg::I(b.width as i32),
+                Arg::L(b.rows() as i64),
+                Arg::I(b.grid.1 as i32),
+                Arg::I(b.grid.2 as i32),
+                Arg::I(b.t.0 as i32),
+                Arg::I(b.y.0 as i32),
+                Arg::I(b.x.0 as i32),
+                Arg::I((b.y.1 - b.y.0) as i32),
+                Arg::I((b.x.1 - b.x.0) as i32),
+                Arg::L(b.grid_off as i64),
+                Arg::L(b.grid_head as i64),
+                Arg::L(b.packed_off as i64),
+                Arg::L(b.packed_head as i64),
+                Arg::I(scatter as i32),
+            ],
         );
     }
 

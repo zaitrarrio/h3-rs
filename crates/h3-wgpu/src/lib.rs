@@ -13,8 +13,8 @@
 //! `H3_ALLOW_SOFTWARE=1` accepts a CPU rasterizer (lavapipe) adapter.
 
 use h3_core::backend::{
-    Act, Backend, Conv1dShape, Conv3dShape, ConvEpilogue, ConvShape, ConvT1dShape, FlowStep, Gate,
-    HeadNorm, Modulation, Pad, Rope, Snake,
+    Act, Backend, BoxRows, Conv1dShape, Conv3dShape, ConvEpilogue, ConvShape, ConvT1dShape,
+    FlowStep, Gate, HeadNorm, Modulation, Pad, Rope, Snake,
 };
 use h3_core::quant::{Mxfp8, Q4, Q8};
 use h3_core::vsa::VsaSpec;
@@ -1072,6 +1072,45 @@ impl Backend for Wgpu {
 
     fn buf_len(&self, buf: &GBuf) -> usize {
         buf.len
+    }
+
+    fn box_rows(&self, grid: &GBuf, packed: &GBuf, b: &BoxRows, scatter: bool) {
+        let n = b.heads * b.rows() * b.width;
+        if n == 0 {
+            return;
+        }
+        let (x, y) = if scatter {
+            (grid, packed)
+        } else {
+            (packed, grid)
+        };
+        self.elementwise(
+            &Ep {
+                n,
+                op: if scatter { 22 } else { 21 },
+                dim: b.width,
+                slots: b.rows(),
+                t: b.grid.0,
+                h: b.grid.1,
+                w: b.grid.2,
+                pt: b.t.0,
+                ph: b.y.0,
+                pw: b.x.0,
+                t2: b.t.1 - b.t.0,
+                h2: b.y.1 - b.y.0,
+                w2: b.x.1 - b.x.0,
+                off: b.grid_off,
+                stride: b.grid_head,
+                xoff: b.packed_off,
+                len: b.packed_head,
+                ..Default::default()
+            },
+            x,
+            Some(y),
+            None,
+            None,
+            None,
+        );
     }
 
     fn copy(&self, src: &GBuf, so: usize, dst: &GBuf, d: usize, len: usize) {
