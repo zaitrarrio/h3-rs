@@ -446,6 +446,70 @@ pub struct Nvfp4 {
     pub rows: usize,
     pub cols: usize,
     pub first_high: bool,
+    /// W4A4: the activations go through NVFP4 too ([`Nvfp4::round_rows`]),
+    /// FP4 tensor cores on sm_100+ (ComfyUI's recipe for these files); false
+    /// keeps them bf16 (W4A16, the weights expanded per GEMM).
+    pub act4: bool,
+}
+
+/// Largest finite E2M1 value.
+pub const E2M1_MAX: f32 = 6.0;
+
+/// f32 → E2M1 code (sign in bit 3), round to nearest even, saturating at
+/// ±6, as `cvt.rn.satfinite.e2m1x2.f32`; NaN → 0. Twin of the CUDA
+/// `nv_e2m1` and the WGSL `e2m1_code`.
+pub fn e2m1_code(v: f32) -> u8 {
+    let a = v.abs();
+    let m = if a.is_nan() || a <= 0.25 {
+        0
+    } else if a < 0.75 {
+        1
+    } else if a <= 1.25 {
+        2
+    } else if a < 1.75 {
+        3
+    } else if a <= 2.5 {
+        4
+    } else if a < 3.5 {
+        5
+    } else if a <= 5.0 {
+        6
+    } else {
+        7
+    };
+    if m != 0 && v.is_sign_negative() {
+        m | 8
+    } else {
+        m
+    }
+}
+
+/// The NVFP4 activation recipe's per-call scales from the tensor maximum:
+/// `(encode, decode)` = `(2688 / amax, amax / 2688)` (2688 = 6 · 448), both
+/// 0 for an all-zero tensor.
+pub fn nvfp4_global(amax: f32) -> (f32, f32) {
+    if amax > 0.0 && amax.is_finite() {
+        (2688.0 / amax, amax / 2688.0)
+    } else {
+        (0.0, 0.0)
+    }
+}
+
+/// One 16-value block under the NVFP4 activation recipe: its E4M3 scale byte
+/// (`e4m3(amax_b / 6 · encode)`) and codes (`e2m1(x · (encode / scale))`).
+/// Every kernel computes these with the same f32 operations in this order.
+pub fn nvfp4_block(b: &[f32], encode: f32) -> (u8, [u8; NVFP4_GROUP]) {
+    let mut codes = [0u8; NVFP4_GROUP];
+    let amax = amax_abs(b);
+    let s = e4m3_satfinite(amax / 6.0 * encode);
+    let sf = e4m3_decode(s);
+    if sf > 0.0 {
+        let t = encode / sf;
+        for (c, &v) in codes.iter_mut().zip(b) {
+            *c = e2m1_code(v * t);
+        }
+    }
+    (s, codes)
 }
 
 impl Nvfp4 {
@@ -509,6 +573,7 @@ impl Nvfp4 {
             rows,
             cols,
             first_high,
+            act4: false,
         }
     }
 
@@ -531,6 +596,7 @@ impl Nvfp4 {
             rows: end - start,
             cols: self.cols,
             first_high: self.first_high,
+            act4: self.act4,
         }
     }
 
@@ -585,6 +651,53 @@ impl Nvfp4 {
     pub fn bytes(&self) -> usize {
         self.packed.len() + self.scales.len()
     }
+
+    /// The activation side of W4A4: `x` (`[rows, k]`, `k % 16 == 0`, the
+    /// whole GEMM call) rounded to bf16, then to NVFP4 with one tensor scale
+    /// from its maximum ([`nvfp4_global`]) and one E4M3 scale per 16 values
+    /// ([`nvfp4_block`]), and decoded again: `e2m1 · e4m3 · decode`. The CPU
+    /// reference feeds this to the f32 GEMM; CUDA feeds the codes to the FP4
+    /// tensor cores with `decode · alpha` as the GEMM's alpha.
+    pub fn round_rows(x: &[f32], k: usize) -> Vec<f32> {
+        assert!(k.is_multiple_of(NVFP4_GROUP) && x.len().is_multiple_of(k));
+        let b: Vec<f32> = x.iter().map(|&v| bf16_round(v)).collect();
+        let (enc, dec) = nvfp4_global(amax_abs(&b));
+        let mut out = Vec::with_capacity(b.len());
+        for blk in b.chunks_exact(NVFP4_GROUP) {
+            let (s, codes) = nvfp4_block(blk, enc);
+            let sf = e4m3_decode(s);
+            out.extend(codes.iter().map(|&c| E2M1[c as usize] * sf * dec));
+        }
+        out
+    }
+
+    /// The weight for cuBLASLt's FP4 GEMM: codes two per byte with the even
+    /// column in the low nibble, and the E4M3 scales in the `VEC16_UE4M3`
+    /// tile layout ([`mx_scale_offset`] over 16-column groups, rows padded to
+    /// 128, groups to 4; the same layout the Trim file stores).
+    pub fn cublas_layout(&self) -> (Vec<u8>, Vec<u8>) {
+        let mut packed = vec![0u8; self.rows * self.cols / 2];
+        for r in 0..self.rows {
+            for c in (0..self.cols).step_by(2) {
+                packed[(r * self.cols + c) / 2] = self.code(r, c) | (self.code(r, c + 1) << 4);
+            }
+        }
+        let groups = self.cols / NVFP4_GROUP;
+        let cb = groups.div_ceil(4);
+        let mut scales = vec![0u8; nvfp4_scale_len(self.rows, self.cols)];
+        for r in 0..self.rows {
+            for g in 0..groups {
+                scales[mx_scale_offset(r, g, cb)] = self.scales[r * groups + g];
+            }
+        }
+        (packed, scales)
+    }
+}
+
+/// Scale bytes of a `[rows, k]` NVFP4 operand in cuBLASLt's `VEC16_UE4M3`
+/// layout: rows padded to 128, 16-column groups to 4.
+pub fn nvfp4_scale_len(rows: usize, k: usize) -> usize {
+    rows.div_ceil(128) * 128 * (k / NVFP4_GROUP).div_ceil(4) * 4
 }
 
 // ------------------------------------------------------------------ MXFP8
@@ -809,6 +922,95 @@ fn amax_abs(x: &[f32]) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn e2m1_rounds_to_nearest_even_and_saturates() {
+        let cases = [
+            (0.0, 0.0),
+            (0.25, 0.0),
+            (0.26, 0.5),
+            (0.75, 1.0),
+            (1.25, 1.0),
+            (1.3, 1.5),
+            (1.75, 2.0),
+            (2.5, 2.0),
+            (2.6, 3.0),
+            (3.5, 4.0),
+            (5.0, 4.0),
+            (5.1, 6.0),
+            (100.0, 6.0),
+            (-0.75, -1.0),
+            (-5.1, -6.0),
+            (-0.1, 0.0),
+        ];
+        for (v, want) in cases {
+            assert_eq!(E2M1[e2m1_code(v) as usize], want, "{v}");
+        }
+        assert_eq!(e2m1_code(-0.1), 0, "a zero code carries no sign");
+        assert_eq!(e2m1_code(f32::NAN), 0);
+    }
+
+    #[test]
+    fn nvfp4_round_rows_is_within_a_block_step_and_exact_on_the_grid() {
+        let k = 64;
+        let x: Vec<f32> = (0..4 * k)
+            .map(|i| ((i * 7919 % 1000) as f32 / 250.0 - 2.0) * (1 + i / k) as f32)
+            .collect();
+        let r = Nvfp4::round_rows(&x, k);
+        let amax = x.iter().fold(0f32, |a, v| a.max(v.abs()));
+        for (blk, rb) in x.chunks(16).zip(r.chunks(16)) {
+            let bmax = blk.iter().fold(0f32, |a, v| a.max(v.abs()));
+            for (a, b) in blk.iter().zip(rb) {
+                // half an E2M1 step at the top of the range (1 of 6), plus the
+                // E4M3 scale's rounding
+                assert!(
+                    (a - b).abs() <= bmax / 6.0 * 1.1 + amax * 1e-6,
+                    "{a} vs {b}"
+                );
+            }
+        }
+        // A block already on the grid keeps its codes (the values come back
+        // through `decode = amax / 2688`, so to f32 rounding only).
+        let grid: Vec<f32> = E2M1.iter().map(|v| v * 0.5).collect();
+        for (a, b) in Nvfp4::round_rows(&grid, 16).iter().zip(&grid) {
+            assert!((a - b).abs() <= b.abs() * 1e-6, "{a} vs {b}");
+        }
+        assert!(Nvfp4::round_rows(&[0.0; 32], 16).iter().all(|v| *v == 0.0));
+    }
+
+    #[test]
+    fn nvfp4_cublas_layout_puts_codes_low_first_and_scales_in_tiles() {
+        let (rows, cols) = (130, 64);
+        let groups = cols / NVFP4_GROUP;
+        let packed: Vec<u8> = (0..rows * cols / 2).map(|i| (i * 37 % 251) as u8).collect();
+        let scales: Vec<u8> = (0..rows * groups).map(|i| (i % 120) as u8).collect();
+        for first_high in [false, true] {
+            let q = Nvfp4 {
+                packed: packed.clone(),
+                scales: scales.clone(),
+                alpha: 0.5,
+                rows,
+                cols,
+                first_high,
+                act4: true,
+            };
+            let (p, s) = q.cublas_layout();
+            assert_eq!(s.len(), nvfp4_scale_len(rows, cols));
+            for r in [0, 1, 31, 32, 127, 128, 129] {
+                for c in [0, 1, 15, 16, 63] {
+                    let b = p[(r * cols + c) / 2];
+                    let code = if c % 2 == 0 { b & 15 } else { b >> 4 };
+                    assert_eq!(code, q.code(r, c));
+                }
+                for g in 0..groups {
+                    assert_eq!(
+                        s[mx_scale_offset(r, g, groups.div_ceil(4))],
+                        scales[r * groups + g]
+                    );
+                }
+            }
+        }
+    }
 
     #[test]
     fn q8_round_trip_error_is_half_a_step() {

@@ -1127,6 +1127,17 @@ fn ops<B: Backend>(p: &mut Pair<'_, B>, rng: &mut Rng) {
                 p.op(format!("linear nvfp4 first-high {m}x{k}x{n}"), |r| {
                     r.linear(&x, 3, m, &Mat::Nvfp4(&nvh), None, act, m + 2, 2)
                 });
+                // W4A4: the activations through NVFP4 as well (FP4 tensor
+                // cores on sm_100+, emulated elsewhere), with a bias.
+                if k % 32 == 0 {
+                    let nva = Nvfp4 {
+                        act4: true,
+                        ..nvh.clone()
+                    };
+                    p.op(format!("linear nvfp4 w4a4 {m}x{k}x{n} {act:?}"), |r| {
+                        r.linear(&x, 3, m, &Mat::Nvfp4(&nva), Some(&b), act, m + 2, 2)
+                    });
+                }
             }
             if k % 32 == 0 {
                 // MXFP8 W8A8: the reference rounds the activations too, so the
@@ -1840,6 +1851,7 @@ pub fn synth_nvfp4(w: &[f32], rows: usize, cols: usize) -> Nvfp4 {
         rows,
         cols,
         first_high: false,
+        act4: false,
     }
 }
 

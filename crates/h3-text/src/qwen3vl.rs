@@ -78,6 +78,7 @@ fn nvfp4_of(src: &SafetensorsDir, key: &str, rows: usize, cols: usize) -> Result
         rows,
         cols,
         first_high: false,
+        act4: false,
     })
 }
 

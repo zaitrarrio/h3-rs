@@ -126,6 +126,14 @@ pub fn lora_branches() -> bool {
     !std::env::var("H3_LORA_MERGE").is_ok_and(|v| v == "1")
 }
 
+/// Whether stored NVFP4 weights run W4A4 (`H3_NVFP4_A4=1`): the activations
+/// through NVFP4 as well, on the FP4 tensor cores on sm_100+ (ComfyUI's
+/// recipe for these files), instead of bf16 activations against the weights
+/// expanded per GEMM. Opt-in: it moves the numerics.
+pub fn nvfp4_act4() -> bool {
+    std::env::var("H3_NVFP4_A4").is_ok_and(|v| v == "1")
+}
+
 /// A page-lock guard ([`Backend::pin_host`]); dropped before its buffer.
 pub type PinGuard = Box<dyn std::any::Any + Send>;
 
@@ -366,7 +374,10 @@ pub fn load_host(
             })
             .collect();
         match Nvfp4::concat(parts.clone()) {
-            Some(q) => HostWeight::Nvfp4(q),
+            Some(q) => HostWeight::Nvfp4(Nvfp4 {
+                act4: nvfp4_act4(),
+                ..q
+            }),
             None => {
                 let mut w = Vec::new();
                 for p in &parts {

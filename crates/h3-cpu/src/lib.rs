@@ -33,6 +33,8 @@ pub struct CpuWeight {
     /// MXFP8 W8A8: `linear` rounds its activations through E4M3 with E8M0
     /// block scales ([`Mxfp8::round_rows`]) before the f32 GEMM.
     pub mx: bool,
+    /// NVFP4 W4A4: the activations go through [`Nvfp4::round_rows`] instead.
+    pub a4: bool,
 }
 
 #[derive(Default)]
@@ -669,6 +671,7 @@ impl Backend for Cpu {
             rows,
             cols,
             mx: false,
+            a4: false,
         }
     }
     fn weight_q8(&self, q: &Q8) -> CpuWeight {
@@ -678,7 +681,10 @@ impl Backend for Cpu {
         self.weight(&q.dequantize(), q.rows, q.cols)
     }
     fn weight_nvfp4(&self, q: &Nvfp4) -> CpuWeight {
-        self.weight(&q.dequantize(), q.rows, q.cols)
+        CpuWeight {
+            a4: q.act4,
+            ..self.weight(&q.dequantize(), q.rows, q.cols)
+        }
     }
     fn weight_mxfp8(&self, q: &Mxfp8) -> CpuWeight {
         CpuWeight {
@@ -686,6 +692,7 @@ impl Backend for Cpu {
             rows: q.rows,
             cols: q.cols,
             mx: true,
+            a4: false,
         }
     }
     fn weight_bytes(&self, w: &CpuWeight) -> usize {
@@ -712,6 +719,9 @@ impl Backend for Cpu {
         let xq;
         let x = if w.mx {
             xq = Mxfp8::round_rows(x, k);
+            &xq[..]
+        } else if w.a4 {
+            xq = Nvfp4::round_rows(x, k);
             &xq[..]
         } else {
             x

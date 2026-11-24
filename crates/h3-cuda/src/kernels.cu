@@ -2665,7 +2665,7 @@ __device__ __forceinline__ float e4m3(unsigned b) {
     if (exp == 15 && man == 7.0f) return __int_as_float(0x7fc00000);
     return sign * (1.0f + man / 8.0f) * exp2f((float)(exp - 7));
 }
-extern "C" __global__ void fw_dequant_nvfp4(u64 out_, u64 q_, u64 s_, long n, int cols, float alpha, int first_high) {
+extern "C" __global__ void fw_dequant_nvfp4(u64 out_, u64 q_, u64 s_, long n, int cols, float alpha, int first_high, int swz) {
     bf16_t* out = (bf16_t*)out_;
     const unsigned char* q = (const unsigned char*)q_;
     const unsigned char* s = (const unsigned char*)s_;
@@ -2674,8 +2674,109 @@ extern "C" __global__ void fw_dequant_nvfp4(u64 out_, u64 q_, u64 s_, long n, in
     const long r = i / cols; const int c = (int)(i - r * cols);
     const int shift = ((int)(i & 1) ^ first_high) * 4;   // ComfyUI packs the first code in the high nibble
     const unsigned code = (q[i >> 1] >> shift) & 15u;
-    const float sc = e4m3(s[r * (cols / 16) + c / 16]);
+    // swz: the scales in cuBLASLt's VEC16_UE4M3 tiles (a W4A4 weight), else row-major.
+    const long si = swz ? mx_scale_offset(r, c / 16, ((cols / 16) + 3) / 4) : r * (cols / 16) + c / 16;
+    const float sc = e4m3(s[si]);
     out[i] = bf(e2m1(code) * sc * alpha);
+}
+
+// ---------------------------------------------------------------- NVFP4 W4A4 (h3_core::quant::Nvfp4::round_rows)
+// The per-call state: s[0] the activation maximum (float bits), s[1] the GEMM's alpha, s[2] its beta (0).
+extern "C" __global__ void fw_nv_prep(u64 s_) {
+    unsigned* s = (unsigned*)s_;
+    s[0] = 0u;
+    s[1] = 0u;
+    s[2] = 0u;
+}
+// max |x| over n bf16 values into s[0]: non-negative floats order like their bits, so atomicMax on the
+// bits works, and a NaN (0x7FC00000 after fabsf) wins as in the reference.
+extern "C" __global__ void fw_nv_amax(u64 x_, long n, u64 s_) {
+    const bf16_t* x = (const bf16_t*)x_;
+    float m = 0.0f;
+    for (long i = (long)blockIdx.x * blockDim.x + threadIdx.x; i < n; i += (long)gridDim.x * blockDim.x) {
+        const float v = fabsf(ld(x, i));
+        if (v > m || v != v) m = v;
+    }
+    for (int o = 16; o > 0; o >>= 1) {
+        const float t = __shfl_xor_sync(0xffffffffu, m, o);
+        if (t > m || t != t) m = t;
+    }
+    __shared__ float wm[32];
+    const int lane = threadIdx.x & 31, w = threadIdx.x >> 5;
+    if (lane == 0) wm[w] = m;
+    __syncthreads();
+    if (w == 0) {
+        m = lane < (int)(blockDim.x >> 5) ? wm[lane] : 0.0f;
+        for (int o = 16; o > 0; o >>= 1) {
+            const float t = __shfl_xor_sync(0xffffffffu, m, o);
+            if (t > m || t != t) m = t;
+        }
+        if (lane == 0) atomicMax((unsigned*)s_, __float_as_uint(m));
+    }
+}
+// f32 -> E2M1 code (sign in bit 3), round to nearest even, saturate at ±6, NaN -> 0: quant::e2m1_code.
+__device__ __forceinline__ unsigned nv_e2m1(float v) {
+    const float a = fabsf(v);
+    unsigned m;
+    if (a != a || a <= 0.25f) m = 0u;
+    else if (a < 0.75f) m = 1u;
+    else if (a <= 1.25f) m = 2u;
+    else if (a < 1.75f) m = 3u;
+    else if (a <= 2.5f) m = 4u;
+    else if (a < 3.5f) m = 5u;
+    else if (a <= 5.0f) m = 6u;
+    else m = 7u;
+    return (m != 0u && signbit(v)) ? (m | 8u) : m;
+}
+// One thread per 16-column block of x[rows, k] (bf16), with the call's maximum in s[0]:
+// scale byte e4m3(amax_b / 6 · encode), codes e2m1(v · (encode / scale)) (quant::nvfp4_block, the same
+// f32 operations in the same order, no contraction).
+// mode 0: codes two per byte (even column low) + VEC16_UE4M3 scales for the FP4 GEMM, and alpha_w · decode
+//         into s[1]; mode 1: the decoded values e2m1 · scale · decode back to bf16 (the emulation path).
+extern "C" __global__ void fw_nv_quant(u64 x_, long blocks, int k, u64 s_, float alpha_w, u64 codes_, u64 scales_,
+                                       u64 out_, int mode) {
+    const bf16_t* x = (const bf16_t*)x_;
+    const long blk = (long)blockIdx.x * blockDim.x + threadIdx.x;
+    if (blk >= blocks) return;
+    const float amax = __uint_as_float(((const unsigned*)s_)[0]);
+    float enc = 0.0f, dec = 0.0f;
+    if (amax > 0.0f && amax <= 3.402823466e38f) {
+        enc = __fdiv_rn(2688.0f, amax);
+        dec = __fdiv_rn(amax, 2688.0f);
+    }
+    if (blk == 0 && mode == 0) ((float*)s_)[1] = __fmul_rn(dec, alpha_w);
+    const int groups = k >> 4;
+    const long row = blk / groups;
+    const int g = (int)(blk - row * groups);
+    const long base = row * k + (long)g * 16;
+    float v[16];
+    float bmax = 0.0f;
+#pragma unroll
+    for (int j = 0; j < 16; j++) {
+        v[j] = ld(x, base + j);
+        const float a = fabsf(v[j]);
+        if (a > bmax || a != a) bmax = a;
+    }
+    const unsigned sb = mx_e4m3(__fmul_rn(__fdiv_rn(bmax, 6.0f), enc));
+    const float sf = mx_e4m3_decode(sb);
+    const float t = sf > 0.0f ? __fdiv_rn(enc, sf) : 0.0f;
+    if (mode == 0) {
+        unsigned char* c = (unsigned char*)codes_ + base / 2;
+#pragma unroll
+        for (int j = 0; j < 8; j++) {
+            const unsigned lo = sf > 0.0f ? nv_e2m1(__fmul_rn(v[2 * j], t)) : 0u;
+            const unsigned hi = sf > 0.0f ? nv_e2m1(__fmul_rn(v[2 * j + 1], t)) : 0u;
+            c[j] = (unsigned char)(lo | (hi << 4));
+        }
+        ((unsigned char*)scales_)[mx_scale_offset(row, g, (groups + 3) >> 2)] = (unsigned char)sb;
+    } else {
+        bf16_t* out = (bf16_t*)out_;
+#pragma unroll
+        for (int j = 0; j < 16; j++) {
+            const unsigned code = sf > 0.0f ? nv_e2m1(__fmul_rn(v[j], t)) : 0u;
+            out[base + j] = bf(__fmul_rn(__fmul_rn(e2m1(code), sf), dec));
+        }
+    }
 }
 
 // ---------------------------------------------------------------- 2-D conv (TAEH3)
