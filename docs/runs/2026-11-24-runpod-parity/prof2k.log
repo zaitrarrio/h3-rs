@@ -1,0 +1,34 @@
+vae load 0.6s
+== profile: encoder
+profile (CUDA, synced per op): 169872.0 ms in ops; GEMMs -0.0 ms at 0.0 TFLOP/s
+  conv3d (mma)                              162548.5 ms  95.7%   28288 calls     5.746 ms/call
+  group_norm stats                            4099.0 ms   2.4%   20800 calls     0.197 ms/call
+  group_norm apply                            3224.5 ms   1.9%   20800 calls     0.155 ms/call
+
+encode 124 frames 2560x1440 -> latents 37x90x160 in 192.18s
+fast vae load 5.0s
+fast decode 0: 124 frames in 13.63s
+== profile: fast decoder
+profile (CUDA, synced per op): 7570.0 ms in ops; GEMMs 4331.7 ms at 397.8 TFLOP/s
+  gemm+bias n=16384 k=2048                    2141.5 ms  28.3%     792 calls     2.704 ms/call
+  box_rows                                    1317.0 ms  17.4%    8922 calls     0.148 ms/call
+  gemm+bias n=2048 k=8192                     1114.1 ms  14.7%     792 calls     1.407 ms/call
+  attention (mma2, d64)                        849.5 ms  11.2%    1240 calls     0.685 ms/call
+  gemm+bias n=6144 k=2048                      797.6 ms  10.5%     192 calls     4.154 ms/call
+  swiglu                                       451.1 ms   6.0%     792 calls     0.570 ms/call
+  gemm+bias n=2048 k=2048                      258.1 ms   3.4%      24 calls    10.754 ms/call
+  rms_norm (+residual, modulation)             245.5 ms   3.2%      48 calls     5.116 ms/call
+  head_split (qk-norm + rope)                  230.7 ms   3.0%     648 calls     0.356 ms/call
+  gate_residual                                110.7 ms   1.5%      24 calls     4.613 ms/call
+  layer_norm                                    19.6 ms   0.3%       1 calls    19.617 ms/call
+  gemm+bias n=3072 k=2048                       17.0 ms   0.2%       8 calls     2.121 ms/call
+  patchify / unpatchify                         12.1 ms   0.2%       9 calls     1.343 ms/call
+  gemm+bias n=2048 k=24                          2.1 ms   0.0%       1 calls     2.127 ms/call
+  copy (dtod)                                    2.0 ms   0.0%     185 calls     0.011 ms/call
+  gemm+bias n=6144 k=2048 (small)                1.3 ms   0.0%      24 calls     0.053 ms/call
+
+fast vs input: 33.49 dB
+
+real	3m52.898s
+user	3m37.007s
+sys	0m56.183s

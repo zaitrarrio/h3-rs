@@ -280,6 +280,7 @@ struct Kernels {
     channel_affine: CudaFunction,
     fill: CudaFunction,
     box_rows: CudaFunction,
+    box_rows16: CudaFunction,
     spin: CudaFunction,
     tanh_clamp: CudaFunction,
     clamp: CudaFunction,
@@ -912,6 +913,7 @@ impl Cuda {
             channel_affine: get("fw_channel_affine")?,
             fill: get("fw_fill")?,
             box_rows: get("fw_box_rows")?,
+            box_rows16: get("fw_box_rows16")?,
             spin: get("fw_spin")?,
             tanh_clamp: get("fw_tanh_clamp")?,
             clamp: get("fw_clamp")?,
@@ -1330,7 +1332,7 @@ impl Cuda {
 
     fn kernel_name(&self, f: &CudaFunction) -> &'static str {
         let k = &self.f;
-        let all: [(&CudaFunction, &'static str); 81] = [
+        let all: [(&CudaFunction, &'static str); 82] = [
             (&k.bias_act, "bias_act"),
             (&k.swiglu, "swiglu"),
             (&k.gate_residual, "gate_residual"),
@@ -1345,6 +1347,7 @@ impl Cuda {
             (&k.channel_affine, "channel_affine"),
             (&k.fill, "fill"),
             (&k.box_rows, "box_rows"),
+            (&k.box_rows16, "box_rows (16-byte)"),
             (&k.spin, "stream stress spin"),
             (&k.tanh_clamp, "tanh_clamp"),
             (&k.clamp, "clamp"),
@@ -1800,17 +1803,25 @@ impl Backend for Cuda {
             return;
         }
         assert!(!grid.f32 && !packed.f32, "box_rows moves bf16 activations");
+        // Eight bf16 per thread when the rows are whole 16-byte units (every
+        // index is a multiple of `width`, so the 16-byte alignment holds).
+        let vec = if b.width.is_multiple_of(8) { 8 } else { 1 };
+        let (n, width) = (n / vec, b.width / vec);
         let l = |v: usize| Arg::L(v as i64);
         let i = |v: usize| Arg::I(v as i32);
         self.launch(
-            &self.f.box_rows,
+            if vec == 8 {
+                &self.f.box_rows16
+            } else {
+                &self.f.box_rows
+            },
             Self::elems(n),
             (256, 1, 1),
             &[
                 Arg::P(self.ptr(grid)),
                 Arg::P(self.ptr(packed)),
                 l(n),
-                i(b.width),
+                i(width),
                 l(b.rows()),
                 i(b.heads),
                 i(b.count.1),

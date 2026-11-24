@@ -1014,12 +1014,19 @@ pub fn run_ops<B: Backend>(be: &B, tol: f32) -> Vec<CheckResult> {
 /// attention output's `[rows, window·heads·d]`, and a repeated box (step
 /// 0); its own RNG so the other cases keep their draws.
 fn box_rows_check<B: Backend>(p: &mut Pair<'_, B>) {
+    // Width 5 takes CUDA's one-bf16 kernel, 16 its 16-byte one.
+    for width in [5, 16] {
+        box_rows_cases(p, width);
+    }
+}
+
+fn box_rows_cases<B: Backend>(p: &mut Pair<'_, B>, width: usize) {
     use h3_core::backend::BoxRows;
     let (be, cpu) = (p.be, &Cpu);
     let mut r = Rng::new(91);
     let grid = (4, 9, 11);
     let g_rows = grid.0 * grid.1 * grid.2;
-    let (heads, width) = (3, 5);
+    let heads = 3;
     let base = BoxRows {
         grid,
         t: (1, 3),
@@ -1079,7 +1086,7 @@ fn box_rows_check<B: Backend>(p: &mut Pair<'_, B>) {
             (be.download(&gp), cpu.download(&cp))
         };
         p.record(
-            format!("box_rows {name}, 2x2 boxes 2x3x5 of 4x9x11"),
+            format!("box_rows {name}, 2x2 boxes 2x3x5 of 4x9x11, width {width}"),
             got,
             want,
         );

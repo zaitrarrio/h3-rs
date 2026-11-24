@@ -169,17 +169,18 @@ impl SafetensorsDir {
         Ok((t.dtype(), t.shape().to_vec(), data))
     }
 
-    /// A tensor's bytes for conversion: 1 MiB and up through [`Self::read_into`]
-    /// (parallel `pread`s, the rate a network volume gives `cp` rather than the
-    /// mmap's page-fault rate: 0.2 vs 1.9 GB/s on RunPod's FUSE volume);
-    /// smaller ones borrowed from the map. `H3_MMAP_READ=1` reads everything
-    /// through the map, as before, to compare.
+    /// A tensor's bytes for conversion, borrowed from the map; with
+    /// `H3_PREAD=1`, 1 MiB and up through [`Self::read_into`] (parallel
+    /// `pread`s) instead. That did not pay from RunPod's FUSE volume: a cold
+    /// 25.6 GB load took 107.9 s through pread and 89.1 s through the map, on
+    /// two pods (`docs/runs/2026-11-24-runpod-parity`); staging the files is
+    /// what pays there.
     pub fn bytes(
         &self,
         name: &str,
     ) -> Result<(safetensors::Dtype, Vec<usize>, std::borrow::Cow<'_, [u8]>)> {
         let (dt, shape, data) = self.raw(name)?;
-        if data.len() < (1 << 20) || std::env::var("H3_MMAP_READ").is_ok_and(|v| v == "1") {
+        if data.len() < (1 << 20) || !std::env::var("H3_PREAD").is_ok_and(|v| v == "1") {
             return Ok((dt, shape, std::borrow::Cow::Borrowed(data)));
         }
         let mut buf = vec![0u8; data.len()];

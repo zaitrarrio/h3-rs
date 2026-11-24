@@ -282,10 +282,11 @@ State and invariants only; the reasoning is in `docs/design.md`.
   inside a pod with 401 `{"error":{}}` (every self-terminate failed that way
   until 2026-11-24; `docs/runs/2026-11-24-runpod-validate`). From the agent
   sandbox create pods with `scripts/runpod/pod.py` (GraphQL, retries while
-  out of stock). Tensors of 1 MiB and up load through parallel `pread`
-  (`SafetensorsDir::bytes`), not the mmap; `H3_MMAP_READ=1` compares. Its
-  gain from the volume is not yet measured cleanly: caches cannot be dropped
-  in the pod. EU-RO-1 stock is intermittent
+  out of stock). Parallel `pread` instead of the mmap (`H3_PREAD=1`,
+  `SafetensorsDir::bytes`) did not pay from the volume: a cold 25.6 GB load
+  107.9 s against the mmap's 89.1 s, on two pods
+  (`docs/runs/2026-11-24-runpod-parity`; caches cannot be dropped in a pod);
+  staging is what pays. EU-RO-1 stock is intermittent
   for every card: hunt with a retry loop, never two pods on the volume at
   once.
 - WebGPU binds any activation over `max_storage_buffer_binding_size` (2 GiB
