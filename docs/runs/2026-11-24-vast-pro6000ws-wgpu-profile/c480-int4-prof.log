@@ -1,0 +1,25 @@
+cuda NVIDIA RTX PRO 6000 Blackwell Workstation Edition (sm_120)  |  h3-plug4 832x480x124  15100 tokens  50 blocks  weights int4-g64
+load (synthetic) 121.31s
+adaln tables 74.08s (96768 per block)
+forward 0: 3.821s (76.4 ms/block; ×50/50 blocks ≈ 3.82s)
+forward 1: 3.834s (76.7 ms/block; ×50/50 blocks ≈ 3.83s)
+profile (CUDA, synced per op): 7649.8 ms in ops; GEMMs 4475.6 ms at 260.0 TFLOP/s
+  attention (mma2, d128)                      2717.7 ms  35.5%     100 calls    27.177 ms/call
+  gemm n=28672 k=5376                         1774.8 ms  23.2%     100 calls    17.748 ms/call
+  gemm n=21504 k=5376                         1331.3 ms  17.4%     100 calls    13.313 ms/call
+  gemm n=5376 k=14336                          899.4 ms  11.8%     100 calls     8.994 ms/call
+  gemm n=5376 k=7168                           446.8 ms   5.8%     100 calls     4.468 ms/call
+  dequant int4                                 146.8 ms   1.9%     400 calls     0.367 ms/call
+  head_split (qk-norm + rope)                  101.2 ms   1.3%     300 calls     0.337 ms/call
+  swiglu                                        88.3 ms   1.2%     100 calls     0.883 ms/call
+  rms_norm (+residual, modulation)              76.7 ms   1.0%     202 calls     0.380 ms/call
+  gate_residual                                 43.6 ms   0.6%     100 calls     0.436 ms/call
+  gemm+bias n=32 k=5376 (small)                 22.4 ms   0.3%       2 calls    11.218 ms/call
+  gemm+bias n=96 k=5376                          0.5 ms   0.0%       2 calls     0.246 ms/call
+  gemm+bias n=5376 k=96                          0.3 ms   0.0%       2 calls     0.163 ms/call
+  copy (dtod)                                    0.0 ms   0.0%       2 calls     0.021 ms/call
+  gemm+bias n=5376 k=32 (small)                  0.0 ms   0.0%       2 calls     0.020 ms/call
+
+real	3m35.588s
+user	2m34.730s
+sys	2m7.582s
