@@ -473,6 +473,9 @@ enum Cmd {
         #[arg(long, default_value_t = 256)]
         tile: usize,
         #[arg(long, default_value = "out-2k.y4m")]
+        /// Decode with the released 36-block VAE instead of the tree's `vae_fast/` decoder (which the release, and this command, use by default).
+        #[arg(long, default_value_t = false)]
+        released_vae: bool,
         out: PathBuf,
     },
     /// RunPod serverless worker: take jobs (`{"args": [...], "uploads": {...}}`),
@@ -1094,8 +1097,27 @@ fn main() -> Result<()> {
             start_sigma,
             seed,
             tile,
+            released_vae,
             out,
         } => {
+            // The release decodes with its fast decoder (`vae_fast/`); so do we
+            // unless asked for the released one.
+            let mut attn = attn;
+            if released_vae {
+                if attn.fast_vae.is_some() {
+                    bail!("--released-vae and --fast-vae contradict each other");
+                }
+            } else if attn.fast_vae.is_none() {
+                let f = regen_dir.join("vae_fast/fast_h3_vae_noncausal_24l.safetensors");
+                if f.is_file() {
+                    attn.fast_vae = Some(f);
+                } else {
+                    eprintln!(
+                        "note: {} not found; decoding with the released VAE",
+                        f.display()
+                    );
+                }
+            }
             with_backend!(backend, |be| regen2k(
                 &be,
                 &regen_dir,

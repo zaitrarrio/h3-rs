@@ -332,6 +332,17 @@ impl<B: Backend> FastDecoder<B> {
         let rows_all = n + g;
         let ff = cfg.ffn_mult * dd;
         let eps = cfg.eps;
+        // One buffer holds every token row (`x`, `o`, …), and the elementwise
+        // ops bind it whole: refuse up front where it exceeds the backend's
+        // binding (WebGPU's 2 GiB on NVIDIA: 768p fits, 2K does not).
+        let cap = be.max_buffer_elems();
+        let biggest = (rows_all * dd).max(bk * hw * 3 * dd);
+        if biggest > cap {
+            return Err(Error::Geometry(format!(
+                "fast VAE decoder: {t}x{h}x{w} latents need a {biggest}-element buffer, over this \
+                 backend's {cap}; decode with the released VAE (tiled) or on CUDA / the CPU"
+            )));
+        }
 
         // Embedding + the per-block global rows.
         let gz = be.upload(&z.data);
@@ -394,7 +405,7 @@ impl<B: Backend> FastDecoder<B> {
             be.alloc(pk_rows * dd),
         );
         let o_pk = be.alloc(slab * dd);
-        let fc = FFN_ROWS.min(rows_all);
+        let fc = FFN_ROWS.min(rows_all).min((cap / (2 * ff)).max(1));
         let (hid, hid2) = (be.alloc(fc * 2 * ff), be.alloc(fc * ff));
         let hn = Some(HeadNorm { w: None, eps });
         // Global rows as a `(G, 1, 1)` grid of `[heads, G, d]`.
