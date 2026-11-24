@@ -31,6 +31,7 @@ const HEADS: &str = include_str!("shaders/head_split.wgsl");
 const ATTN: &str = include_str!("shaders/attention.wgsl");
 const FLASH: &str = include_str!("shaders/flash.wgsl");
 const FLASH3: &str = include_str!("shaders/flash3.wgsl");
+const FLASH3H: &str = include_str!("shaders/flash3h.wgsl");
 const VSA_POOL: &str = include_str!("shaders/vsa_pool.wgsl");
 const VSA_COARSE: &str = include_str!("shaders/vsa_coarse.wgsl");
 const ELEM: &str = include_str!("shaders/elementwise.wgsl");
@@ -114,8 +115,11 @@ struct Prof {
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct WgpuOptions {
-    /// Use the f16-math GEMM where the adapter has `shader-f16` (`H3_WGPU_F16=1`).
+    /// f16 math where the adapter has `shader-f16` (`H3_WGPU_F16=1`: the
+    /// f16 GEMM and `flash3h`; `=attn`: `flash3h` alone).
     pub f16: bool,
+    /// With `f16`: the f16-math GEMM too (false for `H3_WGPU_F16=attn`).
+    pub f16_gemm: bool,
     /// Accept a CPU rasterizer adapter (`H3_ALLOW_SOFTWARE=1`).
     pub allow_software: bool,
     /// Cap one storage binding at this many bytes, below the device's limit,
@@ -134,7 +138,8 @@ pub struct WgpuOptions {
 impl WgpuOptions {
     pub fn from_env() -> Self {
         Self {
-            f16: std::env::var("H3_WGPU_F16").is_ok_and(|v| v == "1"),
+            f16: std::env::var("H3_WGPU_F16").is_ok_and(|v| v == "1" || v == "attn"),
+            f16_gemm: std::env::var("H3_WGPU_F16").is_ok_and(|v| v == "1"),
             allow_software: std::env::var("H3_ALLOW_SOFTWARE").is_ok_and(|v| v == "1"),
             max_binding: std::env::var("H3_WGPU_MAX_BINDING")
                 .ok()
@@ -193,6 +198,8 @@ pub struct Wgpu {
     linear4: bool,
     coarse_ok: bool,
     f16: bool,
+    /// With `f16`: the f16-math GEMM (`linear3h`) as well as `flash3h`.
+    f16_gemm: bool,
     max_binding: Option<u64>,
     pipelines: Mutex<HashMap<String, Arc<wgpu::ComputePipeline>>>,
     names: Mutex<HashMap<usize, String>>,
@@ -299,6 +306,7 @@ impl Wgpu {
             linear4,
             coarse_ok,
             f16,
+            f16_gemm: f16 && opts.f16_gemm,
             max_binding: opts.max_binding,
             pipelines: Mutex::new(HashMap::new()),
             names: Mutex::new(HashMap::new()),
@@ -779,7 +787,7 @@ impl Wgpu {
             Act::GeluErf => 2,
             Act::Silu => 3,
         };
-        let half = self.f16 && w.f16 && rows >= F16_MIN_ROWS;
+        let half = self.f16 && self.f16_gemm && w.f16 && rows >= F16_MIN_ROWS;
         // 128×128 tiles for GEMMs of 128+ rows (RTX PRO 6000 profile: the
         // linear3 GEMMs were 62 % of a 480p int4 step); f16 math stays on
         // its 64×64 kernel.
@@ -1018,7 +1026,11 @@ impl Wgpu {
         vsa: Option<(&GVsa, Option<&GBuf>)>,
         pv8: Option<(&GBuf, &GBuf)>,
     ) {
-        let pipe = if self.flash3 {
+        // flash3h (f16 math) where f16 is on, except pv8: its E4M3 V codes
+        // times P overflow an f16 partial sum.
+        let pipe = if self.flash3 && self.f16 && pv8.is_none() {
+            self.pipeline("flash3h", || FLASH3H.to_string())
+        } else if self.flash3 {
             self.pipeline("flash3", || FLASH3.to_string())
         } else {
             self.pipeline("flash", || FLASH.to_string())

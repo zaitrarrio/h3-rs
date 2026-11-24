@@ -44,11 +44,13 @@ fn wgpu_matches_cpu_reference() {
     assert!(bad.is_empty(), "failed: {bad:?}");
 }
 
-/// The f16-math GEMM (where the adapter has `shader-f16`) at f16 tolerance.
+/// The f16-math GEMM and attention (`flash3h`), where the adapter has
+/// `shader-f16`, at f16 tolerance.
 #[test]
 fn wgpu_f16_matches_cpu_reference() {
     let mut opts = h3_wgpu::WgpuOptions::from_env();
     opts.f16 = true;
+    opts.f16_gemm = true;
     let be = match h3_wgpu::Wgpu::with_options(opts) {
         Ok(b) if b.f16() => b,
         Ok(_) => {
