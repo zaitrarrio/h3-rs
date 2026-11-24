@@ -5,7 +5,7 @@ use h3_core::{
     Error, Result,
     backend::Backend,
     lora::Adapter,
-    quant::{Mxfp8, Nvfp4, Q4, Q8, Stored, WeightQuant},
+    quant::{Mxfp8, Nvfp4, Q4, Q4Packed, Q8, Stored, WeightQuant},
     weights::WeightSource,
 };
 use std::collections::HashMap;
@@ -87,6 +87,8 @@ pub enum HostWeight {
     Bf16(Vec<u16>),
     Q8(Q8),
     Q4(Q4),
+    /// The streamed form of [`HostWeight::Q4`] ([`HostWeight::to_bf16`]).
+    Q4Packed(Q4Packed),
     Nvfp4(Nvfp4),
     Mxfp8(Mxfp8),
 }
@@ -98,6 +100,7 @@ impl HostWeight {
             HostWeight::Bf16(v) => v.len() * 2,
             HostWeight::Q8(q) => q.bytes(),
             HostWeight::Q4(q) => q.bytes(),
+            HostWeight::Q4Packed(q) => q.bytes(),
             HostWeight::Nvfp4(q) => q.bytes(),
             HostWeight::Mxfp8(q) => q.bytes(),
         }
@@ -152,6 +155,10 @@ impl HostWeight {
                 vec![unsafe { std::slice::from_raw_parts(q.q.as_ptr() as *const u8, q.q.len()) }]
             }
             HostWeight::Q4(_) => vec![],
+            // SAFETY: `f32` reinterpreted as the bytes of the same allocation.
+            HostWeight::Q4Packed(q) => vec![&q.packed, unsafe {
+                std::slice::from_raw_parts(q.sz.as_ptr() as *const u8, q.sz.len() * 4)
+            }],
             HostWeight::Nvfp4(q) => vec![&q.packed, &q.scales],
             HostWeight::Mxfp8(q) => vec![&q.codes, &q.scales],
         };
@@ -172,6 +179,19 @@ impl HostWeight {
             *self = HostWeight::Bf16(h);
         }
     }
+
+    /// The form a streamed block keeps on the host: bf16 bits for native
+    /// weights where the backend holds bf16 anyway ([`Backend::bf16_weights`]),
+    /// int4 codes packed two per byte (half the host memory, and the upload is
+    /// a plain copy instead of a packing pass every step).
+    pub fn to_stream_form(&mut self, bf16: bool) {
+        if bf16 {
+            self.to_bf16();
+        }
+        if let HostWeight::Q4(q) = self {
+            *self = HostWeight::Q4Packed(q.to_packed());
+        }
+    }
 }
 
 impl HostWeight {
@@ -181,6 +201,7 @@ impl HostWeight {
             HostWeight::Bf16(v) => be.weight_bf16(v, rows, cols),
             HostWeight::Q8(q) => be.weight_q8(q),
             HostWeight::Q4(q) => be.weight_q4(q),
+            HostWeight::Q4Packed(q) => be.weight_q4_packed(q),
             HostWeight::Nvfp4(q) => be.weight_nvfp4(q),
             HostWeight::Mxfp8(q) => be.weight_mxfp8(q),
         }
@@ -196,11 +217,11 @@ impl HostLinear {
         }
     }
 
-    pub fn to_bf16(&mut self) {
-        self.w.to_bf16();
+    pub fn to_stream_form(&mut self, bf16: bool) {
+        self.w.to_stream_form(bf16);
         if let Some(l) = &mut self.lora {
-            l.a.to_bf16();
-            l.b.to_bf16();
+            l.a.to_stream_form(bf16);
+            l.b.to_stream_form(bf16);
         }
     }
 

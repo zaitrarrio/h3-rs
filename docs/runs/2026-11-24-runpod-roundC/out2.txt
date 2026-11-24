@@ -1,0 +1,60 @@
+== CUDA int4 drafts: streamed now packed + page-locked
+== d480-int4 (cuda)
+exit 0
+peak GPU 23901 MiB
+load 95.6s
+step 1/4 2.87s
+step 2/4 2.87s
+step 3/4 2.88s
+step 4/4 2.88s
+run 0: total 15.49s  prepare 0.06s  adaln 0.00s  denoise 11.50s (["2.87", "2.87", "2.88", "2.88"])  decode 3.71s  audio 0.18s
+real	2m3.823s
+== d480-int4-stream (cuda)
+exit 0
+peak GPU 10999 MiB
+load 66.6s
+step 1/4 2.89s
+step 2/4 2.89s
+step 3/4 2.89s
+step 4/4 2.90s
+run 0: total 15.47s  prepare 0.06s  adaln 0.00s  denoise 11.58s (["2.89", "2.89", "2.89", "2.90"])  decode 3.62s  audio 0.18s
+real	1m35.481s
+d480-int4 == d480-int4-stream (byte-identical)
+== d480-int4-stream-ffn (cuda)
+exit 0
+peak GPU 10103 MiB
+load 74.1s
+step 1/4 3.02s
+step 2/4 3.02s
+step 3/4 3.03s
+step 4/4 3.03s
+run 0: total 16.05s  prepare 0.06s  adaln 0.00s  denoise 12.11s (["3.02", "3.02", "3.03", "3.03"])  decode 3.67s  audio 0.18s
+real	1m44.061s
+== d288-int4-stream-ffn (cuda)
+exit 0
+peak GPU 8919 MiB
+load 73.8s
+step 1/4 0.95s
+step 2/4 0.94s
+step 3/4 0.94s
+step 4/4 0.94s
+run 0: total 5.82s  prepare 0.06s  adaln 0.00s  denoise 3.76s (["0.95", "0.94", "0.94", "0.94"])  decode 1.80s  audio 0.18s
+real	1m33.327s
+== d480-fastvae (cuda)
+exit 0
+peak GPU 47133 MiB
+== profile: video decode
+== profile: video decode
+== profile: video decode
+== profile: video decode
+== profile: video decode
+== profile: video decode
+== profile: video decode
+== profile: video decode
+fast vae host: total 1.08s = forward 0.86s + heads/downloads 0.14s + waiting on conversion 0.01s + callback 0.04s
+== profile: audio decode
+run 0: total 12.73s  prepare 0.07s  adaln 0.00s  denoise 11.34s (["2.83", "2.84", "2.84", "2.82"])  decode 1.08s  audio 0.20s
+real	1m41.505s
+fast vae host: total 1.08s = forward 0.86s + heads/downloads 0.14s + waiting on conversion 0.01s + callback 0.04s
+exit 0
+

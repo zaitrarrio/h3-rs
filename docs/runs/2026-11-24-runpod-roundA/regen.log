@@ -1,0 +1,14 @@
+cuda NVIDIA RTX PRO 6000 Blackwell Server Edition (sm_120)
+fast VAE decoder: /w/open-h3-regenerate-2k/vae_fast/fast_h3_vae_noncausal_24l.safetensors in 6.5s
+load 87.3s
+draft 1344x768 -> canvas 1344x768 -> 2560x1440
+text encoder: Stream, Bf16, opened in 0.1s
+step 1/3 98.61s
+step 2/3 99.06s
+step 3/3 99.09s
+regen: total 416.0s  prepare 110.0s  steps ["98.6", "99.1", "99.1"]  decode 9.1s
+wrote /root/res/regen.y4m (121 frames 2560x1440, silent)
+
+real	8m56.921s
+user	7m5.321s
+sys	4m31.162s

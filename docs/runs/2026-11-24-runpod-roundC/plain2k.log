@@ -1,0 +1,10 @@
+vae load 0.3s
+encode 124 frames 2560x1440 -> latents 37x90x160 in 187.17s
+fast vae load 4.4s
+fast decode 0: 124 frames in 10.70s
+fast decode 1: 124 frames in 10.87s
+fast vs input: 33.49 dB
+
+real	3m55.126s
+user	3m31.562s
+sys	0m54.695s

@@ -1,0 +1,51 @@
+name, driver_version, power.limit [W], clocks.max.sm [MHz], memory.total [MiB]
+NVIDIA RTX PRO 6000 Blackwell Server Edition, 595.112.07, 600.00 W, 2430 MHz, 97887 MiB
+== check cuda
+box_rows gather head-major, 2x2 boxes 2x3x5 of 4x9x11, width 16 rel 2.04e-3  ok
+box_rows scatter head-major, 2x2 boxes 2x3x5 of 4x9x11, width 16 rel 2.13e-3  ok
+box_rows scatter token-major, 2x2 boxes 2x3x5 of 4x9x11, width 16 rel 2.05e-3  ok
+box_rows gather repeated box, 2x2 boxes 2x3x5 of 4x9x11, width 16 rel 2.03e-3  ok
+linear nvfp4 w4a4 130x96x200 GeluErf                 rel 4.48e-3  ok
+linear nvfp4 w4a4 65x256x64 Silu                     rel 4.29e-3  ok
+linear nvfp4 w4a4 300x96x260 None                    rel 3.31e-3  ok
+linear nvfp4 w4a4 129x1536x130 None                  rel 4.12e-3  ok
+linear nvfp4 w4a4 1100x1536x200 GeluTanh             rel 3.51e-3  ok
+all 197 checks pass (tolerance 3e-2)
+user	0m14.214s
+sys	0m53.310s
+== prof2k
+exit 0
+peak GPU 17164 MiB
+  box_rows (16-byte)                           473.2 ms   7.0%    8922 calls     0.053 ms/call
+  swiglu                                       454.3 ms   6.7%     792 calls     0.574 ms/call
+  gemm+bias n=2048 k=2048                      259.8 ms   3.8%      24 calls    10.825 ms/call
+  rms_norm (+residual, modulation)             245.4 ms   3.6%      48 calls     5.113 ms/call
+  head_split (qk-norm + rope)                  230.6 ms   3.4%     648 calls     0.356 ms/call
+  gate_residual                                110.7 ms   1.6%      24 calls     4.612 ms/call
+  layer_norm                                    19.6 ms   0.3%       1 calls    19.613 ms/call
+  gemm+bias n=3072 k=2048                       17.0 ms   0.3%       8 calls     2.121 ms/call
+  patchify / unpatchify                         12.1 ms   0.2%       9 calls     1.339 ms/call
+  gemm+bias n=2048 k=24                          2.1 ms   0.0%       1 calls     2.099 ms/call
+  copy (dtod)                                    1.8 ms   0.0%     185 calls     0.010 ms/call
+  gemm+bias n=6144 k=2048 (small)                1.1 ms   0.0%      24 calls     0.047 ms/call
+fast vs input: 33.49 dB
+real	3m48.245s
+user	3m34.082s
+sys	0m50.640s
+== profile: fast decoder
+profile (CUDA, synced per op): 6760.8 ms in ops; GEMMs 4357.4 ms at 395.5 TFLOP/s
+  gemm+bias n=16384 k=2048                    2155.6 ms  31.9%     792 calls     2.722 ms/call
+  gemm+bias n=2048 k=8192                     1118.3 ms  16.5%     792 calls     1.412 ms/call
+  attention (mma2, d64)                        855.7 ms  12.7%    1240 calls     0.690 ms/call
+  gemm+bias n=6144 k=2048                      803.5 ms  11.9%     192 calls     4.185 ms/call
+  box_rows (16-byte)                           473.2 ms   7.0%    8922 calls     0.053 ms/call
+  swiglu                                       454.3 ms   6.7%     792 calls     0.574 ms/call
+  gemm+bias n=2048 k=2048                      259.8 ms   3.8%      24 calls    10.825 ms/call
+  rms_norm (+residual, modulation)             245.4 ms   3.6%      48 calls     5.113 ms/call
+  head_split (qk-norm + rope)                  230.6 ms   3.4%     648 calls     0.356 ms/call
+  gate_residual                                110.7 ms   1.6%      24 calls     4.612 ms/call
+  layer_norm                                    19.6 ms   0.3%       1 calls    19.613 ms/call
+  gemm+bias n=3072 k=2048                       17.0 ms   0.3%       8 calls     2.121 ms/call
+fast decode 0: 124 frames in 11.38s
+== profile: fast decoder
+exit 0

@@ -12,7 +12,7 @@
 //! Aliasing rule: an output buffer never aliases an input, except the
 //! arguments documented as *in place*.
 
-use crate::quant::{Mxfp8, Nvfp4, Q4, Q8};
+use crate::quant::{Mxfp8, Nvfp4, Q4, Q4Packed, Q8};
 use crate::vsa::VsaSpec;
 
 /// Epilogue activation of [`Backend::linear`] and [`Backend::group_norm`].
@@ -466,6 +466,11 @@ pub trait Backend {
     fn weight_q8(&self, q: &Q8) -> Self::Weight;
     /// 4-bit weight-only matrix, same contract.
     fn weight_q4(&self, q: &Q4) -> Self::Weight;
+    /// The same matrix already in its device form (a streamed block's host
+    /// copy); GPU backends upload the bytes as they are.
+    fn weight_q4_packed(&self, q: &Q4Packed) -> Self::Weight {
+        self.weight_q4(&q.unpack())
+    }
     /// NVFP4 (E2M1 codes, E4M3 block scales); backends without FP4 tensor
     /// cores dequantize at load.
     fn weight_nvfp4(&self, q: &Nvfp4) -> Self::Weight {

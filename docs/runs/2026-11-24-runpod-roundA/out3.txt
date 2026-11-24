@@ -1,0 +1,22 @@
+== full-width DiT parity, first 8 blocks of h3-base
+apt-ok
+a7eb3401d [bugfix] Streaming: end sessions with the documented segment_cap, session_timeout and error frames (#2072)
+loaded 62 tensors from 14 file(s)
+wrote /root/res/dit_full_2.safetensors video (1, 48, 96) audio (1, 10, 32)
+real	0m14.343s
+-- parity-dit cuda, 2 blocks
+video rel 3.52e-3  audio rel 4.32e-3  (tolerance 3e-2)
+parity ok
+-- parity-dit cpu, 2 blocks
+video rel 7.03e-7  audio rel 1.17e-6  (tolerance 2e-3)
+parity ok
+loaded 134 tensors from 14 file(s)
+wrote /root/res/dit_full_8.safetensors video (1, 48, 96) audio (1, 10, 32)
+real	0m23.931s
+-- parity-dit cuda, 8 blocks
+video rel 5.35e-3  audio rel 4.97e-3  (tolerance 3e-2)
+parity ok
+-- parity-dit cpu, 8 blocks
+video rel 8.24e-7  audio rel 1.10e-6  (tolerance 2e-3)
+parity ok
+exit 0

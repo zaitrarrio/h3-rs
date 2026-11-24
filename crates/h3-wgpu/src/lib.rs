@@ -16,7 +16,7 @@ use h3_core::backend::{
     Act, Backend, BoxRows, Conv1dShape, Conv3dShape, ConvEpilogue, ConvShape, ConvT1dShape,
     FlowStep, Gate, HeadNorm, Modulation, Pad, Rope, Snake,
 };
-use h3_core::quant::{Mxfp8, Nvfp4, Q4, Q8};
+use h3_core::quant::{Mxfp8, Nvfp4, Q4, Q4Packed, Q8};
 use h3_core::vsa::VsaSpec;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -56,6 +56,13 @@ const COARSE_SHARED: u32 = 4096 * 4 + 128 * 4 + 256 * 4 + 4;
 const MAX_TILES: usize = 4096;
 /// Submit after this many recorded dispatches.
 const BATCH: usize = 64;
+/// Submissions the host may run ahead of the GPU (`H3_WGPU_INFLIGHT`). wgpu
+/// frees a dropped buffer only once its submissions are done and the device is
+/// polled; without a bound the host queued a whole denoise step of per-op
+/// temporaries and streamed block weights before the GPU finished any of it
+/// (a 480p int4 draft peaked at 47 GB resident, 54 GB streamed, on an RTX PRO
+/// 6000). Native only: the browser frees through its own event loop.
+const INFLIGHT: usize = 4;
 /// Max workgroups per dispatch dimension.
 const MAX_DIM: u32 = 65535;
 
@@ -167,6 +174,9 @@ pub struct Wgpu {
     tag: Mutex<Option<String>>,
     prof: Option<Mutex<Prof>>,
     pending: Mutex<Pending>,
+    /// Submissions not yet known to be done, oldest first ([`INFLIGHT`]).
+    inflight: Mutex<std::collections::VecDeque<wgpu::SubmissionIndex>>,
+    max_inflight: usize,
     dummy: GBuf,
     pub allow_f16_weights: bool,
 }
@@ -267,6 +277,12 @@ impl Wgpu {
             tag: Mutex::new(None),
             prof,
             pending: Mutex::new(Pending { enc: None, n: 0 }),
+            inflight: Mutex::new(Default::default()),
+            max_inflight: std::env::var("H3_WGPU_INFLIGHT")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(INFLIGHT)
+                .max(1),
             dummy,
             allow_f16_weights: true,
         })
@@ -534,7 +550,27 @@ impl Wgpu {
             let enc = pend.enc.take().unwrap();
             pend.n = 0;
             drop(pend);
-            self.queue.submit([enc.finish()]);
+            self.submit(enc);
+        }
+    }
+
+    /// Submit one batch, then wait for the oldest submissions until at most
+    /// `max_inflight` are outstanding; the wait also frees what they dropped.
+    fn submit(&self, enc: wgpu::CommandEncoder) {
+        let idx = self.queue.submit([enc.finish()]);
+        #[cfg(target_arch = "wasm32")]
+        let _ = idx;
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let mut q = self.inflight.lock().unwrap();
+            q.push_back(idx);
+            while q.len() > self.max_inflight {
+                let oldest = q.pop_front().unwrap();
+                let _ = self.device.poll(wgpu::PollType::Wait {
+                    submission_index: Some(oldest),
+                    timeout: None,
+                });
+            }
         }
     }
 
@@ -569,7 +605,7 @@ impl Wgpu {
             }
         }
         if let Some(enc) = enc {
-            self.queue.submit([enc.finish()]);
+            self.submit(enc);
         }
         #[cfg(not(target_arch = "wasm32"))]
         if let (Some(read), Some(prof)) = (readback, &self.prof) {
@@ -1290,24 +1326,25 @@ impl Backend for Wgpu {
     }
 
     fn weight_q4(&self, q: &Q4) -> GWeight {
-        let mut bytes = q.packed();
-        bytes.resize(bytes.len().div_ceil(4) * 4, 0);
-        let words: Vec<u32> = bytes
-            .chunks_exact(4)
-            .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-            .collect();
-        let sz: Vec<f32> = q
-            .scales
-            .iter()
-            .zip(&q.zeros)
-            .flat_map(|(&s, &z)| [s, z])
-            .collect();
+        self.weight_q4_packed(&q.to_packed())
+    }
+
+    fn weight_q4_packed(&self, q: &Q4Packed) -> GWeight {
+        // `packed` is a multiple of 4 bytes; a Vec<u8> need not be 4-aligned.
+        let copy: Vec<u32>;
+        let words: &[u32] = match bytemuck::try_cast_slice(&q.packed) {
+            Ok(w) => w,
+            Err(_) => {
+                copy = bytemuck::pod_collect_to_vec(&q.packed);
+                &copy
+            }
+        };
         GWeight {
-            buf: self.upload_u32_buf(&words),
+            buf: self.upload_u32_buf(words),
             rows: q.rows,
             cols: q.cols,
             f16: false,
-            quant: Some((Quant::Q4, self.upload(&sz), q.group)),
+            quant: Some((Quant::Q4, self.upload(&q.sz), q.group)),
             mx: false,
             a4: false,
         }
@@ -1320,10 +1357,13 @@ impl Backend for Wgpu {
     fn sync(&self) {
         self.flush();
         #[cfg(not(target_arch = "wasm32"))]
-        let _ = self.device.poll(wgpu::PollType::Wait {
-            submission_index: None,
-            timeout: None,
-        });
+        {
+            let _ = self.device.poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: None,
+            });
+            self.inflight.lock().unwrap().clear();
+        }
     }
 
     fn profile_report(&self) -> Option<String> {

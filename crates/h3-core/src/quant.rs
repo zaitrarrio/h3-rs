@@ -254,6 +254,39 @@ impl Q8 {
     }
 }
 
+/// A [`Q4`] in its device form: two codes per byte (element `2i` in the low
+/// nibble, the bytes zero-padded to a multiple of 4) and `[scale, zero]` per
+/// group interleaved. Streamed blocks keep their int4 weights like this on the
+/// host (page-locked), so a prefetch is a plain copy: packing a block's codes
+/// on every upload made a streamed int4 draft 4× slower than resident (11 vs
+/// 2.9 s per step on an RTX PRO 6000).
+#[derive(Debug, Clone)]
+pub struct Q4Packed {
+    pub packed: Vec<u8>,
+    pub sz: Vec<f32>,
+    pub rows: usize,
+    pub cols: usize,
+    pub group: usize,
+}
+
+impl Q4Packed {
+    pub fn unpack(&self) -> Q4 {
+        let n = self.rows * self.cols;
+        let (scales, zeros) = self.sz.chunks(2).map(|c| (c[0], c[1])).unzip();
+        Q4::from_packed(
+            &self.packed[..n.div_ceil(2)],
+            scales,
+            zeros,
+            self.rows,
+            self.cols,
+        )
+    }
+
+    pub fn bytes(&self) -> usize {
+        self.packed.len() + self.sz.len() * 4
+    }
+}
+
 /// A `[rows, cols]` matrix as unsigned 4-bit codes with an affine scale/zero
 /// per group of columns: `w ≈ (q − z)·s`, `q ∈ [0, 15]`. Scales and zeros are
 /// rounded to f16 when made (how they are stored), so a quantized file and an
@@ -365,6 +398,24 @@ impl Q4 {
             .chunks(2)
             .map(|c| c[0] | (c.get(1).copied().unwrap_or(0) << 4))
             .collect()
+    }
+
+    /// The form the GPU backends upload ([`Q4Packed`]).
+    pub fn to_packed(&self) -> Q4Packed {
+        let mut packed = self.packed();
+        packed.resize(packed.len().div_ceil(4) * 4, 0);
+        Q4Packed {
+            packed,
+            sz: self
+                .scales
+                .iter()
+                .zip(&self.zeros)
+                .flat_map(|(&s, &z)| [s, z])
+                .collect(),
+            rows: self.rows,
+            cols: self.cols,
+            group: self.group,
+        }
     }
 
     pub fn from_packed(
@@ -676,20 +727,35 @@ impl Nvfp4 {
     /// tile layout ([`mx_scale_offset`] over 16-column groups, rows padded to
     /// 128, groups to 4; the same layout the Trim file stores).
     pub fn cublas_layout(&self) -> (Vec<u8>, Vec<u8>) {
-        let mut packed = vec![0u8; self.rows * self.cols / 2];
-        for r in 0..self.rows {
-            for c in (0..self.cols).step_by(2) {
-                packed[(r * self.cols + c) / 2] = self.code(r, c) | (self.code(r, c + 1) << 4);
-            }
-        }
+        use rayon::prelude::*;
+        // Rows in parallel: a full checkpoint is ~10 GB of codes, and the
+        // serial loop cost 8 s of a Trim load (`docs/runs/2026-11-24-runpod-validate`).
+        let half = self.cols / 2;
+        let packed: Vec<u8> = if self.first_high {
+            // Each byte holds the pair with the even column high: swap nibbles.
+            self.packed.par_iter().map(|b| b.rotate_left(4)).collect()
+        } else {
+            self.packed.clone()
+        };
+        debug_assert_eq!(packed.len(), self.rows * half);
         let groups = self.cols / NVFP4_GROUP;
         let cb = groups.div_ceil(4);
         let mut scales = vec![0u8; nvfp4_scale_len(self.rows, self.cols)];
-        for r in 0..self.rows {
-            for g in 0..groups {
-                scales[mx_scale_offset(r, g, cb)] = self.scales[r * groups + g];
-            }
-        }
+        // A 128-row tile of scales is contiguous (cb · 512 bytes): one task each.
+        scales
+            .par_chunks_mut(cb * 512)
+            .enumerate()
+            .for_each(|(t, tile)| {
+                for rr in 0..128 {
+                    let r = t * 128 + rr;
+                    if r >= self.rows {
+                        break;
+                    }
+                    for g in 0..groups {
+                        tile[mx_scale_offset(rr, g, cb)] = self.scales[r * groups + g];
+                    }
+                }
+            });
         (packed, scales)
     }
 }

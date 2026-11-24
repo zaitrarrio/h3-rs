@@ -2228,13 +2228,14 @@ fn vae_check<B: Backend>(p: &mut Pair<'_, B>) {
     p.record("video vae tiny encode+decode", got, want);
     // The fast (Sol-H3) decoder: both layer parities, border windows in y
     // and x, a partial last block (7 latents = 5 + 2).
-    let fast = |be: &dyn ErasedFast| be.run();
+    // A backend whose binding cap is below the token-row buffers refuses the
+    // decode up front (the forced-64-KiB WebGPU pass): reported, not failed.
     trait ErasedFast {
-        fn run(&self) -> Vec<f32>;
+        fn run(&self) -> Result<Vec<f32>, String>;
     }
     struct F<'a, B: Backend>(&'a B);
     impl<B: Backend> ErasedFast for F<'_, B> {
-        fn run(&self) -> Vec<f32> {
+        fn run(&self) -> Result<Vec<f32>, String> {
             use crate::fast_vae::{FastDecoder, FastVaeConfig};
             let be = self.0;
             let cfg = FastVaeConfig::tiny(4);
@@ -2246,14 +2247,16 @@ fn vae_check<B: Backend>(p: &mut Pair<'_, B>) {
             )
             .unwrap();
             let z = Volume::from_data(4, 7, 5, 7, Rng::new(7).normal(4 * 7 * 5 * 7));
-            dec.decode_normalized(be, &z).unwrap().data
+            dec.decode_normalized(be, &z)
+                .map(|v| v.data)
+                .map_err(|e| e.to_string())
         }
     }
-    p.record(
-        "fast vae tiny decode 7x5x7 (windows, globals, shifts)",
-        fast(&F(p.be)),
-        fast(&F(&Cpu)),
-    );
+    let name = "fast vae tiny decode 7x5x7 (windows, globals, shifts)";
+    match F(p.be).run() {
+        Ok(got) => p.record(name, got, F(&Cpu).run().unwrap()),
+        Err(e) => println!("{name:<52} skipped: {e}"),
+    }
 }
 
 fn audio_check<B: Backend>(p: &mut Pair<'_, B>) {

@@ -1,0 +1,92 @@
+== H3 drafts under ~9 GB: 4-bit weights, streamed blocks, FFN chunks; CUDA and WebGPU (Vulkan)
+== d480-bf16 (cuda)
+exit 0
+peak GPU 48669 MiB
+load 94.9s
+step 1/4 2.81s
+step 2/4 2.82s
+step 3/4 2.83s
+step 4/4 2.83s
+run 0: total 15.20s  prepare 0.06s  adaln 0.00s  denoise 11.30s (["2.81", "2.82", "2.83", "2.83"])  decode 3.62s  audio 0.18s
+real	2m3.092s
+== d480-int4 (cuda)
+exit 0
+peak GPU 23901 MiB
+load 76.2s
+step 1/4 2.88s
+step 2/4 2.89s
+step 3/4 2.90s
+step 4/4 2.90s
+run 0: total 15.53s  prepare 0.07s  adaln 0.00s  denoise 11.57s (["2.88", "2.89", "2.90", "2.90"])  decode 3.67s  audio 0.18s
+real	1m44.605s
+d480-bf16 vs d480-int4: PSNR y:9.279042 u:26.655242 v:29.633843 average:13.932383 min:13.463136 max:14.709286
+== d480-int4-stream (cuda)
+exit 0
+peak GPU 10945 MiB
+load 86.8s
+step 1/4 10.38s
+step 2/4 10.88s
+step 3/4 11.56s
+step 4/4 11.29s
+run 0: total 48.08s  prepare 0.06s  adaln 0.00s  denoise 44.10s (["10.38", "10.88", "11.56", "11.29"])  decode 3.70s  audio 0.18s
+real	2m28.524s
+== d480-int4-stream-ffn (cuda)
+exit 0
+peak GPU 10081 MiB
+load 59.7s
+step 1/4 10.66s
+step 2/4 11.14s
+step 3/4 11.70s
+step 4/4 11.31s
+run 0: total 48.79s  prepare 0.06s  adaln 0.00s  denoise 44.81s (["10.66", "11.14", "11.70", "11.31"])  decode 3.71s  audio 0.18s
+real	2m2.267s
+== d288-int4-stream-ffn (cuda)
+exit 0
+peak GPU 8865 MiB
+load 58.2s
+step 1/4 10.45s
+step 2/4 10.79s
+step 3/4 11.84s
+step 4/4 11.10s
+run 0: total 46.24s  prepare 0.05s  adaln 0.00s  denoise 44.17s (["10.45", "10.79", "11.84", "11.10"])  decode 1.82s  audio 0.18s
+real	1m57.825s
+== check wgpu
+wgpu Vulkan: NVIDIA RTX PRO 6000 Blackwell Server Edition (NVIDIA 595.112.07)
+linear nvfp4 w4a4 129x1536x130 None                  rel 3.19e-2  FAIL
+linear nvfp4 w4a4 1100x1536x200 GeluTanh             rel 1.20e-2  FAIL
+Error: 2 of 197 checks failed (tolerance 1e-2)
+== w480-int4 (wgpu)
+exit 0
+peak GPU 47321 MiB
+wgpu Vulkan: NVIDIA RTX PRO 6000 Blackwell Server Edition (NVIDIA 595.112.07)
+load 93.7s
+step 1/4 54.33s
+step 2/4 54.29s
+step 3/4 54.39s
+step 4/4 54.27s
+run 0: total 270.07s  prepare 1.17s  adaln 0.00s  denoise 217.28s (["54.33", "54.29", "54.39", "54.27"])  decode 51.22s  audio 0.30s
+real	6m5.207s
+d480-int4 vs w480-int4: PSNR y:15.670693 u:30.648222 v:33.149157 average:20.231427 min:18.783482 max:22.325822
+== w480-int4-stream-ffn (wgpu)
+exit 0
+peak GPU 54452 MiB
+wgpu Vulkan: NVIDIA RTX PRO 6000 Blackwell Server Edition (NVIDIA 595.112.07)
+load 90.0s
+step 1/4 55.73s
+step 2/4 55.62s
+step 3/4 55.67s
+step 4/4 55.62s
+run 0: total 275.33s  prepare 0.58s  adaln 0.00s  denoise 222.64s (["55.73", "55.62", "55.67", "55.62"])  decode 51.72s  audio 0.30s
+real	6m7.797s
+== w288-int4-stream-ffn (wgpu)
+exit 0
+peak GPU 16154 MiB
+wgpu Vulkan: NVIDIA RTX PRO 6000 Blackwell Server Edition (NVIDIA 595.112.07)
+load 88.6s
+step 1/4 15.86s
+step 2/4 16.17s
+step 3/4 17.40s
+step 4/4 16.43s
+run 0: total 92.48s  prepare 0.54s  adaln 0.00s  denoise 65.86s (["15.86", "16.17", "17.40", "16.43"])  decode 25.71s  audio 0.33s
+real	3m3.248s
+exit 0

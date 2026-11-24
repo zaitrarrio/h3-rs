@@ -1,0 +1,15 @@
+adapter: /workspace/h3-rs/plug4/generator_lora.safetensors
+cuda NVIDIA RTX PRO 6000 Blackwell Server Edition (sm_120)
+load 86.8s
+prompt: 33 rows in 0.0s
+step 1/4 10.38s
+step 2/4 10.88s
+step 3/4 11.56s
+step 4/4 11.29s
+run 0: total 48.08s  prepare 0.06s  adaln 0.00s  denoise 44.10s (["10.38", "10.88", "11.56", "11.29"])  decode 3.70s  audio 0.18s
+wrote /root/res/d480-int4-stream.y4m (124 frames 832x480) and /root/res/d480-int4-stream.wav
+mux: ffmpeg -i /root/res/d480-int4-stream.y4m -i /root/res/d480-int4-stream.wav -c:v libx264 -pix_fmt yuv420p -c:a aac /root/res/d480-int4-stream.mp4
+
+real	2m28.524s
+user	2m4.285s
+sys	1m0.907s
