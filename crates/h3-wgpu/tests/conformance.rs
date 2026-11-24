@@ -93,3 +93,77 @@ fn wgpu_chunked_bindings_match_cpu_reference() {
         .collect();
     assert!(bad.is_empty(), "failed: {bad:?}");
 }
+
+/// The previous kernels (`linear3.wgsl` for every GEMM, `flash.wgsl`),
+/// still selectable with `H3_WGPU_LINEAR=3` / `H3_WGPU_FLASH=1` for A/B runs.
+#[test]
+fn wgpu_previous_kernels_match_cpu_reference() {
+    let mut opts = h3_wgpu::WgpuOptions::from_env();
+    if std::env::var("CI").is_ok() {
+        opts.allow_software = true;
+    }
+    opts.linear = 3;
+    opts.flash = 1;
+    let be = match h3_wgpu::Wgpu::with_options(opts) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("skipping: {e}");
+            return;
+        }
+    };
+    let results = h3_model::check::run_ops(&be, 2e-3);
+    let bad: Vec<_> = results
+        .iter()
+        .filter(|r| !r.ok)
+        .map(|r| format!("{} {:.2e}", r.name, r.rel_err))
+        .collect();
+    assert!(bad.is_empty(), "failed: {bad:?}");
+}
+
+/// linear4 sums every output over k in linear3's order with the same fma:
+/// the two kernels agree bit for bit (f32 and int4 weights, a bias, GELU,
+/// ragged edges in every dimension).
+#[test]
+fn wgpu_linear4_equals_linear3_exactly() {
+    use h3_core::{Backend, backend::Act, quant::Q4, rng::Rng};
+    let open = |linear: u32| {
+        let mut opts = h3_wgpu::WgpuOptions::from_env();
+        if std::env::var("CI").is_ok() {
+            opts.allow_software = true;
+        }
+        opts.linear = linear;
+        h3_wgpu::Wgpu::with_options(opts)
+    };
+    let (Ok(a), Ok(b)) = (open(3), open(4)) else {
+        eprintln!("skipping: no adapter");
+        return;
+    };
+    let (m, k, n) = (300, 200, 261);
+    let mut r = Rng::new(11);
+    let x = r.normal(m * k);
+    let w = r.uniform(n * k, 0.3);
+    let bias = r.normal(n);
+    let q4 = Q4::quantize(&w, n, k, 64, false);
+    let run = |be: &h3_wgpu::Wgpu, quant: bool| {
+        let wd = if quant {
+            be.weight_q4(&q4)
+        } else {
+            be.weight(&w, n, k)
+        };
+        let (xd, bd, yd) = (be.upload(&x), be.upload(&bias), be.alloc(m * n));
+        be.linear(&xd, 0, m, &wd, Some(&bd), Act::GeluTanh, &yd, 0);
+        be.download(&yd)
+    };
+    for quant in [false, true] {
+        let (ya, yb) = (run(&a, quant), run(&b, quant));
+        let diff = ya
+            .iter()
+            .zip(&yb)
+            .filter(|(p, q)| p.to_bits() != q.to_bits())
+            .count();
+        assert_eq!(
+            diff, 0,
+            "linear4 differs from linear3 in {diff} outputs (int4: {quant})"
+        );
+    }
+}
