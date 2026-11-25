@@ -124,7 +124,8 @@ struct Prof {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct WgpuOptions {
     /// f16 math where the adapter has `shader-f16` (`H3_WGPU_F16=1`: the
-    /// f16 GEMM and `flash3h`; `=attn`: `flash3h` alone).
+    /// f16 GEMM and `flash3h`; `=attn`: `flash3h` alone). The f16 GEMM is
+    /// 64×64 and only replaces linear3 (`H3_WGPU_LINEAR=3`, or under 128 rows).
     pub f16: bool,
     /// With `f16`: the f16-math GEMM too (false for `H3_WGPU_F16=attn`).
     pub f16_gemm: bool,
@@ -830,11 +831,14 @@ impl Wgpu {
             Act::GeluErf => 2,
             Act::Silu => 3,
         };
-        let half = self.f16 && self.f16_gemm && w.f16 && rows >= F16_MIN_ROWS;
         // 128×128 tiles for GEMMs of 128+ rows (RTX PRO 6000 profile: the
-        // linear3 GEMMs were 62 % of a 480p int4 step); f16 math stays on
-        // its 64×64 kernel.
-        let (src, tile, name) = if self.linear4 && rows >= 128 && !half {
+        // linear3 GEMMs were 62 % of a 480p int4 step). The f16-math GEMM
+        // (linear3h, 64×64) only ever replaces linear3: in place of linear4
+        // it made a 480p native forward 24.5 → 41.5 s (FFN up 113 → 249 ms;
+        // docs/runs/2026-11-25-vast-pro6000ws-f16-staging).
+        let big = self.linear4 && rows >= 128;
+        let half = self.f16 && self.f16_gemm && w.f16 && rows >= F16_MIN_ROWS && !big;
+        let (src, tile, name) = if big {
             (LINEAR4, 128, "linear4")
         } else {
             (LINEAR3, 64, "linear3")

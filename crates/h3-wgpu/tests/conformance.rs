@@ -51,6 +51,9 @@ fn wgpu_f16_matches_cpu_reference() {
     let mut opts = h3_wgpu::WgpuOptions::from_env();
     opts.f16 = true;
     opts.f16_gemm = true;
+    // The f16 GEMM only replaces linear3: select it so every GEMM size
+    // that takes the f16 path does.
+    opts.linear = 3;
     let be = match h3_wgpu::Wgpu::with_options(opts) {
         Ok(b) if b.f16() => b,
         Ok(_) => {
