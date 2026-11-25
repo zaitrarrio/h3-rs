@@ -1,0 +1,21 @@
+== warm worker, staged again (nothing to copy)
+exit 0
+    "exit_code": 0,
+    "seconds": 99.837980155,
+      "copied_bytes": 0,
+      "seconds": 0.015730629
+staged 53 files (147.0 GB listed, 0.0 GB copied) in 0.0s
+[out] load 62.6s
+[out] prompt: 33 rows in 11.8s
+[out] run 0: total 11.67s  prepare 0.01s  adaln 0.00s  denoise 7.83s (["2.08", "1.91", "1.92", "1.92"])  decode 3.62s  audio 0.18s
+real	1m39.843s
+== the same job read from the volume (page cache now warm: optimistic for the volume)
+exit 0
+    "exit_code": 0,
+    "seconds": 397.324249362,
+[out] load 252.3s
+[out] prompt: 33 rows in 118.7s
+[out] run 0: total 11.83s  prepare 0.01s  adaln 0.00s  denoise 7.87s (["2.09", "1.93", "1.93", "1.93"])  decode 3.73s  audio 0.18s
+real	6m37.344s
+exit 0
+

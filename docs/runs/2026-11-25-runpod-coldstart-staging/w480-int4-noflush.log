@@ -1,0 +1,15 @@
+adapter: /root/stage/h3-rs/plug4/generator_lora.safetensors
+wgpu Vulkan: NVIDIA RTX PRO 6000 Blackwell Server Edition (NVIDIA 595.112.07)
+load 89.8s
+prompt: 33 rows in 0.0s
+step 1/4 41.54s
+step 2/4 40.98s
+step 3/4 40.98s
+step 4/4 40.99s
+run 0: total 199.86s  prepare 1.87s  adaln 0.00s  denoise 164.49s (["41.54", "40.98", "40.98", "40.99"])  decode 33.11s  audio 0.30s
+wrote /root/res/w480-int4-noflush.y4m (124 frames 832x480) and /root/res/w480-int4-noflush.wav
+mux: ffmpeg -i /root/res/w480-int4-noflush.y4m -i /root/res/w480-int4-noflush.wav -c:v libx264 -pix_fmt yuv420p -c:a aac /root/res/w480-int4-noflush.mp4
+
+real	4m51.139s
+user	1m32.062s
+sys	0m54.520s

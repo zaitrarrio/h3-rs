@@ -1,0 +1,20 @@
+{
+  "output": {
+    "exit_code": 0,
+    "files": {
+      "clip.wav": 662444,
+      "clip.y4m": 148562720
+    },
+    "seconds": 99.837980155,
+    "stage": {
+      "bytes": 146979821237,
+      "copied_bytes": 0,
+      "files": 53,
+      "seconds": 0.015730629
+    },
+    "stderr_tail": "adapter: /root/stage/h3-rs/plug4/generator_lora.safetensors\ntext encoder: Stream, Bf16, opened in 0.1s\nstep 1/4 2.08s\nstep 2/4 1.91s\nstep 3/4 1.92s\nstep 4/4 1.92s\n",
+    "stdout_tail": "cuda NVIDIA RTX PRO 6000 Blackwell Server Edition (sm_120)\nload 62.6s\nprompt: 33 rows in 11.8s\nrun 0: total 11.67s  prepare 0.01s  adaln 0.00s  denoise 7.83s ([\"2.08\", \"1.91\", \"1.92\", \"1.92\"])  decode 3.62s  audio 0.18s\nwrote clip.y4m (124 frames 832x480) and clip.wav\nmux: ffmpeg -i clip.y4m -i clip.wav -c:v libx264 -pix_fmt yuv420p -c:a aac clip.mp4\n",
+    "timed_out": false,
+    "uploads": {}
+  }
+}

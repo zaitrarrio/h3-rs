@@ -446,7 +446,10 @@ State and invariants only; the reasoning is in `docs/design.md`.
   (`H3_WGPU_STAGE_FLUSH_MB`, 0 = never): 6 GB of uploads held 12.3 GB
   without it, 6.4 GB with it, on an RTX PRO 6000 WS
   (`docs/runs/2026-11-25-vast-pro6000ws-f16-staging`, the ignored
-  `wgpu_upload_staging_probe`; lavapipe shows nothing either way). Without
+  `wgpu_upload_staging_probe`; lavapipe shows nothing either way); a real
+  480p int4 `generate` peaks at 27.3 GB instead of 47.3 GB, byte-identical,
+  and 288p streamed at 11.3 GB instead of 16.2 GB
+  (`docs/runs/2026-11-25-runpod-coldstart-staging`). Without
   `--tables` every run spends ~46 s on the AdaLN tables.
 - `--tier 288p` is H3's 480×288 (288×480 at 9:16, 288×288 at 1:1:
   `canvas_size` with short edge 288 and a 480×288 budget), on the 32-pixel
@@ -636,6 +639,16 @@ State and invariants only; the reasoning is in `docs/design.md`.
   it (no absolute paths or `..`), and the output carries the exit code,
   time, stdout / stderr tails and the files left. `serve` / `worker` are
   refused as jobs. `--test-input job.json` runs one job locally.
+  A job's `"stage": [paths]` copies files / directories under
+  `H3_STAGE_FROM` (`/runpod-volume`) to `H3_STAGE_TO` (`/stage`) before
+  the run (8 parallel copies, files already there at the same size
+  skipped, so a warm worker copies nothing; paths outside the root
+  refused); `args` name the copies. The volume pages into an mmap at
+  ~0.2 GB/s but copies at ~3 GB/s in parallel: the cold draft job went 626
+  → 162 s (147 GB staged in 48 s, load 74.9 s, prompt 12.9 s), a warm
+  worker 100 s, the same job from the warm-cached volume 397 s
+  (`docs/runs/2026-11-25-runpod-coldstart-staging`, a pod running `worker
+  --test-input`; the serverless disk's copy rate is not measured).
   `scripts/runpod/container.py` starts the image on a pod (service) or a
   serverless endpoint (CLI) through RunPod's GraphQL API (rest.runpod.io
   is unreachable from the agent sandbox). RunPod resource tags are

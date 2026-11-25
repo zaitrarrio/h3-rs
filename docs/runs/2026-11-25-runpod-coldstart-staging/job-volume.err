@@ -1,0 +1,16 @@
+[err] adapter: /workspace/h3-rs/plug4/generator_lora.safetensors
+[out] cuda NVIDIA RTX PRO 6000 Blackwell Server Edition (sm_120)
+[out] load 252.3s
+[err] text encoder: Stream, Bf16, opened in 1.2s
+[out] prompt: 33 rows in 118.7s
+[err] step 1/4 2.09s
+[err] step 2/4 1.93s
+[err] step 3/4 1.93s
+[err] step 4/4 1.93s
+[out] run 0: total 11.83s  prepare 0.01s  adaln 0.00s  denoise 7.87s (["2.09", "1.93", "1.93", "1.93"])  decode 3.73s  audio 0.18s
+[out] wrote clip.y4m (124 frames 832x480) and clip.wav
+[out] mux: ffmpeg -i clip.y4m -i clip.wav -c:v libx264 -pix_fmt yuv420p -c:a aac clip.mp4
+
+real	6m37.344s
+user	3m5.713s
+sys	2m9.470s

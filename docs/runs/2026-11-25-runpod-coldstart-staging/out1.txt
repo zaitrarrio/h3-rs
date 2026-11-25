@@ -1,0 +1,23 @@
+name, driver_version, power.limit [W], clocks.max.sm [MHz], memory.total [MiB]
+NVIDIA RTX PRO 6000 Blackwell Server Edition, 595.112.07, 600.00 W, 2430 MHz, 97887 MiB
+overlay         400G  826M  400G   1% /
+== cold worker job, staged (the volume is cold)
+exit 0
+    "exit_code": 0,
+    "files": {
+    "seconds": 162.165944401,
+      "bytes": 146979821237,
+      "copied_bytes": 146979821237,
+      "files": 53,
+      "seconds": 48.126642269
+staged 53 files (147.0 GB listed, 147.0 GB copied) in 48.1s
+[out] load 74.9s
+[out] prompt: 33 rows in 12.9s
+[err] step 1/4 2.09s
+[err] step 2/4 1.92s
+[err] step 3/4 1.93s
+[err] step 4/4 1.93s
+[out] run 0: total 11.79s  prepare 0.01s  adaln 0.00s  denoise 7.87s (["2.09", "1.92", "1.93", "1.93"])  decode 3.70s  audio 0.18s
+real	2m42.171s
+exit 0
+
