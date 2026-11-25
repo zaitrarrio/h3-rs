@@ -7,10 +7,10 @@ The bootstrap installs curl / Vulkan / X11-GL libs / ffmpeg, fetches the h3
 binary from `<run>/BIN_KEY`, starts pulling every `prefix=dest` weight set of
 `H3_WEIGHT_SETS` from the `fv-weights` bucket with presigned URLs in the
 background (R2 egress is free; Vast bills the download per GB; `/w/weights.done`
-appears when all are in; with the static `weights` CLI uploaded to
-`<run>/bin/weights` (weights-rs's release binary) it is one ranged, parallel,
-resumable transfer, otherwise one curl per file), then runs `<run>/cmd/N.sh` for N = 1..40 as they
-appear, uploading `<run>/out/N.log` after each. Commands that need weights
+appears when all are in; it is one ranged, parallel, resumable transfer by
+weights-rs's static `weights` CLI, its GitHub release or a build uploaded to
+`<run>/bin/weights`, else one curl per file), then runs `<run>/cmd/N.sh` for
+N = 1..40 as they appear, uploading `<run>/out/N.log` after each. Commands that need weights
 wait for the marker. The X11/GL libraries matter: without them NVIDIA's
 Vulkan ICD (libGLX_nvidia) fails to load and wgpu silently falls back to
 llvmpipe.
@@ -31,17 +31,16 @@ for src, dst in SETS:
             rel = o["Key"][len(src):]
             files.append((get("fv-weights", o["Key"]), o["Size"], dst if rel == "" else dst.rstrip("/") + "/" + rel))
 print(f"{len(files)} weight files", file=sys.stderr)
-# The `weights` CLI (zaitrarrio/weights-rs) at <run>/H3_WEIGHTS_BIN, when
-# uploaded: ranged downloads over 32 connections shared by every file (a
-# 10 GB shard is no longer one curl stream), resumable. Without it the boot
-# falls back to one curl per file.
+# The CLI: a build uploaded to <run>/H3_WEIGHTS_BIN wins, else weights-rs's
+# static release binary (H3_WEIGHTS_URL; "" falls back to curl per file).
 WBIN = os.environ.get("H3_WEIGHTS_BIN", "bin/weights")
+WURL = os.environ.get("H3_WEIGHTS_URL", "https://github.com/zaitrarrio/weights-rs/releases/download/v0.1.0/weights-x86_64-linux")
 try:
     s3.head_object(Bucket=B, Key=f"{run}/{WBIN}")
-    wbin_url = get(B, f"{run}/{WBIN}")
+    wbin_url, wbin_from = get(B, f"{run}/{WBIN}"), f"{run}/{WBIN}"
 except Exception:
-    wbin_url = None
-print("weights CLI: " + ("yes" if wbin_url else f"no ({run}/{WBIN} not uploaded; curl per file)"), file=sys.stderr)
+    wbin_url, wbin_from = (WURL or None), WURL
+print("weights CLI: " + (wbin_from if wbin_url else "none (curl per file)"), file=sys.stderr)
 N = 40
 L = ["#!/bin/bash", "set -u", "LOG=/root/boot.log", "exec >>$LOG 2>&1",
      f"LOGPUT={shlex.quote(put(run + '/boot.log'))}",
@@ -57,7 +56,7 @@ L = ["#!/bin/bash", "set -u", "LOG=/root/boot.log", "exec >>$LOG 2>&1",
 L += [f"{u} {z} {p}" for u, z, p in files]
 L += ["EOF2",
       ("(T0=$(date +%s); "
-       + (f"curl -sf -o /w/weights {shlex.quote(wbin_url)} && chmod +x /w/weights && "
+       + (f"curl -sfL -o /w/weights {shlex.quote(wbin_url)} && chmod +x /w/weights && "
           "{ /w/weights plan /root/files.txt -j 32 --progress 30 || echo 'FAILED weights plan'; } || " if wbin_url else "")
        + "awk '{print $1, $3}' /root/files.txt | xargs -P 8 -n 2 sh -c 'mkdir -p \"$(dirname \"$1\")\" && curl -sf --retry 5 -o \"$1\" \"$0\" || echo \"FAILED $1\"'; "
       'echo "weights $(du -sh /w | cut -f1) in $(( $(date +%s) - T0 ))s"; touch /w/weights.done) &'),
