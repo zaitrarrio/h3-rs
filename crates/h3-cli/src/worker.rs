@@ -27,6 +27,16 @@
 //! cannot send anything else in the container anywhere. The output is the
 //! exit code, the time, the tails of stdout / stderr and the files the run
 //! left. `h3 worker --test-input job.json` runs one job without RunPod.
+//!
+//! An optional `"stage": ["/runpod-volume/weights/h3-base/transformer", …]`
+//! copies those files or directories (under `H3_STAGE_FROM`, default
+//! `/runpod-volume`) to the worker's own disk (`H3_STAGE_TO`, default
+//! `/stage`, same relative path) before the run, with 8 parallel copies and
+//! skipping files already there at the same size, so a warm worker pays
+//! nothing; `args` then name the copies. The network volume pages into an
+//! mmap at ~0.2 GB/s but copies at 0.8–1.9 GB/s with parallel streams: a
+//! cold draft job spent 297 s loading and 283 s encoding its prompt from
+//! the volume (`docs/runs/2026-11-18-runpod-container`).
 
 use anyhow::{Context, Result, anyhow, bail};
 use serde_json::{Value, json};
@@ -204,6 +214,94 @@ fn job_path(dir: &Path, name: &str) -> Result<PathBuf> {
 }
 
 /// Run one job; never panics, errors land in the result's `error`.
+/// Copy `paths` (files or directories under `from`) to the same relative
+/// paths under `to`: 8 copier threads, files already there at the same size
+/// skipped, each written to a temporary name and renamed. Returns the bytes
+/// listed, the bytes copied, the file count and the seconds.
+pub fn stage(paths: &[String], from: &Path, to: &Path) -> Result<Value> {
+    let t0 = Instant::now();
+    let root = from
+        .canonicalize()
+        .with_context(|| format!("stage root {}", from.display()))?;
+    let mut files: Vec<(PathBuf, PathBuf, u64)> = Vec::new();
+    fn walk(
+        p: &Path,
+        root: &Path,
+        to: &Path,
+        out: &mut Vec<(PathBuf, PathBuf, u64)>,
+    ) -> Result<()> {
+        let m = std::fs::metadata(p).with_context(|| format!("stage {}", p.display()))?;
+        if m.is_dir() {
+            for e in std::fs::read_dir(p)? {
+                walk(&e?.path(), root, to, out)?;
+            }
+        } else if m.is_file() {
+            let rel = p.strip_prefix(root).unwrap_or(p);
+            out.push((p.to_path_buf(), to.join(rel), m.len()));
+        }
+        Ok(())
+    }
+    for p in paths {
+        let abs = Path::new(p)
+            .canonicalize()
+            .with_context(|| format!("stage {p}"))?;
+        if !abs.starts_with(&root) {
+            bail!("stage {p}: not under {}", root.display());
+        }
+        walk(&abs, &root, to, &mut files)?;
+    }
+    let listed: u64 = files.iter().map(|f| f.2).sum();
+    let todo: Vec<_> = files
+        .iter()
+        .filter(|(_, dst, n)| std::fs::metadata(dst).map_or(true, |m| m.len() != *n))
+        .cloned()
+        .collect();
+    let copied: u64 = todo.iter().map(|f| f.2).sum();
+    let queue = Arc::new(Mutex::new(todo));
+    let errors = Arc::new(Mutex::new(Vec::<String>::new()));
+    let threads: Vec<_> = (0..8)
+        .map(|_| {
+            let (queue, errors) = (queue.clone(), errors.clone());
+            std::thread::spawn(move || {
+                loop {
+                    let Some((src, dst, _)) = queue.lock().unwrap().pop() else {
+                        break;
+                    };
+                    let r = (|| -> std::io::Result<()> {
+                        if let Some(d) = dst.parent() {
+                            std::fs::create_dir_all(d)?;
+                        }
+                        let tmp = dst.with_extension("staging");
+                        std::fs::copy(&src, &tmp)?;
+                        std::fs::rename(&tmp, &dst)
+                    })();
+                    if let Err(e) = r {
+                        errors
+                            .lock()
+                            .unwrap()
+                            .push(format!("{}: {e}", src.display()));
+                    }
+                }
+            })
+        })
+        .collect();
+    for t in threads {
+        let _ = t.join();
+    }
+    let errors = errors.lock().unwrap();
+    if let Some(e) = errors.first() {
+        bail!("stage: {} files failed, first {e}", errors.len());
+    }
+    let s = t0.elapsed().as_secs_f64();
+    eprintln!(
+        "staged {} files ({:.1} GB listed, {:.1} GB copied) in {s:.1}s",
+        files.len(),
+        listed as f64 / 1e9,
+        copied as f64 / 1e9
+    );
+    Ok(json!({"files": files.len(), "bytes": listed, "copied_bytes": copied, "seconds": s}))
+}
+
 pub fn run_job(id: &str, input: &Value, work_root: &Path) -> Value {
     let t0 = Instant::now();
     let safe: String = id
@@ -256,6 +354,24 @@ pub fn run_job(id: &str, input: &Value, work_root: &Path) -> Value {
             job_path(&dir, name)?;
         }
         let timeout = input["timeout_s"].as_u64().map(Duration::from_secs);
+        let staged = match &input["stage"] {
+            Value::Null => None,
+            Value::Array(items) => {
+                let paths: Vec<String> = items
+                    .iter()
+                    .map(|v| {
+                        v.as_str()
+                            .map(str::to_string)
+                            .ok_or_else(|| anyhow!("input.stage holds only paths"))
+                    })
+                    .collect::<Result<_>>()?;
+                let from =
+                    std::env::var("H3_STAGE_FROM").unwrap_or_else(|_| "/runpod-volume".into());
+                let to = std::env::var("H3_STAGE_TO").unwrap_or_else(|_| "/stage".into());
+                Some(stage(&paths, Path::new(&from), Path::new(&to))?)
+            }
+            _ => bail!("input.stage: a list of paths under the stage root"),
+        };
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir)?;
 
@@ -350,6 +466,9 @@ pub fn run_job(id: &str, input: &Value, work_root: &Path) -> Value {
             "stdout_tail": stdout, "stderr_tail": stderr,
             "files": files, "uploads": uploaded,
         });
+        if let Some(st) = staged {
+            output["stage"] = st;
+        }
         let upload_failed = uploaded.values().any(|v| v.get("error").is_some());
         if code != Some(0) || timed_out || upload_failed {
             let why = if timed_out {
@@ -371,6 +490,44 @@ pub fn run_job(id: &str, input: &Value, work_root: &Path) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stage_copies_once_and_stays_under_its_root() {
+        let base = std::env::temp_dir().join(format!("h3-stage-test-{}", std::process::id()));
+        let (vol, local) = (base.join("vol"), base.join("local"));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(vol.join("w/t/sub")).unwrap();
+        std::fs::write(vol.join("w/t/a.bin"), vec![7u8; 1000]).unwrap();
+        std::fs::write(vol.join("w/t/sub/b.bin"), vec![9u8; 10]).unwrap();
+        std::fs::write(base.join("outside.bin"), b"x").unwrap();
+        let p = vec![vol.join("w/t").display().to_string()];
+        let first = stage(&p, &vol, &local).unwrap();
+        assert_eq!(
+            (first["files"].as_u64(), first["copied_bytes"].as_u64()),
+            (Some(2), Some(1010))
+        );
+        assert_eq!(
+            std::fs::read(local.join("w/t/sub/b.bin")).unwrap(),
+            vec![9u8; 10]
+        );
+        let again = stage(&p, &vol, &local).unwrap();
+        assert_eq!(
+            again["copied_bytes"].as_u64(),
+            Some(0),
+            "a warm worker copies nothing"
+        );
+        let out = vec![base.join("outside.bin").display().to_string()];
+        assert!(
+            stage(&out, &vol, &local).is_err(),
+            "paths outside the root are refused"
+        );
+        let dots = vec![format!("{}/w/../../outside.bin", vol.display())];
+        assert!(
+            stage(&dots, &vol, &local).is_err(),
+            "`..` cannot leave the root"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
 
     #[test]
     fn uploads_stay_in_the_job_directory() {

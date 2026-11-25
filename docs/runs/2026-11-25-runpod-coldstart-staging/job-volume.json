@@ -1,0 +1,28 @@
+{
+ "args": [
+  "generate",
+  "--backend",
+  "cuda",
+  "--variant",
+  "draft",
+  "--model-dir",
+  "/workspace/weights/h3-base",
+  "--variant-dir",
+  "/workspace/h3-rs/plug4",
+  "--tables",
+  "/workspace/h3-rs/plug4/plug4.tables",
+  "--tier",
+  "480p",
+  "--weights",
+  "mxfp8",
+  "--stream-blocks",
+  "--pv8",
+  "--seed",
+  "7",
+  "--prompt",
+  "A red fox trots through fresh snow at dawn in a quiet pine forest; snow crunches softly under its paws and a light wind moves through the branches.",
+  "--out",
+  "clip.y4m"
+ ],
+ "timeout_s": 2400
+}

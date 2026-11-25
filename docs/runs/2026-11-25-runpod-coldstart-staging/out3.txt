@@ -1,0 +1,39 @@
+== WebGPU generate memory with the staged-upload flush (480p int4 resident; 0 = old behaviour)
+user	0m13.351s
+sys	1m31.899s
+== w480-int4 (wgpu)
+exit 0
+peak GPU 27323 MiB
+wgpu Vulkan: NVIDIA RTX PRO 6000 Blackwell Server Edition (NVIDIA 595.112.07)
+load 90.2s
+step 1/4 41.51s
+step 2/4 40.98s
+step 3/4 40.98s
+step 4/4 40.99s
+run 0: total 198.54s  prepare 0.45s  adaln 0.00s  denoise 164.46s (["41.51", "40.98", "40.98", "40.99"])  decode 33.24s  audio 0.30s
+real	4m50.287s
+== w480-int4-noflush (wgpu)
+exit 0
+peak GPU 47275 MiB
+wgpu Vulkan: NVIDIA RTX PRO 6000 Blackwell Server Edition (NVIDIA 595.112.07)
+load 89.8s
+step 1/4 41.54s
+step 2/4 40.98s
+step 3/4 40.98s
+step 4/4 40.99s
+run 0: total 199.86s  prepare 1.87s  adaln 0.00s  denoise 164.49s (["41.54", "40.98", "40.98", "40.99"])  decode 33.11s  audio 0.30s
+real	4m51.139s
+w480-int4 == w480-int4-noflush (byte-identical)
+== w288-int4-stream-ffn (wgpu)
+exit 0
+peak GPU 11260 MiB
+wgpu Vulkan: NVIDIA RTX PRO 6000 Blackwell Server Edition (NVIDIA 595.112.07)
+load 78.4s
+step 1/4 11.87s
+step 2/4 11.35s
+step 3/4 11.31s
+step 4/4 11.31s
+run 0: total 63.37s  prepare 0.56s  adaln 0.00s  denoise 45.84s (["11.87", "11.35", "11.31", "11.31"])  decode 16.63s  audio 0.31s
+real	2m23.446s
+exit 0
+
