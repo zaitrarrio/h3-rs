@@ -1,0 +1,82 @@
+== f32-480-native
+exit 0
+peak GPU 53880 MiB
+wgpu Vulkan: NVIDIA RTX PRO 6000 Blackwell Workstation Edition (NVIDIA 615.71.09)  |  h3-plug4 832x480x124  15100 tokens  50 blocks  weights native
+load (synthetic) 86.25s
+adaln tables 51.45s (96768 per block)
+forward 0: 24.472s (489.4 ms/block; ×50/50 blocks ≈ 24.47s)
+forward 1: 24.737s (494.7 ms/block; ×50/50 blocks ≈ 24.74s)
+GPU time by kernel (49191.6 ms total, timestamp queries):
+    20516.3 ms  41.7%     100 calls   205.163 ms/call  flash3
+    11269.4 ms  22.9%     100 calls   112.694 ms/call  linear4_f16 28672x5376 None
+     8302.6 ms  16.9%     100 calls    83.026 ms/call  linear4_f16 21504x5376 None
+     5749.3 ms  11.7%     100 calls    57.493 ms/call  linear4_f16 5376x14336 None
+     2829.3 ms   5.8%     100 calls    28.293 ms/call  linear4_f16 5376x7168 None
+      212.8 ms   0.4%     200 calls     1.064 ms/call  elementwise
+      181.7 ms   0.4%     300 calls     0.606 ms/call  head_split
+      124.8 ms   0.3%     202 calls     0.618 ms/call  norm
+        2.3 ms   0.0%       2 calls     1.163 ms/call  linear4_f16 96x5376 None
+        2.1 ms   0.0%       2 calls     1.040 ms/call  linear4_f16 32x5376 None
+real	3m7.442s
+== f16-480-native
+exit 0
+peak GPU 54029 MiB
+wgpu Vulkan: NVIDIA RTX PRO 6000 Blackwell Workstation Edition (NVIDIA 615.71.09) +f16  |  h3-plug4 832x480x124  15100 tokens  50 blocks  weights native
+load (synthetic) 86.12s
+adaln tables 50.54s (96768 per block)
+forward 0: 41.453s (829.1 ms/block; ×50/50 blocks ≈ 41.45s)
+forward 1: 42.081s (841.6 ms/block; ×50/50 blocks ≈ 42.08s)
+GPU time by kernel (83511.8 ms total, timestamp queries):
+    24946.7 ms  29.9%     100 calls   249.467 ms/call  linear3h 28672x5376 None
+    21191.0 ms  25.4%     100 calls   211.910 ms/call  flash3h
+    18601.4 ms  22.3%     100 calls   186.014 ms/call  linear3h 21504x5376 None
+    12270.5 ms  14.7%     100 calls   122.705 ms/call  linear3h 5376x14336 None
+     5977.0 ms   7.2%     100 calls    59.770 ms/call  linear3h 5376x7168 None
+      212.2 ms   0.3%     200 calls     1.061 ms/call  elementwise
+      181.5 ms   0.2%     300 calls     0.605 ms/call  head_split
+      124.9 ms   0.1%     202 calls     0.618 ms/call  norm
+        2.9 ms   0.0%       2 calls     1.445 ms/call  linear3h 96x5376 None
+        2.1 ms   0.0%       2 calls     1.042 ms/call  linear4_f16 32x5376 None
+real	3m40.706s
+== attn-288-int4
+exit 0
+peak GPU 18789 MiB
+wgpu Vulkan: NVIDIA RTX PRO 6000 Blackwell Workstation Edition (NVIDIA 615.71.09) +f16  |  h3-plug4 480x288x124  5665 tokens  50 blocks  weights int4-g64
+load (synthetic) 66.58s
+adaln tables 51.51s (96768 per block)
+forward 0: 7.828s (156.6 ms/block; ×50/50 blocks ≈ 7.83s)
+forward 1: 7.885s (157.7 ms/block; ×50/50 blocks ≈ 7.88s)
+GPU time by kernel (15696.3 ms total, timestamp queries):
+     4777.6 ms  30.4%     100 calls    47.776 ms/call  linear4_q4 28672x5376 None
+     3640.2 ms  23.2%     100 calls    36.402 ms/call  linear4_q4 21504x5376 None
+     3006.9 ms  19.2%     100 calls    30.069 ms/call  flash3h
+     2705.6 ms  17.2%     100 calls    27.056 ms/call  linear4_q4 5376x14336 None
+     1370.7 ms   8.7%     100 calls    13.707 ms/call  linear4_q4 5376x7168 None
+       75.8 ms   0.5%     200 calls     0.379 ms/call  elementwise
+       68.3 ms   0.4%     300 calls     0.228 ms/call  head_split
+       46.3 ms   0.3%     202 calls     0.229 ms/call  norm
+        2.3 ms   0.0%       2 calls     1.131 ms/call  linear4_f16 96x5376 None
+        2.1 ms   0.0%       2 calls     1.045 ms/call  linear4_f16 32x5376 None
+real	2m14.108s
+== f32-288-int4
+exit 0
+peak GPU 18789 MiB
+wgpu Vulkan: NVIDIA RTX PRO 6000 Blackwell Workstation Edition (NVIDIA 615.71.09)  |  h3-plug4 480x288x124  5665 tokens  50 blocks  weights int4-g64
+load (synthetic) 66.47s
+adaln tables 51.86s (96768 per block)
+forward 0: 7.848s (157.0 ms/block; ×50/50 blocks ≈ 7.85s)
+forward 1: 7.819s (156.4 ms/block; ×50/50 blocks ≈ 7.82s)
+GPU time by kernel (15606.7 ms total, timestamp queries):
+     4764.8 ms  30.5%     100 calls    47.648 ms/call  linear4_q4 28672x5376 None
+     3651.4 ms  23.4%     100 calls    36.514 ms/call  linear4_q4 21504x5376 None
+     2923.3 ms  18.7%     100 calls    29.233 ms/call  flash3
+     2698.2 ms  17.3%     100 calls    26.982 ms/call  linear4_q4 5376x14336 None
+     1369.1 ms   8.8%     100 calls    13.691 ms/call  linear4_q4 5376x7168 None
+       75.8 ms   0.5%     200 calls     0.379 ms/call  elementwise
+       68.2 ms   0.4%     300 calls     0.227 ms/call  head_split
+       49.2 ms   0.3%     202 calls     0.244 ms/call  norm
+        2.3 ms   0.0%       2 calls     1.131 ms/call  linear4_f16 96x5376 None
+        2.1 ms   0.0%       2 calls     1.045 ms/call  linear4_f16 32x5376 None
+real	2m14.297s
+exit 0
+

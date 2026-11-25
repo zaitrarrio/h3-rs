@@ -31,6 +31,7 @@ const HEADS: &str = include_str!("shaders/head_split.wgsl");
 const ATTN: &str = include_str!("shaders/attention.wgsl");
 const FLASH: &str = include_str!("shaders/flash.wgsl");
 const FLASH3: &str = include_str!("shaders/flash3.wgsl");
+const FLASH3H: &str = include_str!("shaders/flash3h.wgsl");
 const VSA_POOL: &str = include_str!("shaders/vsa_pool.wgsl");
 const VSA_COARSE: &str = include_str!("shaders/vsa_coarse.wgsl");
 const ELEM: &str = include_str!("shaders/elementwise.wgsl");
@@ -68,6 +69,14 @@ const BATCH: usize = 64;
 /// (a 480p int4 draft peaked at 47 GB resident, 54 GB streamed, on an RTX PRO
 /// 6000). Native only: the browser frees through its own event loop.
 const INFLIGHT: usize = 4;
+/// Bytes of uploads (`create_buffer_init`, `write`) between submissions of
+/// the queue's pending writes. wgpu stages each upload in a host-visible copy
+/// that it frees only once a submission carrying it has completed and the
+/// device is polled: a `generate` with `--tables` submits nothing between
+/// load and the first step, so the staged copy of every weight stayed alive
+/// until then (480p int4 on an RTX PRO 6000: 40.7 GB at the end of load, a
+/// 47.3 GB peak at the first step, 27.1 GB once it was freed).
+const STAGE_FLUSH: u64 = 256 << 20;
 /// Max workgroups per dispatch dimension.
 const MAX_DIM: u32 = 65535;
 
@@ -114,8 +123,12 @@ struct Prof {
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct WgpuOptions {
-    /// Use the f16-math GEMM where the adapter has `shader-f16` (`H3_WGPU_F16=1`).
+    /// f16 math where the adapter has `shader-f16` (`H3_WGPU_F16=1`: the
+    /// f16 GEMM and `flash3h`; `=attn`: `flash3h` alone). The f16 GEMM is
+    /// 64×64 and only replaces linear3 (`H3_WGPU_LINEAR=3`, or under 128 rows).
     pub f16: bool,
+    /// With `f16`: the f16-math GEMM too (false for `H3_WGPU_F16=attn`).
+    pub f16_gemm: bool,
     /// Accept a CPU rasterizer adapter (`H3_ALLOW_SOFTWARE=1`).
     pub allow_software: bool,
     /// Cap one storage binding at this many bytes, below the device's limit,
@@ -134,7 +147,8 @@ pub struct WgpuOptions {
 impl WgpuOptions {
     pub fn from_env() -> Self {
         Self {
-            f16: std::env::var("H3_WGPU_F16").is_ok_and(|v| v == "1"),
+            f16: std::env::var("H3_WGPU_F16").is_ok_and(|v| v == "1" || v == "attn"),
+            f16_gemm: std::env::var("H3_WGPU_F16").is_ok_and(|v| v == "1"),
             allow_software: std::env::var("H3_ALLOW_SOFTWARE").is_ok_and(|v| v == "1"),
             max_binding: std::env::var("H3_WGPU_MAX_BINDING")
                 .ok()
@@ -193,6 +207,8 @@ pub struct Wgpu {
     linear4: bool,
     coarse_ok: bool,
     f16: bool,
+    /// With `f16`: the f16-math GEMM (`linear3h`) as well as `flash3h`.
+    f16_gemm: bool,
     max_binding: Option<u64>,
     pipelines: Mutex<HashMap<String, Arc<wgpu::ComputePipeline>>>,
     names: Mutex<HashMap<usize, String>>,
@@ -202,6 +218,10 @@ pub struct Wgpu {
     /// Submissions not yet known to be done, oldest first ([`INFLIGHT`]).
     inflight: Mutex<std::collections::VecDeque<wgpu::SubmissionIndex>>,
     max_inflight: usize,
+    /// Upload bytes since the pending writes were last submitted ([`STAGE_FLUSH`]).
+    staged: std::sync::atomic::AtomicU64,
+    /// [`STAGE_FLUSH`], or `H3_WGPU_STAGE_FLUSH_MB` (0 = never, the old behaviour).
+    stage_flush: u64,
     dummy: GBuf,
     pub allow_f16_weights: bool,
 }
@@ -299,6 +319,7 @@ impl Wgpu {
             linear4,
             coarse_ok,
             f16,
+            f16_gemm: f16 && opts.f16_gemm,
             max_binding: opts.max_binding,
             pipelines: Mutex::new(HashMap::new()),
             names: Mutex::new(HashMap::new()),
@@ -306,6 +327,11 @@ impl Wgpu {
             prof,
             pending: Mutex::new(Pending { enc: None, n: 0 }),
             inflight: Mutex::new(Default::default()),
+            staged: Default::default(),
+            stage_flush: std::env::var("H3_WGPU_STAGE_FLUSH_MB")
+                .ok()
+                .and_then(|v| v.parse::<u64>().ok())
+                .map_or(STAGE_FLUSH, |mb| if mb == 0 { u64::MAX } else { mb << 20 }),
             max_inflight: std::env::var("H3_WGPU_INFLIGHT")
                 .ok()
                 .and_then(|v| v.parse().ok())
@@ -586,6 +612,36 @@ impl Wgpu {
     /// `max_inflight` are outstanding; the wait also frees what they dropped.
     fn submit(&self, enc: wgpu::CommandEncoder) {
         let idx = self.queue.submit([enc.finish()]);
+        self.track(idx);
+    }
+
+    /// A buffer filled at creation; every [`STAGE_FLUSH`] bytes the pending
+    /// writes go out in a submission of their own, bounded like the others.
+    fn init_buffer(&self, contents: &[u8], usage: wgpu::BufferUsages) -> wgpu::Buffer {
+        let buf = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: None,
+                contents,
+                usage,
+            });
+        self.staged_bytes(contents.len());
+        buf
+    }
+
+    fn staged_bytes(&self, n: usize) {
+        use std::sync::atomic::Ordering;
+        let total = self.staged.fetch_add(n as u64, Ordering::Relaxed) + n as u64;
+        if total >= self.stage_flush {
+            self.staged.store(0, Ordering::Relaxed);
+            // Recorded dispatches first, then the pending writes alone.
+            self.flush();
+            let idx = self.queue.submit([]);
+            self.track(idx);
+        }
+    }
+
+    fn track(&self, idx: wgpu::SubmissionIndex) {
         #[cfg(target_arch = "wasm32")]
         let _ = idx;
         #[cfg(not(target_arch = "wasm32"))]
@@ -672,16 +728,12 @@ impl Wgpu {
     fn upload_u32_buf(&self, data: &[u32]) -> GBuf {
         let data = if data.is_empty() { &[0u32][..] } else { data };
         GBuf {
-            buf: Arc::new(
-                self.device
-                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                        label: None,
-                        contents: bytemuck::cast_slice(data),
-                        usage: wgpu::BufferUsages::STORAGE
-                            | wgpu::BufferUsages::COPY_SRC
-                            | wgpu::BufferUsages::COPY_DST,
-                    }),
-            ),
+            buf: Arc::new(self.init_buffer(
+                bytemuck::cast_slice(data),
+                wgpu::BufferUsages::STORAGE
+                    | wgpu::BufferUsages::COPY_SRC
+                    | wgpu::BufferUsages::COPY_DST,
+            )),
             len: data.len(),
         }
     }
@@ -779,11 +831,14 @@ impl Wgpu {
             Act::GeluErf => 2,
             Act::Silu => 3,
         };
-        let half = self.f16 && w.f16 && rows >= F16_MIN_ROWS;
         // 128×128 tiles for GEMMs of 128+ rows (RTX PRO 6000 profile: the
-        // linear3 GEMMs were 62 % of a 480p int4 step); f16 math stays on
-        // its 64×64 kernel.
-        let (src, tile, name) = if self.linear4 && rows >= 128 && !half {
+        // linear3 GEMMs were 62 % of a 480p int4 step). The f16-math GEMM
+        // (linear3h, 64×64) only ever replaces linear3: in place of linear4
+        // it made a 480p native forward 24.5 → 41.5 s (FFN up 113 → 249 ms;
+        // docs/runs/2026-11-25-vast-pro6000ws-f16-staging).
+        let big = self.linear4 && rows >= 128;
+        let half = self.f16 && self.f16_gemm && w.f16 && rows >= F16_MIN_ROWS && !big;
+        let (src, tile, name) = if big {
             (LINEAR4, 128, "linear4")
         } else {
             (LINEAR3, 64, "linear3")
@@ -1018,7 +1073,11 @@ impl Wgpu {
         vsa: Option<(&GVsa, Option<&GBuf>)>,
         pv8: Option<(&GBuf, &GBuf)>,
     ) {
-        let pipe = if self.flash3 {
+        // flash3h (f16 math) where f16 is on, except pv8: its E4M3 V codes
+        // times P overflow an f16 partial sum.
+        let pipe = if self.flash3 && self.f16 && pv8.is_none() {
+            self.pipeline("flash3h", || FLASH3H.to_string())
+        } else if self.flash3 {
             self.pipeline("flash3", || FLASH3.to_string())
         } else {
             self.pipeline("flash", || FLASH.to_string())
@@ -1137,16 +1196,12 @@ impl Backend for Wgpu {
             bytemuck::cast_slice(data)
         };
         GBuf {
-            buf: Arc::new(
-                self.device
-                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                        label: None,
-                        contents: bytes,
-                        usage: wgpu::BufferUsages::STORAGE
-                            | wgpu::BufferUsages::COPY_SRC
-                            | wgpu::BufferUsages::COPY_DST,
-                    }),
-            ),
+            buf: Arc::new(self.init_buffer(
+                bytes,
+                wgpu::BufferUsages::STORAGE
+                    | wgpu::BufferUsages::COPY_SRC
+                    | wgpu::BufferUsages::COPY_DST,
+            )),
             len: data.len(),
         }
     }
@@ -1159,6 +1214,7 @@ impl Backend for Wgpu {
         self.flush();
         self.queue
             .write_buffer(&buf.buf, 0, bytemuck::cast_slice(data));
+        self.staged_bytes(data.len() * 4);
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -1298,12 +1354,7 @@ impl Backend for Wgpu {
                 .collect();
             let buf = GBuf {
                 buf: Arc::new(
-                    self.device
-                        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                            label: None,
-                            contents: bytemuck::cast_slice(&packed),
-                            usage: wgpu::BufferUsages::STORAGE,
-                        }),
+                    self.init_buffer(bytemuck::cast_slice(&packed), wgpu::BufferUsages::STORAGE),
                 ),
                 len: packed.len(),
             };

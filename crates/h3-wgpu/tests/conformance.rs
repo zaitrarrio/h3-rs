@@ -44,11 +44,16 @@ fn wgpu_matches_cpu_reference() {
     assert!(bad.is_empty(), "failed: {bad:?}");
 }
 
-/// The f16-math GEMM (where the adapter has `shader-f16`) at f16 tolerance.
+/// The f16-math GEMM and attention (`flash3h`), where the adapter has
+/// `shader-f16`, at f16 tolerance.
 #[test]
 fn wgpu_f16_matches_cpu_reference() {
     let mut opts = h3_wgpu::WgpuOptions::from_env();
     opts.f16 = true;
+    opts.f16_gemm = true;
+    // The f16 GEMM only replaces linear3: select it so every GEMM size
+    // that takes the f16 path does.
+    opts.linear = 3;
     let be = match h3_wgpu::Wgpu::with_options(opts) {
         Ok(b) if b.f16() => b,
         Ok(_) => {
@@ -166,4 +171,35 @@ fn wgpu_linear4_equals_linear3_exactly() {
             "linear4 differs from linear3 in {diff} outputs (int4: {quant})"
         );
     }
+}
+
+/// Device memory while weights upload with no compute in between (the
+/// `generate --tables` load). Prints nvidia-smi's used memory after 6 GB of
+/// uploads and after the first sync; run on a discrete NVIDIA card with and
+/// without `H3_WGPU_STAGE_FLUSH_MB=0`. Before the staged flush the end of
+/// load held each upload twice (its staging copy until the first submit).
+/// lavapipe shows nothing either way: its device memory is host memory.
+#[test]
+#[ignore]
+fn wgpu_upload_staging_probe() {
+    use h3_core::Backend;
+    let used = || {
+        std::process::Command::new("nvidia-smi")
+            .args(["--query-gpu=memory.used", "--format=csv,noheader,nounits"])
+            .output()
+            .ok()
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .and_then(|s| s.lines().next()?.trim().parse::<u64>().ok())
+    };
+    let Some(be) = open() else { return };
+    let base = used();
+    let data = vec![0.5f32; 64 << 20]; // 256 MB per buffer
+    let keep: Vec<_> = (0..24).map(|_| be.upload(&data)).collect();
+    let loaded = used();
+    be.sync();
+    let synced = used();
+    eprintln!(
+        "staging probe ({} MB uploaded): GPU MiB base {base:?}, after load {loaded:?}, after sync {synced:?}",
+        keep.len() * 256
+    );
 }

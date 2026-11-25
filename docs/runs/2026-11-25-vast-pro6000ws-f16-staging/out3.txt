@@ -1,0 +1,12 @@
+probe-ok
+== staging probe: 6 GB of uploads, no compute, then a sync (nvidia-smi MiB)
+-- H3_WGPU_STAGE_FLUSH_MB=0
+staging probe (6144 MB uploaded): GPU MiB base Some(262), after load Some(12550), after sync Some(12550)
+-- H3_WGPU_STAGE_FLUSH_MB=256
+staging probe (6144 MB uploaded): GPU MiB base Some(263), after load Some(6656), after sync Some(6399)
+-- H3_WGPU_STAGE_FLUSH_MB=0
+staging probe (6144 MB uploaded): GPU MiB base Some(263), after load Some(12551), after sync Some(12551)
+-- H3_WGPU_STAGE_FLUSH_MB=256
+staging probe (6144 MB uploaded): GPU MiB base Some(263), after load Some(6656), after sync Some(6399)
+exit 0
+

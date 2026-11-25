@@ -437,9 +437,16 @@ State and invariants only; the reasoning is in `docs/design.md`.
   WebGPU ran a whole step ahead of the GPU, so no dropped buffer was freed
   until a download; it now waits once more than `H3_WGPU_INFLIGHT` (4)
   submissions are outstanding: 480p int4 streamed 54.5 → 16.5 GB, resident
-  plateau 39.4 → 27.4 GB, same speed (55 s per step) and bytes. A transient
-  right after load still sets the WebGPU peaks (47.3 GB resident, 16.2 GB
-  at 288p streamed; cause not found). Without
+  plateau 39.4 → 27.4 GB, same speed (55 s per step) and bytes. The
+  transient right after load (47.3 GB resident, 16.2 GB at 288p streamed)
+  was wgpu's upload staging: each `create_buffer_init` / `write` keeps a
+  staging copy until a submission carrying it completes, and `generate
+  --tables` submitted nothing before its first step, so every weight was
+  held twice. Uploads now submit the pending writes every 256 MB
+  (`H3_WGPU_STAGE_FLUSH_MB`, 0 = never): 6 GB of uploads held 12.3 GB
+  without it, 6.4 GB with it, on an RTX PRO 6000 WS
+  (`docs/runs/2026-11-25-vast-pro6000ws-f16-staging`, the ignored
+  `wgpu_upload_staging_probe`; lavapipe shows nothing either way). Without
   `--tables` every run spends ~46 s on the AdaLN tables.
 - `--tier 288p` is H3's 480×288 (288×480 at 9:16, 288×288 at 1:1:
   `canvas_size` with short edge 288 and a 480×288 budget), on the 32-pixel
@@ -516,8 +523,15 @@ State and invariants only; the reasoning is in `docs/design.md`.
   (33 TFLOP/s) on a Vast RTX PRO 6000 WS, 615.78.08
   (`docs/runs/2026-11-24-vast-pro6000ws-linear4-flash3`; 197 / 197 there).
   `H3_WGPU_LINEAR=3` / `H3_WGPU_FLASH=1` select the old kernels (their own
-  conformance pass). `H3_WGPU_F16=1` does not reach the int4 GEMMs, and
-  `linear4h` is not ported.
+  conformance pass). `flash3h` (fastwan-rs's f16-math attention with the
+  same h3 extensions; `H3_WGPU_F16=attn`, or `=1` with the f16 GEMM; pv8
+  calls keep `flash3`: E4M3 V codes times P overflow an f16 partial sum) is
+  3 % slower than `flash3` on that NVIDIA card natively (211 vs 205 ms per
+  480p call), so it stays opt-in, for AMD / Apple. The f16 GEMM is the
+  64×64 `linear3h` and replaces only `linear3`: in place of `linear4` it
+  made a 480p native forward 24.5 → 41.5 s (`docs/runs/2026-11-25-vast-
+  pro6000ws-f16-staging`); `linear4h` is not ported, and no f16 path
+  reaches the int4 GEMMs.
 - WGSL rules (from fastwan-rs): named vec4 accumulators, never arrays indexed
   in loops; zero loop-local accumulators explicitly; every declared binding
   statically used. A rounding recipe that must match the oracle divides with
